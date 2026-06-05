@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.8.4"
+VERSION    = "2.9.0"
 BUILD_DATE = "2026-06-05"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.9.0", "2026-06-05", "Cleanup chunk 3: backend `class Role` + frontend `const ROLE` identifier constants (catches role-string typos at parse/load time); _mat_by_id/_mat_by_code/_mat_id_by_code helpers in database.py with 5 inline sites migrated; hardcoded SND-01/CP-01/HP-01 fallback machine codes replaced with a clear 'no machine configured' empty state; formatters consolidated into 4 canonical (fmtNum/fmtMoney/fmtDate/fmtQty) with currency-aware fmtMoney(n,ccy) now backing _accFmtB (Thai Baht) + _accFmtU (USD) ahead of dual-currency accounting"),
     ("2.8.4", "2026-06-05", "Glue Recipe edit fix on BOM tab: clicking the pencil icon on a recipe row was opening a blank 'New Glue Recipe' modal because bomGlueEdit() set window._gmRecipes after fetching but _gmRecipes is a let-bound lexical (not a window property) so the modal's lookup hit an empty array. Now assigns _gmRecipes directly"),
     ("2.8.3", "2026-06-05", "BOM Builder fix: glue recipe selection now persists when editing an existing BOM. Was a race: openBomBuilder fired loadBomBuilder without awaiting, editBomCard ran bbLoadFg after a 150ms timer, and the late-finishing loadBomBuilder re-rendered the dropdown and wiped the selection. openBomBuilder is now an async function that awaits the picker fetch; the 150ms hack is gone"),
     ("2.8.2", "2026-06-05", "BOM fix: Glue BOM now displays on existing FG list (get_structured_bom switched from INNER JOIN materials to LEFT JOIN materials + LEFT JOIN glue_recipes; 93 of 125 BOMs were silently missing their glue); new-BOM Glue picker pulls from /api/glue-recipes (was loading raw 'Glue and Additives' ingredients); save_bom_for_sku resolves glue codes against glue_recipes.recipe_code with legacy materials.code fallback; UI base font-size dropped to 14px so the dense ERP doesn't need manual zoom-out"),
