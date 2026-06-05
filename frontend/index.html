@@ -13121,7 +13121,9 @@ async function bomGlueDelete(recipeId, code){
 
 async function refreshCompound(type){
   _compoundLoaded[type] = true;
-  const data = await api('/api/compound-skus?type='+type).catch(()=>[]);
+  // Glue recipes — backed by glue_recipes table since Phase B. The legacy
+  // `type` filter is dropped (server-side already ignored it).
+  const data = await api('/api/glue-recipes/with-ingredients').catch(()=>[]);
   _compoundData[type] = data;
   renderCompound(type, data);
 }
@@ -13241,7 +13243,8 @@ async function saveNewCompound(type){
   const notes = document.getElementById(prefix+'-new-notes').value.trim();
   if(!code){ toast('Code is required','danger'); return; }
   try{
-    await api('/api/compound-skus','POST',{code,name,batch_kg:batch,type,notes});
+    // Field names map to glue_recipes columns: code → recipe_code, batch_kg → total_kg.
+    await api('/api/glue-recipes','POST',{recipe_code:code, name, total_kg:batch, notes});
     toast('Formula created: '+code);
     const panelId = type==='glue' ? 'glue-builder-panel' : 'bleach-builder-panel';
     bootstrap.Collapse.getInstance(document.getElementById(panelId))?.hide();
@@ -13252,31 +13255,21 @@ async function saveNewCompound(type){
 async function deleteCompound(id, type){
   if(!confirm('Delete this formula and all its ingredients?')) return;
   try{
-    await api('/api/compound-skus/'+id,'DELETE');
+    await api('/api/glue-recipes/'+id,'DELETE');
     toast('Deleted');
     await refreshCompound(type);
   }catch(e){ toast(e.message,'danger'); }
 }
 
-async function addCompoundLine(compoundId, type){
-  const code  = document.getElementById('cl-mat-'+compoundId).value.trim();
-  const ratio = parseFloat(document.getElementById('cl-ratio-'+compoundId).value)||null;
-  const unit  = document.getElementById('cl-unit-'+compoundId).value.trim()||'kg';
-  if(!code){ toast('Material code required','danger'); return; }
-  try{
-    await api('/api/compound-skus/'+compoundId+'/lines','POST',{material_code:code,ratio,unit});
-    toast('Ingredient added');
-    await refreshCompound(type);
-    setTimeout(()=>{ const el=document.getElementById('cl-'+compoundId); if(el&&!el.classList.contains('show')) new bootstrap.Collapse(el).show(); },150);
-  }catch(e){ toast(e.message,'danger'); }
+// Inline add/delete ingredient buttons (Bleach tab only). These hit endpoints
+// that became no-ops during Phase B and need to be rewritten against
+// glue_recipes.material_links — tracked as a separate task. Until then the
+// canonical path is: click "Edit" on the recipe row to use the full editor.
+function addCompoundLine(compoundId, type){
+  toast('Use the Edit button on the recipe row to add ingredients.', 'warning');
 }
-
-async function deleteCompoundLine(lineId, compoundId, type){
-  try{
-    await api('/api/compound-lines/'+lineId,'DELETE');
-    await refreshCompound(type);
-    setTimeout(()=>{ const el=document.getElementById('cl-'+compoundId); if(el&&!el.classList.contains('show')) new bootstrap.Collapse(el).show(); },150);
-  }catch(e){ toast(e.message,'danger'); }
+function deleteCompoundLine(lineId, compoundId, type){
+  toast('Use the Edit button on the recipe row to remove ingredients.', 'warning');
 }
 
 // ════════════════════════════════════════════════════════════

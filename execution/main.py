@@ -129,10 +129,9 @@ from database import (
     save_veneer_alloc_and_confirm, get_veneer_alloc,
     # Proper BOM module
     get_all_skus, get_sku, get_sku_bom, get_sku_cost,
-    get_all_compound_skus, get_compound_sku,
+    get_glue_recipes_summary, get_glue_recipe_detail,
     get_all_packing_skus, get_packing_sku,
-    get_compound_skus_with_lines, save_compound_sku, delete_compound_sku,
-    add_compound_line, delete_compound_line,
+    get_glue_recipes_with_ingredients,
     get_packing_skus_with_lines, save_packing_sku, delete_packing_sku,
     add_packing_line, delete_packing_line,
     update_material_price, get_material_usage,
@@ -1449,16 +1448,6 @@ def bom_builder_update(sku_code: str, body: BomBuilderIn):
     data['sku_code'] = sku_code
     return save_bom_for_sku(data)
 
-# ── Glue Formulas ─────────────────────────────────────────────
-@app.get("/api/glue-formulas")
-def list_glue_formulas(): return get_all_compound_skus()
-
-@app.get("/api/glue-formulas/{code}")
-def glue_formula_detail(code: str):
-    g = get_compound_sku(code)
-    if not g: raise HTTPException(404, f"Glue formula '{code}' not found")
-    return g
-
 @app.get("/api/skus")
 def list_skus(search: Optional[str] = None):
     return get_all_skus(search)
@@ -1484,15 +1473,6 @@ def sku_cost(code: str):
     total = sum(r.get('section_total') or 0 for r in rows)
     return {"sku_code": code, "sections": rows, "total": round(total, 4)}
 
-@app.get("/api/glue")
-def list_glue(): return get_all_compound_skus()
-
-@app.get("/api/glue/{code}")
-def glue_detail(code: str):
-    g = get_compound_sku(code)
-    if not g: raise HTTPException(404, f"Glue formula '{code}' not found")
-    return g
-
 @app.get("/api/packing-skus")
 def list_packing(): return get_all_packing_skus()
 
@@ -1502,56 +1482,13 @@ def packing_detail(code: str):
     if not p: raise HTTPException(404, f"Packing SKU '{code}' not found")
     return p
 
-# ── Compound SKU CRUD (Glue + Bleaching formulas) ─────────────────────────────
-
-class CompoundSkuIn(BaseModel):
-    code: str
-    name: str = ""
-    batch_kg: Optional[float] = None
-    type: str = "glue"
-    notes: str = ""
-
-class CompoundLineIn(BaseModel):
-    material_code: str
-    ratio: Optional[float] = None
-    unit: str = "kg"
-    notes: str = ""
-
-@app.get("/api/compound-skus")
-def list_compound_skus(type: Optional[str] = None):
-    return get_compound_skus_with_lines(type_filter=type)
-
-@app.post("/api/compound-skus")
-def create_compound_sku(body: CompoundSkuIn):
-    return save_compound_sku(body.dict())
-
-@app.put("/api/compound-skus/{cid}")
-def update_compound_sku(cid: int, body: CompoundSkuIn):
-    from database import get_db as _gdb
-    conn = _gdb()
-    row = conn.execute("SELECT recipe_code FROM glue_recipes WHERE id=?", (cid,)).fetchone()
-    conn.close()
-    if not row: raise HTTPException(404, "Formula not found")
-    d = body.dict(); d['code'] = row['recipe_code']; d['id'] = cid
-    return save_compound_sku(d)
-
-@app.delete("/api/compound-skus/{cid}")
-def delete_compound_sku_ep(cid: int):
-    delete_compound_sku(cid)
-    return {"ok": True}
-
-@app.post("/api/compound-skus/{cid}/lines")
-def add_compound_line_ep(cid: int, body: CompoundLineIn):
-    try:
-        add_compound_line(cid, body.material_code, body.ratio, body.unit, body.notes)
-        return {"ok": True}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-@app.delete("/api/compound-lines/{lid}")
-def delete_compound_line_ep(lid: int):
-    delete_compound_line(lid)
-    return {"ok": True}
+# ── Glue Recipe — list-with-ingredients view ───────────────────────────
+# The bare /api/glue-recipes CRUD (raw rows, create/patch/delete) lives further
+# down in the file. This endpoint returns the same recipes but each row carries
+# its ingredient breakdown — used by the BOM → Glue Formulas editor.
+@app.get("/api/glue-recipes/with-ingredients")
+def list_glue_recipes_with_ingredients_ep():
+    return get_glue_recipes_with_ingredients()
 
 # ── Packing SKU CRUD ──────────────────────────────────────────────────────────
 

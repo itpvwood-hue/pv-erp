@@ -2719,10 +2719,9 @@ def _recipe_to_summary(conn, recipe_row, with_ingredients: bool = False):
     return out
 
 
-def get_all_compound_skus():
-    """Return all glue recipes in the legacy "compound_cost" shape.
-    Backed by glue_recipes (the new source of truth) instead of the old
-    compound_skus/compound_lines/compound_cost view."""
+def get_glue_recipes_summary():
+    """Return all active glue recipes as cost summaries (no ingredient
+    breakdown). Backed by `glue_recipes` since Phase B."""
     conn = get_db()
     try:
         rows = conn.execute(
@@ -2733,7 +2732,7 @@ def get_all_compound_skus():
         conn.close()
 
 
-def get_compound_sku(code):
+def get_glue_recipe_detail(code):
     """Return one glue recipe with ingredient breakdown, by recipe_code."""
     conn = get_db()
     try:
@@ -2761,9 +2760,8 @@ def get_packing_sku(code):
 
 # ── Compound SKU CRUD ────────────────────────────────────────────────────────
 
-def get_compound_skus_with_lines(type_filter=None):
-    """Recipe list with ingredient breakdown, backed by glue_recipes.
-    `type_filter` is ignored (legacy parameter) — only glue recipes exist now."""
+def get_glue_recipes_with_ingredients():
+    """Recipe list with ingredient breakdown, backed by glue_recipes."""
     conn = get_db()
     try:
         rows = conn.execute(
@@ -2773,31 +2771,6 @@ def get_compound_skus_with_lines(type_filter=None):
     finally:
         conn.close()
 
-
-# ── Legacy compound_skus writers — no-op (table dropped in Phase B) ────
-def save_compound_sku(data):
-    """Deprecated: use save_glue_recipe() instead. Returns the recipe shape
-    so any caller that POSTs a recipe-shaped body via the old endpoint still
-    gets a sensible reply."""
-    return save_glue_recipe(data)
-
-def delete_compound_sku(cid):
-    """Deprecated: use delete_glue_recipe(id) instead."""
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM glue_recipes WHERE id=?", (cid,))
-        conn.commit()
-    finally:
-        conn.close()
-
-def add_compound_line(compound_id, mat_code, ratio, unit='kg', notes=''):
-    """Deprecated: ingredient links live in glue_recipes.material_links now.
-    Kept as a no-op so legacy callers don't crash."""
-    return None
-
-def delete_compound_line(lid):
-    """Deprecated: see add_compound_line note."""
-    return None
 
 # ── Packing SKU CRUD ─────────────────────────────────────────────────────────
 
