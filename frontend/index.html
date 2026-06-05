@@ -20,6 +20,10 @@
   --blue:#1f4a1f;--green:#16a34a;--orange:#ea580c;--red:#dc2626;
 }
 *{box-sizing:border-box;}
+/* Compact base scale — Bootstrap and our own styles use rem extensively, so
+   shrinking html font-size makes the whole UI ~12% denser, closer to what an
+   on-floor ERP needs without forcing the user to ctrl-minus the browser. */
+html{font-size:14px;}
 body{margin:0;font-family:'Segoe UI',sans-serif;background:#f7f4ef;overflow-x:hidden;}
 /* ── Sidebar (collapses to icon strip; expands on hover or when pinned) ── */
 #sidebar{position:fixed;top:0;left:0;width:var(--sb-collapsed);height:100vh;background:var(--pv-brown);color:#e8d9c8;overflow-x:hidden;overflow-y:auto;z-index:200;display:flex;flex-direction:column;transition:width .18s ease;}
@@ -12807,10 +12811,22 @@ function openBomBuilder(){
 
 async function loadBomBuilder(){
   _bbLoaded = true;
-  const [mats, glues] = await Promise.all([
+  const [mats, recipes] = await Promise.all([
     api('/api/materials').catch(()=>[]),
-    api('/api/materials?include_formulas=true').catch(()=>[]),
+    // Glue picker shows GLUE RECIPES (from glue_recipes), not raw "Glue and
+    // Additives" ingredients (materials.type='glue_formula'). The recipe is
+    // what the line operator mixes; ingredients are tracked via the recipe.
+    api('/api/glue-recipes').catch(()=>[]),
   ]);
+  // Normalise recipes into the same shape the picker expects (code, name).
+  const recipeOpts = (recipes||[]).map(r => ({
+    code: r.recipe_code,
+    name: r.name || r.recipe_code,
+    veneer_thickness: r.veneer_thickness,
+    wood_species: r.wood_species,
+    core_board: r.core_board,
+    type: 'glue_recipe',
+  }));
   // Base board pool includes both raw core_board materials AND completed VCMX
   // substrates (type='vcmx') — VCMX SKUs carry a code/board_type/dims so they
   // surface just like any other core board.
@@ -12818,8 +12834,8 @@ async function loadBomBuilder(){
     base:  mats.filter(m => m.type==='core_board' || m.type==='vcmx'),
     faceV: mats.filter(m=>m.type==='veneer_sheet'),
     backV: mats.filter(m=>m.type==='veneer_sheet'),
-    faceG: glues.filter(m=>m.type==='glue_formula'),
-    backG: glues.filter(m=>m.type==='glue_formula'),
+    faceG: recipeOpts,
+    backG: recipeOpts,
   };
   _bbAllFg = await api('/api/fg').catch(()=>[]);
   ['base','faceV','backV','faceG','backG'].forEach(c => bbRenderOptions(c, _bbMats[c]));
@@ -12841,6 +12857,10 @@ function bbRenderOptions(comp, list){
       label = m.code+' — '+parts.join(' ');
     } else if(comp==='pack'){
       label = m.code+' — '+(m.name||m.customer||'');
+    } else if(comp==='faceG' || comp==='backG'){
+      // Glue recipe — show recipe_code + name + any conditioning hints
+      const cond = [m.veneer_thickness, m.wood_species, m.core_board].filter(Boolean).join(' · ');
+      label = m.code+' — '+(m.name||'') + (cond ? '  ['+cond+']' : '');
     } else {
       label = m.code+' — '+(m.name||'');
     }

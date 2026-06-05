@@ -2947,13 +2947,19 @@ def get_structured_bom(sku_code=None):
         code = s['code']
         pallet_qty = s['pallet_qty'] or 1
 
-        # Core BOM lines for this SKU
+        # Core BOM lines for this SKU. Glue lines store glue_recipe_id (FK into
+        # glue_recipes) with material_id=NULL since Phase B, so we LEFT JOIN both
+        # tables and pick whichever resolves. An inner JOIN on materials would
+        # silently drop every glue row.
         lines = conn.execute("""
             SELECT bl.seq, bl.qty_override, bl.usage_g_per_face, bl.qty_unit,
+                   bl.glue_recipe_id,
                    m.code as mat_code, m.name as mat_name, m.name_th,
-                   m.type as mat_type, m.unit, m.price
+                   m.type as mat_type, m.unit, m.price,
+                   gr.recipe_code as glue_code, gr.name as glue_name
             FROM bom_lines bl
-            JOIN materials m ON m.id = bl.material_id
+            LEFT JOIN materials    m  ON m.id  = bl.material_id
+            LEFT JOIN glue_recipes gr ON gr.id = bl.glue_recipe_id
             WHERE bl.sku_id = ?
             ORDER BY bl.seq
         """, (sid,)).fetchall()
@@ -2978,9 +2984,46 @@ def get_structured_bom(sku_code=None):
         }
 
         for l in lines:
+            is_glue_row = l['glue_recipe_id'] is not None
             qty = l['qty_override'] if l['qty_override'] else pallet_qty
+
+            if is_glue_row:
+                # Resolve glue cost live from glue_recipes.material_links via
+                # _recipe_to_summary so price changes on ingredient materials
+                # propagate to the FG cost without a separate sync step.
+                recipe_row = conn.execute(
+                    "SELECT * FROM glue_recipes WHERE id=?", (l['glue_recipe_id'],)
+                ).fetchone()
+                if recipe_row:
+                    summary = _recipe_to_summary(conn, recipe_row)
+                    price_per_kg = summary.get('cost_per_kg_mixed') or 0
+                else:
+                    price_per_kg = 0
+                if l['usage_g_per_face'] is not None:
+                    line_cost = round(price_per_kg * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
+                else:
+                    line_cost = 0
+                item = {
+                    'code':   l['glue_code'] or '',
+                    'name':   l['glue_name'] or '',
+                    'name_th': None,
+                    'qty':    qty,
+                    'unit':   'kg',
+                    'price':  price_per_kg,
+                    'usage_g_per_face': l['usage_g_per_face'],
+                    'cost':   line_cost,
+                    'glue_recipe_id': l['glue_recipe_id'],
+                }
+                if l['seq'] == 4:
+                    entry['face_glue'] = item
+                elif l['seq'] == 5:
+                    entry['back_glue'] = item
+                entry['core_cost'] = round(entry['core_cost'] + line_cost, 4)
+                continue
+
+            # Non-glue row — backed by materials
             if l['usage_g_per_face'] is not None:
-                line_cost = round(l['price'] * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
+                line_cost = round((l['price'] or 0) * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
             else:
                 line_cost = round((l['price'] or 0) * qty, 4)
 
@@ -3003,6 +3046,8 @@ def get_structured_bom(sku_code=None):
                 entry['face_veneer'] = item
             elif mt == 'veneer_sheet' and seq == 3:
                 entry['back_veneer'] = item
+            # Legacy: glue used to be stored as a materials row (type=glue_formula).
+            # Keep this branch so any pre-Phase-B rows still display.
             elif mt == 'glue_formula' and seq == 4:
                 entry['face_glue'] = item
             elif mt == 'glue_formula' and seq == 5:
@@ -3091,31 +3136,49 @@ def save_bom_for_sku(data):
         row = conn.execute("SELECT id FROM materials WHERE code=?", (mat_code,)).fetchone()
         return row[0] if row else None
 
-    spec = [
-        # (seq, code_key, qty_key,           usage_key)
-        (1, 'base_board_code',   'base_board_qty',   None),
-        (2, 'face_veneer_code',  'face_veneer_qty',  None),
-        (3, 'back_veneer_code',  'back_veneer_qty',  None),
-        (4, 'face_glue_code',    None,               'face_glue_usage_g'),
-        (5, 'back_glue_code',    None,               'back_glue_usage_g'),
-    ]
-    for seq, code_key, qty_key, usage_key in spec:
+    def glue_recipe_id(recipe_code):
+        if not recipe_code: return None
+        row = conn.execute(
+            "SELECT id FROM glue_recipes WHERE recipe_code=?", (recipe_code,)).fetchone()
+        return row[0] if row else None
+
+    # Non-glue lines (seq 1-3) — resolve against materials.code
+    for seq, code_key, qty_key in [
+        (1, 'base_board_code',  'base_board_qty'),
+        (2, 'face_veneer_code', 'face_veneer_qty'),
+        (3, 'back_veneer_code', 'back_veneer_qty'),
+    ]:
         mat_code = data.get(code_key)
-        if not mat_code:
-            continue
+        if not mat_code: continue
         mid = mat_id(mat_code)
-        if not mid:
+        if not mid: continue
+        qty = float(data.get(qty_key) or pallet_qty)
+        conn.execute(
+            "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override) VALUES (?,?,?,?,?)",
+            (sku_id, mid, grp_id, seq, qty))
+
+    # Glue lines (seq 4-5) — resolve against glue_recipes.recipe_code first,
+    # fall back to materials.code only if the user picked a legacy glue_formula
+    # placeholder material. After Phase B the front-end picker uses recipes.
+    for seq, code_key, usage_key in [
+        (4, 'face_glue_code', 'face_glue_usage_g'),
+        (5, 'back_glue_code', 'back_glue_usage_g'),
+    ]:
+        picked = data.get(code_key)
+        if not picked: continue
+        usage_g = float(data.get(usage_key) or 45)
+        rid = glue_recipe_id(picked)
+        if rid:
+            conn.execute(
+                "INSERT INTO bom_lines (sku_id,glue_recipe_id,group_id,seq,usage_g_per_face) VALUES (?,?,?,?,?)",
+                (sku_id, rid, grp_id, seq, usage_g))
             continue
-        if usage_key:
-            usage_g = float(data.get(usage_key) or 45)
+        # legacy fallback: glue stored as a materials row
+        mid = mat_id(picked)
+        if mid:
             conn.execute(
                 "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,usage_g_per_face) VALUES (?,?,?,?,?)",
                 (sku_id, mid, grp_id, seq, usage_g))
-        else:
-            qty = float(data.get(qty_key) or pallet_qty)
-            conn.execute(
-                "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override) VALUES (?,?,?,?,?)",
-                (sku_id, mid, grp_id, seq, qty))
 
     conn.commit()
 
