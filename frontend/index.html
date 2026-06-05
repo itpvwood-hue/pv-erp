@@ -13128,13 +13128,19 @@ async function loadCompoundTab(type){
   if(!_compoundLoaded[type]){ await refreshCompound(type); }
 }
 
-// Bridge: open the shared Glue Recipe Builder modal from the BOM tab
-function bomGlueEdit(recipeId){
-  // Need recipes loaded into _gmRecipes (the modal reads from there)
-  api('/api/glue-recipes').then(rs => {
-    window._gmRecipes = rs || [];
-    if(typeof gmOpenRecipe === 'function') gmOpenRecipe(recipeId);
-  }).catch(e => toast('Failed to load recipes: '+(e.message||e),'danger'));
+// Bridge: open the shared Glue Recipe Builder modal from the BOM tab.
+// Must write to _gmRecipes directly — it's declared with `let` so a
+// window._gmRecipes assignment creates an unrelated global and the modal's
+// lookup still hits an empty array, falling back to the "New Recipe" path.
+async function bomGlueEdit(recipeId){
+  try {
+    const rs = await api('/api/glue-recipes');
+    _gmRecipes = rs || [];
+  } catch(e){
+    toast('Failed to load recipes: '+(e.message||e), 'danger');
+    return;
+  }
+  if(typeof gmOpenRecipe === 'function') await gmOpenRecipe(recipeId);
 }
 async function bomGlueDelete(recipeId, code){
   if(!confirm(`Delete glue recipe "${code}"?\n\nThis cannot be undone. Any FG BOM lines pointing at this recipe will lose their cost.`)) return;
