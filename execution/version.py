@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.8.0"
+VERSION    = "2.8.1"
 BUILD_DATE = "2026-06-05"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.8.1", "2026-06-05", "Cleanup chunk 2 (zero behaviour change for live paths): canonicalise glue API as /api/glue-recipes (delete /api/compound-skus, /api/glue-formulas, /api/glue duplicates); rename backend get_all_compound_skus->get_glue_recipes_summary, get_compound_sku->get_glue_recipe_detail, get_compound_skus_with_lines->get_glue_recipes_with_ingredients; drop dept-fc/fc-requests/packing-center router redirects (no callers); refactor 40-branch loadPage() if/else into PAGE_LOADERS dict (also fixed latent station-log double-chain bug); hoist 18 lazy from-database imports to module top; spawned task for non-functional Glue BOM add/delete-ingredient buttons. Audit 37/37 throughout."),
     ("2.8.0", "2026-06-05", "Cleanup chunk 1 (zero behaviour change): drop resync_glue_placeholder_prices no-op + /api/price-sync, drop ORDERED->PO_ISSUED write-side alias + ordered_at stamping (read paths still handle legacy rows), remove fcHubLoadInventory_legacy frontend stub, delete archive/debug/ (pre-server-log diagnostics) and scripts/_phaseB_cleanup.py (executed 2.5.0). Git repo initialised; this work is on branch cleanup/2.7.x"),
     ("2.7.6", "2026-06-04", "Material Requests page: always back-fill Stock-in-WH / WH-Stock columns from a live /api/materials snapshot fetched in parallel with the request lists, so the value matches Raw Materials even on deployments where the consumable-requests endpoint hasn't been redeployed with current_stock in its SELECT"),
     ("2.7.5", "2026-06-04", "Material Requests page: 'Remaining ฿' column replaced with 'Stock in WH' showing live warehouse stock per material (now matches Raw Materials page); shortfall flagged in red with 'short by N' hint when current stock < remaining outstanding; backend get_consumable_requests now joins current_stock/reorder_point/name_th so the row carries truthful inventory data"),
