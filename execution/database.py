@@ -2893,13 +2893,6 @@ def _glue_recipe_cost_per_kg(conn, recipe_id: int) -> float | None:
     return (total_cost / total_kg) if total_kg > 0 else None
 
 
-def resync_glue_placeholder_prices(conn=None) -> int:
-    """No-op kept for API back-compat. After Phase B, glue cost is computed
-    on-the-fly from glue_recipes.material_links + ingredient prices; there is
-    no longer a cached price to sync to a placeholder row."""
-    return 0
-
-
 def update_material_price(mat_code, price):
     """Update a material's catalog price. Glue recipes that reference this
     material as an ingredient will pick up the new price on the next read
@@ -3595,12 +3588,8 @@ def save_glue_recipe(data: dict) -> dict:
                      tuple(flds.values()))
         rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.commit()
-    # Phase B: editing the recipe (kg amounts or material_links) immediately
-    # re-derives the cached cost on the matching glue_formula placeholder.
-    try:
-        resync_glue_placeholder_prices(conn)
-    except Exception:
-        pass
+    # Phase B: glue cost is now computed live from glue_recipes.material_links
+    # whenever the cost is read, so there is nothing to re-sync after a write.
     row = row_to_dict(conn.execute("SELECT * FROM glue_recipes WHERE id=?", (rid,)).fetchone())
     conn.close(); return row
 

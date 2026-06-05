@@ -1619,14 +1619,6 @@ def material_usage(code: str):
     """Show every SKU and formula that uses this material."""
     return get_material_usage(code)
 
-@app.post("/api/price-sync")
-def price_sync():
-    """Re-derive cached glue placeholder prices from glue_recipes
-    (Phase B: glue_recipes is now the source of truth for cost)."""
-    from database import resync_glue_placeholder_prices
-    n = resync_glue_placeholder_prices()
-    return {"synced_glue_materials": n}
-
 # ══════════════════════════════════════════════════════════════
 # PRODUCTION MODULE ROUTES
 # ══════════════════════════════════════════════════════════════
