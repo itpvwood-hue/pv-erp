@@ -1735,6 +1735,17 @@ def require_auth(x_auth_token: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     return user
 
+# ── Role identifiers ──────────────────────────────────────────
+# Single source of truth for the four roles. Use Role.X instead of bare
+# strings in require_role(...) and user['role'] comparisons — a typo in
+# 'MANGERIAL' would otherwise lock everyone out of an endpoint silently.
+class Role:
+    MANAGERIAL          = 'MANAGERIAL'
+    PRODUCTION_PLANNING = 'PRODUCTION_PLANNING'
+    DEPARTMENT_LEADER   = 'DEPARTMENT_LEADER'
+    WAREHOUSE           = 'WAREHOUSE'
+    ALL = (MANAGERIAL, PRODUCTION_PLANNING, DEPARTMENT_LEADER, WAREHOUSE)
+
 def require_role(*roles):
     def _dep(user: dict = Depends(require_auth)):
         if user['role'] not in roles:
@@ -1994,20 +2005,20 @@ def list_users(user: dict = Depends(require_auth)):
     return get_users()
 
 @app.post("/api/users", status_code=201)
-def create_user_route(body: UserIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def create_user_route(body: UserIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return create_user(body.dict())
 
 @app.patch("/api/users/{user_id}")
-def update_user_route(user_id: str, body: UserUpdateIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def update_user_route(user_id: str, body: UserUpdateIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return update_user(user_id, body.dict(exclude_none=True))
 
 @app.post("/api/users/{user_id}/departments")
-def set_user_depts(user_id: str, body: UserDeptsIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def set_user_depts(user_id: str, body: UserDeptsIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     save_user_departments(user_id, body.departments)
     return get_user_departments(user_id)
 
 @app.get("/api/users/{user_id}/departments")
-def get_user_depts(user_id: str, user: dict = Depends(require_role('MANAGERIAL'))):
+def get_user_depts(user_id: str, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return get_user_departments(user_id)
 
 # ════════════════════════════════════════════════════════════════
@@ -2028,12 +2039,12 @@ def create_req(body: ConsumableRequestIn, user: dict = Depends(require_auth)):
 def list_reqs(status: Optional[str] = None, department: Optional[str] = None,
               user: dict = Depends(require_auth)):
     # Dept leaders only see their own requests
-    rb = user['user_id'] if user['role'] == 'DEPARTMENT_LEADER' else None
+    rb = user['user_id'] if user['role'] == Role.DEPARTMENT_LEADER else None
     return get_consumable_requests(status=status, department=department, requested_by=rb)
 
 @app.patch("/api/consumable-requests/{request_id}/fulfill")
 def fulfill_req(request_id: str, body: FulfillIn,
-                user: dict = Depends(require_role('WAREHOUSE'))):
+                user: dict = Depends(require_role(Role.WAREHOUSE))):
     return fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
 
 @app.patch("/api/consumable-requests/{request_id}/cancel")
@@ -3243,7 +3254,7 @@ def create_fc_return(body: FcTransferRequestIn, user: dict = Depends(require_aut
 
 @app.patch("/api/fc/transfer-requests/{request_id}/fulfill")
 def fulfill_fc_transfer(request_id: str, body: FulfillIn,
-                        user: dict = Depends(require_role('WAREHOUSE'))):
+                        user: dict = Depends(require_role(Role.WAREHOUSE))):
     try:
         return fulfill_fc_transfer_request(request_id, body.qty_fulfilled, user['user_id'])
     except ValueError as e:
@@ -3301,7 +3312,7 @@ def dept_costs_detail(month_year: Optional[str] = None, department: Optional[str
 
 # ── Admin endpoints ────────────────────────────────────────────
 @app.get("/api/admin/login-log")
-def get_login_log_route(limit: int = 200, user: dict = Depends(require_role('MANAGERIAL'))):
+def get_login_log_route(limit: int = 200, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return get_login_log(limit)
 
 # ── Static / SPA ──────────────────────────────────────────────

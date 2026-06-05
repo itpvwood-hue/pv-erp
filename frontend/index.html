@@ -11748,7 +11748,7 @@ function bdcTab(tab){
 
 function bdcRender(tab, b, hist){
   const user=getCurrentUser();
-  const canEdit=user?.role==='PRODUCTION_PLANNING'||user?.role==='MANAGERIAL';
+  const canEdit=user?.role=== ROLE.PRODUCTION_PLANNING||user?.role=== ROLE.MANAGERIAL;
   const pq=b?.pallet_qty||1;
   if(tab==='info'){
     const pri=b?.priority||2;
@@ -11852,7 +11852,7 @@ function _renderProdBatchDetail(b, logs){
   const stationIcons={glue_mix:'bi-droplet-fill',laminating:'bi-table',cold_press:'bi-snow',
     repair:'bi-tools',sanding:'bi-eraser',hot_press:'bi-thermometer-sun',grading:'bi-patch-check',packing:'bi-boxes'};
   const user=getCurrentUser();
-  const canEdit=user?.role==='PRODUCTION_PLANNING'||user?.role==='MANAGERIAL';
+  const canEdit=user?.role=== ROLE.PRODUCTION_PLANNING||user?.role=== ROLE.MANAGERIAL;
 
   let logsHtml='';
   for(const [key, entries] of Object.entries(logs)){
@@ -13589,7 +13589,7 @@ async function loadStationLog(){
   if(!_allEmployees.length) _allEmployees = await api('/api/employees').catch(()=>[]);
   await msLoadMachines();
   const u = getCurrentUser?.();
-  const canSetup = u && (u.role === 'PRODUCTION_PLANNING' || u.role === 'MANAGERIAL');
+  const canSetup = u && (u.role === ROLE.PRODUCTION_PLANNING || u.role === ROLE.MANAGERIAL);
   ['sl-machine-setup-btn','slh-mach-setup-btn'].forEach(id => {
     const el = document.getElementById(id);
     if(el) el.style.display = canSetup ? '' : 'none';
@@ -16969,11 +16969,22 @@ const ROLE_PAGES = {
   ]),
 };
 
+// Role identifiers — single source of truth. Compare against ROLE.X
+// instead of bare strings to catch typos at JS load time (referencing
+// ROLE.MNGERIAL is a ReferenceError; comparing to 'MNGERIAL' silently
+// returns false and the user gets locked out of a button).
+const ROLE = {
+  MANAGERIAL:          'MANAGERIAL',
+  PRODUCTION_PLANNING: 'PRODUCTION_PLANNING',
+  DEPARTMENT_LEADER:   'DEPARTMENT_LEADER',
+  WAREHOUSE:           'WAREHOUSE',
+};
+
 const ROLE_LABEL = {
-  MANAGERIAL:'Managerial',
-  PRODUCTION_PLANNING:'Production Planning',
-  DEPARTMENT_LEADER:'Dept Leader',
-  WAREHOUSE:'Warehouse',
+  [ROLE.MANAGERIAL]:          'Managerial',
+  [ROLE.PRODUCTION_PLANNING]: 'Production Planning',
+  [ROLE.DEPARTMENT_LEADER]:   'Dept Leader',
+  [ROLE.WAREHOUSE]:           'Warehouse',
 };
 
 // Nav sections that should only show for certain roles
@@ -17086,7 +17097,7 @@ async function doLogin(){
     // Portal routing: WAREHOUSE users belong on /warehouse; everyone else on /.
     // If the user is on the wrong URL for their role, redirect (token already
     // saved to localStorage so the new page picks up the session).
-    const _wantsWh = data.user.role === 'WAREHOUSE';
+    const _wantsWh = data.user.role === ROLE.WAREHOUSE;
     // WAREHOUSE users always land on the warehouse portal; other roles can
     // visit /warehouse intentionally (e.g. admin inspecting it) so we don't
     // bounce them back to / from there.
@@ -17209,7 +17220,7 @@ function openMyProfile(){
   document.getElementById('prof-pw').value='';
   // Show info note for dept leaders, hide for others
   const deptSec=document.getElementById('prof-depts-section');
-  if(user.role==='DEPARTMENT_LEADER') deptSec.classList.remove('d-none');
+  if(user.role=== ROLE.DEPARTMENT_LEADER) deptSec.classList.remove('d-none');
   else deptSec.classList.add('d-none');
   bootstrap.Modal.getOrCreateInstance(document.getElementById('myProfileModal')).show();
 }
@@ -17234,7 +17245,7 @@ async function saveProfile(){
 function userCanActOnBatch(batch){
   const user=getCurrentUser();
   if(!user) return false;
-  if(user.role!=='DEPARTMENT_LEADER') return true;
+  if(user.role!== ROLE.DEPARTMENT_LEADER) return true;
   const depts=getCurrentDepts();
   if(!depts.length) return false;
   return depts.some(d=>
@@ -17259,7 +17270,7 @@ function userCanActOnBatch(batch){
     localStorage.setItem('erp_user',JSON.stringify(data));
     localStorage.setItem('erp_depts',JSON.stringify(data.departments||[]));
     // Portal routing on refresh / revisit
-    const _wantsWh = data.role === 'WAREHOUSE';
+    const _wantsWh = data.role === ROLE.WAREHOUSE;
     if(_wantsWh && _PORTAL_MODE !== 'warehouse'){ window.location.href = '/warehouse'; return; }
     applySession(data, data.departments||[]);
     document.getElementById('login-overlay').style.display='none';
@@ -18437,7 +18448,7 @@ async function umLoad(){
   if(!users) return;
 
   // Load depts for all dept leaders in parallel
-  const leaderIds=users.filter(u=>u.role==='DEPARTMENT_LEADER').map(u=>u.user_id);
+  const leaderIds=users.filter(u=>u.role=== ROLE.DEPARTMENT_LEADER).map(u=>u.user_id);
   const deptMap={};
   await Promise.all(leaderIds.map(async uid=>{
     deptMap[uid]=await api(`/api/users/${uid}/departments`).catch(()=>[]);
@@ -18548,7 +18559,7 @@ async function umOpenEdit(uid){
 function umToggleDepts(existingDepts){
   const role=document.getElementById('um-role').value;
   const sec=document.getElementById('um-dept-section');
-  if(role==='DEPARTMENT_LEADER'){
+  if(role=== ROLE.DEPARTMENT_LEADER){
     sec.classList.remove('d-none');
     _renderDeptGrid('um-dept-grid', existingDepts||[]);
   }else{
@@ -18578,7 +18589,7 @@ async function umSave(){
       uid=created.user_id;
     }
     // Always save dept assignments for dept leaders (even if empty = clear)
-    if(body.role==='DEPARTMENT_LEADER'){
+    if(body.role=== ROLE.DEPARTMENT_LEADER){
       const checked=[...document.querySelectorAll('.um-dept-check:checked')].map(c=>{
         const [dept,line]=c.value.split('|');
         return {department:dept, line_id:line==='ALL'?null:line};
