@@ -54,6 +54,8 @@ DOCS_DIR  = os.getenv("DOCS_DIR",
 LOG_DIR   = os.getenv("LOG_DIR",
                       os.path.join(PROJECT_ROOT, 'logs'))
 LOG_PATH  = os.path.join(LOG_DIR, 'server.log')
+BACKUP_DIR = os.getenv("BACKUP_DIR",
+                       os.path.join(PROJECT_ROOT, 'backups'))
 
 # ── Server ──────────────────────────────────────────────────────
 HOST  = os.getenv("HOST", "0.0.0.0")          # bind to all interfaces for LAN

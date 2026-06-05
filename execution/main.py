@@ -1779,6 +1779,37 @@ def require_role(*roles):
         return user
     return _dep
 
+# ── Factory Assistant ─────────────────────────────────────────
+# General-purpose Claude chat surface with read-only DB + log access and
+# Excel export. Replaces the two niche AI placeholders (BOM Query, Capacity
+# Planner) that nobody wired into the nav.
+class FactoryAssistantBody(BaseModel):
+    messages: list           # chronological [{role, content}, ...]
+
+@app.post("/api/factory-assistant/chat")
+def factory_assistant_chat(body: FactoryAssistantBody,
+                           user: dict = Depends(require_role(Role.MANAGERIAL))):
+    from factory_assistant import chat as _fa_chat
+    return _fa_chat(body.messages or [])
+
+@app.get("/api/factory-assistant/export/{filename}")
+def factory_assistant_export(filename: str,
+                             user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """Download a previously-generated xlsx file. Filenames are timestamped +
+    uuid-suffixed by the tool, but we still validate against path traversal."""
+    import os as _os, re as _re
+    from factory_assistant import EXPORT_DIR
+    if not _re.match(r"^[A-Za-z0-9_\-]+\.xlsx$", filename):
+        raise HTTPException(400, "Invalid filename")
+    path = _os.path.join(EXPORT_DIR, filename)
+    if not _os.path.exists(path):
+        raise HTTPException(404, "Export not found")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+
 # ── Glue Recipe CRUD ─────────────────────────────────────────
 @app.get("/api/glue-recipes")
 def list_glue_recipes(): return get_glue_recipes()
