@@ -5944,19 +5944,9 @@ function loadPage(p){
   else if(p==='order-intake') loadOrderIntake();
   else if(p==='line-board') loadLineBoard();
   else if(p==='prod-flow') loadKanban();
-  // Legacy entry points redirect to the unified FC Hub
-  else if(p==='dept-fc'){ _fcHubTab='check';    return loadPage('fc-hub'); }
-  else if(p==='fc-requests'){ _fcHubTab='requests'; return loadPage('fc-hub'); }
   else if(p==='fc-hub')  fcHubLoad();
   else if(p==='dept-fg_warehouse') loadFgWarehouse();
   else if(p.startsWith('dept-')) loadDeptPage(p.replace('dept-',''));
-  // Packing was its own page; it's now centralised into the Station Leader Hub.
-  // Any legacy deep link → Hub with station scope = Packing.
-  else if(p==='packing-center'){
-    return Promise.resolve(loadPage('station-log')).then(()=>{
-      const ds=document.getElementById('sl-dept-scope'); if(ds){ ds.value='packing'; slhSetScope(); }
-    });
-  }
   else if(p==='materials') loadMaterials();
   else if(p==='products'||p==='fg') loadFg();
   else if(p==='bom') loadBom();
@@ -5985,7 +5975,6 @@ function loadPage(p){
   else if(p==='material-shortfalls') msfLoad();
   // initialise SLH scope chip + dynamic header on page show
   if(p==='station-log'){ try{ slhSetScope(); }catch{ try{ slhUpdateHeader(); }catch{} } }
-  else if(p==='fc-requests') fcrLoad();
   else if(p==='raw-receiving') rrecLoad();
   else if(p==='forklift-refuel') frflLoad();
   else if(p==='forklift-dash')   fkDashLoad();
@@ -16906,31 +16895,31 @@ const ROLE_PAGES = {
   MANAGERIAL: new Set([
     'dashboard','order-intake','line-board',
     'bom','bom-ai','materials','fg',
-    'packing-center','dept-fg_warehouse',
+    'dept-fg_warehouse',
     'prod-logs','reports','capacity',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
-    'dept-costs','dept-fc','material-shortfalls','fc-requests','fc-hub','raw-receiving','forklift-refuel',
+    'dept-costs','material-shortfalls','fc-hub','raw-receiving','forklift-refuel',
     'forklift-dash','forklift-report','scrap-bin',
   ]),
   PRODUCTION_PLANNING: new Set([
     'dashboard','order-intake','line-board','prod-flow',
     'bom','bom-ai','materials','fg',
-    'packing-center','dept-fg_warehouse',
+    'dept-fg_warehouse',
     'prod-logs','reports','capacity','material-shortfalls',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
-    'dept-costs','dept-fc','fc-requests',
+    'dept-costs','fc-hub',
     'dept-laminating','dept-cold_press','dept-hot_press','dept-bleach',
     'dept-repair','dept-sanding','dept-grading',
     'forklift-report','scrap-bin',
   ]),
   DEPARTMENT_LEADER: new Set([
-    'dashboard','station-log','glue-mix-station','station-tools','packing-center','consumable-requests','dept-fc','fc-requests','fc-hub','scrap-bin',
+    'dashboard','station-log','glue-mix-station','station-tools','consumable-requests','fc-hub','scrap-bin',
     'dept-laminating','dept-cold_press','dept-hot_press','dept-bleach',
     'dept-repair','dept-sanding','dept-grading',
   ]),
   WAREHOUSE: new Set([
     'wh-dashboard','wh-low-stock','wh-open-prs',
-    'materials','packing-center','dept-fg_warehouse',
+    'materials','dept-fg_warehouse',
     'warehouse-queue','dept-costs','station-log',
     'raw-receiving','forklift-refuel','forklift-dash','scrap-bin',
   ]),
