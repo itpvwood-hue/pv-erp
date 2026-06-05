@@ -14196,22 +14196,19 @@ async function msDelete(id){
   } catch(e){ toast(e.message,'danger'); }
 }
 
-// Build machine <option> list for a station form's dropdown, filtered by dept + (optionally) line.
-// Fallback to a built-in code list if no machines have been configured for the dept.
+// Build machine <option> list for a station form's dropdown, filtered by
+// dept + (optionally) line. When no machine matches we now surface a clear
+// "not configured" message rather than serving hardcoded fallback codes
+// (SND-01/CP-01/HP-01 etc.) that don't exist in the DB — those silently
+// created phantom machine records on save.
 function msOptionsFor(dept, line){
-  const fallbacks = {
-    cold_press: ['CP-01','CP-02'],
-    sander:     ['SND-01','SND-02','SND-37'],  // legacy code
-    sanding:    ['SND-01','SND-02','SND-37'],
-    hot_press:  ['HP-01','HP-02','HP-37'],
-  };
   let matching = (_msMachines || []).filter(m =>
     (m.dept || m.type || '').toLowerCase() === dept
     && (!line || !m.production_line || m.production_line === line)
   );
   if(!matching.length){
-    const fb = fallbacks[dept] || [];
-    return '<option value="">Select…</option>' + fb.map(c=>`<option value="${c}">${c}</option>`).join('');
+    const lineHint = line ? ' on '+line : '';
+    return `<option value="" disabled>No ${dept} machine configured${lineHint} — add one in Admin → Machines</option>`;
   }
   return '<option value="">Select…</option>' + matching.map(m=>{
     const cap = m.capacity_per_hour > 0 ? `${m.capacity_per_hour}/hr`
