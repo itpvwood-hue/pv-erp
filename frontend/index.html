@@ -5425,9 +5425,11 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<!-- Extracted shared scripts. Order matters: i18n declares _LANG / I18N / t
-     used by the main inline script and by future portal modules. -->
+<!-- Extracted shared scripts. Order matters: i18n + core declare globals
+     (_LANG, I18N, t, api, toast, formatters, …) used by the main inline
+     script and by future portal modules. -->
 <script src="/static/js/i18n.js"></script>
+<script src="/static/js/core.js"></script>
 <script>
 /* DEBUG ERROR CATCHER — runs before main script so it catches syntax errors too */
 window.onerror = function(msg, src, line, col, err){
@@ -8953,63 +8955,7 @@ async function loadLogs(){
 // ══════════════════════════════════════════════════════════
 // UTILS
 // ══════════════════════════════════════════════════════════
-async function api(path,method='GET',body=null){
-  const token=localStorage.getItem('erp_token')||'';
-  const opts={method,headers:{'Content-Type':'application/json','X-Auth-Token':token}};
-  if(body) opts.body=JSON.stringify(body);
-  const r=await fetch(path,opts);
-  if(r.status===401){doLogout();return null;}
-  if(!r.ok){const e=await r.json().catch(()=>({detail:r.statusText}));throw new Error(e.detail||r.statusText);}
-  const ct=r.headers.get('content-type')||'';
-  return ct.includes('json')?r.json():{};
-}
-function toast(msg,type='success'){
-  const el=document.getElementById('toast');
-  el.className=`toast align-items-center text-bg-${type} border-0`;
-  document.getElementById('toast-msg').textContent=msg;
-  bootstrap.Toast.getOrCreateInstance(el,{delay:type==='success'?3000:6000}).show();
-}
-// ── Formatters ────────────────────────────────────────────
-// Canonical: fmtNum / fmtMoney(n, ccy) / fmtDate / fmtQty.
-// Consolidated from fmt/fmtB/fmtD + _accFmt/_accFmtN + _whFmtQty.
-// Null/empty/NaN render as em-dash '—' for visual consistency.
-//
-// fmtMoney is currency-aware so the upcoming dual-currency accounting
-// surface (THB + USD invoices, USD-priced imports) needs zero new helpers
-// to add another currency — register the symbol in CURRENCY_SYMBOL and
-// you can call fmtMoney(amount, 'EUR') anywhere.
-const CURRENCY_SYMBOL = {
-  THB: '฿',
-  USD: '$',
-};
-function fmtNum(n){
-  if(n == null || n === '') return '—';
-  const v = Number(n);
-  return Number.isFinite(v)
-    ? v.toLocaleString(undefined, {maximumFractionDigits: 2})
-    : '—';
-}
-function fmtMoney(n, ccy){
-  if(n == null || n === '') return '—';
-  const v = Number(n);
-  if(!Number.isFinite(v)) return '—';
-  const sym = CURRENCY_SYMBOL[ccy] || CURRENCY_SYMBOL.THB;
-  return sym + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-}
-function fmtDate(d){ return d ? String(d).slice(0,10) : '—'; }
-function fmtQty(n, unit){ return fmtNum(n) + (unit ? ' ' + unit : ''); }
-
-// Hoisted aliases — old call sites work untouched from anywhere in script.
-function fmt(n){ return fmtNum(n); }
-function fmtB(n){ return fmtMoney(n, 'THB'); }   // legacy ฿ helper
-function fmtD(d){ return fmtDate(d); }
-function _accFmt(n){ return fmtMoney(n, 'THB'); }   // legacy accounting alias
-function _accFmtB(n){ return fmtMoney(n, 'THB'); }  // explicit Thai Baht
-function _accFmtU(n){ return fmtMoney(n, 'USD'); }  // explicit USD
-function _accFmtN(n){ return fmtNum(n); }
-function _whFmtQty(n){ return fmtNum(n); }
-
-function timeAgo(ts){if(!ts)return '';const d=new Date(ts.endsWith('Z')||ts.includes('+')?ts:ts+'Z');const m=Math.round((Date.now()-d)/60000);if(m<1)return 'just now';if(m<60)return m+'m ago';const h=Math.floor(m/60),rm=m%60;if(h<24)return h+'h'+(rm?` ${rm}m`:'')+' ago';return Math.floor(h/24)+'d ago';}
+// core utilities moved to /static/js/core.js
 function prioBadge(p){
   const cls={1:'p1',2:'p2',3:'p3'}[p]||'p2';
   const lbl={1:'P1 HIGH',2:'P2 MED',3:'P3 LOW'}[p]||'P'+p;
