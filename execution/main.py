@@ -49,7 +49,7 @@ from database import (
     # Production module
     get_employees, save_employee, delete_employee,
     get_manufacturing_lines, get_prod_machines,
-    get_departments, get_line_flow, get_all_line_flows,
+    get_departments, get_line_flow, get_all_line_flows, get_stations,
     get_mfg_orders, create_mfg_order,
     get_prod_batches, create_prod_batch, advance_prod_batch_status, get_prod_batch,
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
@@ -502,6 +502,17 @@ def catalog_line_flow_one(code: str):
     flow = get_line_flow(code)
     if not flow: return []
     return flow
+
+@app.get("/api/catalog/stations")
+def catalog_stations(line_code: Optional[str] = None,
+                     department_code: Optional[str] = None,
+                     include_inactive: bool = False):
+    """Concrete (line, department) stations. line_code='' returns the
+    centralised stations (packing/fg_receiving/fg_warehouse) which have
+    line_code NULL in the DB."""
+    return get_stations(line_code=line_code,
+                        department_code=department_code,
+                        active_only=not include_inactive)
 
 # ── Machines ──────────────────────────────────────────────────
 @app.get("/api/machines")

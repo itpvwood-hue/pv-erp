@@ -739,6 +739,12 @@ def init_db():
         # but uses the project's standard column name.
         "ALTER TABLE manufacturing_line    ADD COLUMN line_type   TEXT NOT NULL DEFAULT 'main'",
         "ALTER TABLE manufacturing_line    ADD COLUMN sort_order  INTEGER NOT NULL DEFAULT 0",
+        # 2.11.x — line scope on per-station data so analytics can JOIN to a
+        # concrete (line, dept) station row. dept_activities + station_presets
+        # are the two that lacked it; station_stock + station_stock_movements
+        # already carry line_id.
+        "ALTER TABLE dept_activities       ADD COLUMN line_id  TEXT DEFAULT ''",
+        "ALTER TABLE station_presets       ADD COLUMN line_id  TEXT DEFAULT ''",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -816,6 +822,33 @@ def init_db():
             FOREIGN KEY (line_code)       REFERENCES manufacturing_line(line_id),
             FOREIGN KEY (department_code) REFERENCES departments(code)
         )
+    """)
+
+    # ── Stations ───────────────────────────────────────────────
+    # A concrete (line, department) pair. Per-line departments (fc, laminating,
+    # cold_press, hot_press, bleach, repair, sanding, grading) get one row per
+    # main line. Centralised departments (packing, fg_receiving, fg_warehouse)
+    # get exactly one row with line_code = NULL — the UI renders these as
+    # "ALL LINES". This is the row to FK against from per-station analytics:
+    # dept_activities, station_stock(_movements), station_presets.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stations (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            line_code           TEXT,
+            department_code     TEXT NOT NULL,
+            label               TEXT,
+            capacity_per_shift  INTEGER,
+            is_active           INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (line_code)       REFERENCES manufacturing_line(line_id),
+            FOREIGN KEY (department_code) REFERENCES departments(code)
+        )
+    """)
+    # SQLite treats NULL as distinct in UNIQUE — fine for the centralised case
+    # where exactly one (NULL, dept_code) row should exist. Index to enforce
+    # the per-line case (no duplicate (line_code, dept) pairs).
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stations_line_dept
+            ON stations(line_code, department_code)
     """)
 
     # Seed a default 11:00 refuel window if the table is empty
@@ -962,6 +995,37 @@ def _seed_lines_and_departments(conn):
         for i, dept_code in enumerate(depts):
             conn.execute("""INSERT INTO line_flow (line_code, seq, department_code)
                             VALUES (?,?,?)""", (line_code, i, dept_code))
+
+    # Stations — one row per (line, per-line dept), plus one row per
+    # centralised dept with line_code=NULL. Idempotent: skip if the pair
+    # already exists. Labels reuse the dept's display label so renaming a
+    # department (in _DEFAULT_DEPARTMENTS) propagates here on next boot.
+    dept_label = {d[0]: d[1]      for d in _DEFAULT_DEPARTMENTS}
+    centralised = {d[0]           for d in _DEFAULT_DEPARTMENTS if d[3] == 1}
+    for line_code, depts in _DEFAULT_FLOW.items():
+        for dept in depts:
+            if dept in centralised: continue   # handled below
+            existing = conn.execute(
+                "SELECT id FROM stations WHERE line_code=? AND department_code=?",
+                (line_code, dept)).fetchone()
+            label = f"{line_code} · {dept_label.get(dept, dept)}"
+            if existing:
+                conn.execute("UPDATE stations SET label=? WHERE id=?", (label, existing[0]))
+                continue
+            conn.execute("""INSERT INTO stations
+                            (line_code, department_code, label, is_active)
+                            VALUES (?,?,?,1)""", (line_code, dept, label))
+    for dept_code in centralised:
+        existing = conn.execute(
+            "SELECT id FROM stations WHERE line_code IS NULL AND department_code=?",
+            (dept_code,)).fetchone()
+        label = f"{dept_label.get(dept_code, dept_code)} (all lines)"
+        if existing:
+            conn.execute("UPDATE stations SET label=? WHERE id=?", (label, existing[0]))
+            continue
+        conn.execute("""INSERT INTO stations
+                        (line_code, department_code, label, is_active)
+                        VALUES (NULL,?,?,1)""", (dept_code, label))
     conn.commit()
 
 
@@ -3427,6 +3491,35 @@ def get_all_line_flows():
     for r in rows:
         flow.setdefault(r['line_code'], []).append(r['department_code'])
     return flow
+
+def get_stations(line_code=None, department_code=None, active_only=True):
+    """Return concrete (line, department) stations with display labels
+    joined in. Filter by line_code (None for centralised) or department_code.
+    Centralised stations carry line_code = NULL; the call-site decides whether
+    to show 'ALL LINES' or hide the column."""
+    conn = get_db()
+    q = """
+        SELECT s.id, s.line_code, s.department_code,
+               s.label, s.capacity_per_shift, s.is_active,
+               d.label AS department_label, d.icon AS department_icon,
+               d.is_centralised, d.sort_order AS dept_sort,
+               l.line_name AS line_label, l.line_type, l.sort_order AS line_sort
+          FROM stations s
+          LEFT JOIN departments        d ON d.code   = s.department_code
+          LEFT JOIN manufacturing_line l ON l.line_id = s.line_code
+         WHERE 1=1
+    """
+    params = []
+    if active_only:                          q += " AND s.is_active = 1"
+    if department_code is not None:          q += " AND s.department_code = ?"; params.append(department_code)
+    if line_code is not None:
+        if line_code == '':
+            q += " AND s.line_code IS NULL"
+        else:
+            q += " AND s.line_code = ?"; params.append(line_code)
+    q += " ORDER BY l.sort_order IS NULL, l.sort_order, s.line_code, d.sort_order, s.department_code"
+    rows = conn.execute(q, params).fetchall()
+    conn.close(); return rows_to_list(rows)
 
 # ═══════════════════════════════════════════════════════════════
 # PRODUCTION MODULE — Mfg Orders & Batches
