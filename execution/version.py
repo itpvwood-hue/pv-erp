@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.9.0"
+VERSION    = "2.10.0"
 BUILD_DATE = "2026-06-05"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.10.0", "2026-06-05", "Lines/Stations DB foundation: new `departments` and `line_flow` tables, manufacturing_line extended with line_type ('main'|'aux') + sort_order; seeded 6 lines (P01/P02/P37 main + PUV/PVS/PSP aux), 11 departments, default flow for the 3 main lines; new /api/catalog/{lines,departments,line-flow,lines/{code}/flow} endpoints; frontend now fetches the catalog at preload and exposes catalogLineCodes/DeptLabel/DeptIcon helpers; 2 unambiguous line-list sites migrated (LINE_OPTIONS, SL_LINE_OPTIONS) — LINE_FLOW kept (PM2 conflict) and HTML dropdowns left for the portal split. Adding 'P38' is now one DB insert; 5 files no longer need editing"),
     ("2.9.0", "2026-06-05", "Cleanup chunk 3: backend `class Role` + frontend `const ROLE` identifier constants (catches role-string typos at parse/load time); _mat_by_id/_mat_by_code/_mat_id_by_code helpers in database.py with 5 inline sites migrated; hardcoded SND-01/CP-01/HP-01 fallback machine codes replaced with a clear 'no machine configured' empty state; formatters consolidated into 4 canonical (fmtNum/fmtMoney/fmtDate/fmtQty) with currency-aware fmtMoney(n,ccy) now backing _accFmtB (Thai Baht) + _accFmtU (USD) ahead of dual-currency accounting"),
     ("2.8.4", "2026-06-05", "Glue Recipe edit fix on BOM tab: clicking the pencil icon on a recipe row was opening a blank 'New Glue Recipe' modal because bomGlueEdit() set window._gmRecipes after fetching but _gmRecipes is a let-bound lexical (not a window property) so the modal's lookup hit an empty array. Now assigns _gmRecipes directly"),
     ("2.8.3", "2026-06-05", "BOM Builder fix: glue recipe selection now persists when editing an existing BOM. Was a race: openBomBuilder fired loadBomBuilder without awaiting, editBomCard ran bbLoadFg after a 150ms timer, and the late-finishing loadBomBuilder re-rendered the dropdown and wiped the selection. openBomBuilder is now an async function that awaits the picker fetch; the 150ms hack is gone"),
