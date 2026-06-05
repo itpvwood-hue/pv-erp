@@ -45,7 +45,7 @@ for _ln in ('uvicorn', 'uvicorn.error', 'uvicorn.access', 'fastapi'):
 logging.getLogger('pvwood').info('Server bootstrapping; log path = %s', LOG_PATH)
 
 from database import (
-    init_db,
+    init_db, get_db, row_to_dict,
     # Production module
     get_employees, save_employee, delete_employee,
     get_manufacturing_lines, get_prod_machines,
@@ -726,11 +726,10 @@ def edit_production_order(order_id: int, body: ProductionOrderUpdate): return up
 @app.patch("/api/production-orders/{order_id}/priority")
 def patch_production_order_priority(order_id: int, body: dict):
     """Quick priority-only update — used by batch cards."""
-    from database import get_db as _gdb
     new_pri = int(body.get('priority', 2))
     if new_pri not in (1, 2, 3):
         raise HTTPException(400, "Priority must be 1 (high), 2 (medium), or 3 (low)")
-    conn = _gdb()
+    conn = get_db()
     conn.execute("UPDATE production_orders SET priority=? WHERE id=?", (new_pri, order_id))
     conn.commit(); conn.close()
     return {"ok": True, "priority": new_pri}
@@ -738,11 +737,10 @@ def patch_production_order_priority(order_id: int, body: dict):
 @app.patch("/api/batches/{batch_id}/priority")
 def patch_batch_priority(batch_id: int, body: dict):
     """Update priority of the batch's production order via batch ID."""
-    from database import get_db as _gdb
     new_pri = int(body.get('priority', 2))
     if new_pri not in (1, 2, 3):
         raise HTTPException(400, "Priority must be 1 (high), 2 (medium), or 3 (low)")
-    conn = _gdb()
+    conn = get_db()
     row = conn.execute("SELECT prod_order_id FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not row:
         conn.close(); raise HTTPException(404, "Batch not found")
@@ -907,8 +905,7 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add"):
     blank_skipped = len(rows_csv) - len(real_rows)
 
     if mode == "replace":
-        from database import get_db as _gdb
-        conn = _gdb()
+        conn = get_db()
         codes = [r['code'] for _, r in real_rows if r.get('code')]
         if codes:
             ph = ','.join('?' for _ in codes)
@@ -943,8 +940,7 @@ async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
         text = content.decode('latin-1')
     all_rows_raw = list(csv.DictReader(io.StringIO(text)))
     if mode == "replace":
-        from database import get_db as _gdb
-        conn = _gdb()
+        conn = get_db()
         skus_in_csv = [r.get('product_sku','').strip() for r in all_rows_raw if r.get('product_sku','').strip()]
         for sku_code in set(skus_in_csv):
             prod = conn.execute("SELECT id FROM products WHERE sku=?", (sku_code,)).fetchone()
@@ -1030,8 +1026,7 @@ def _esc_csv(v):
 @app.get("/api/export/materials/veneers")
 def export_veneers():
     """Export all veneer_sheet materials — matches the veneer upload template format."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1059,8 +1054,7 @@ def export_veneers():
 @app.get("/api/export/materials/boards")
 def export_boards():
     """Export all core_board materials — matches the board upload template format."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1087,8 +1081,7 @@ def export_consumables():
     """Export everything that isn't a Board, Veneer or VCMX substrate — i.e.
     Consumable (adhesive), Glue and Additives (glue_formula), Packing, and Others.
     Includes dimensions for packing materials and Thai names + accounting codes."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1113,8 +1106,7 @@ def export_consumables():
 @app.get("/api/export/materials")
 def export_materials():
     """Export every material (excluding VCMX produced substrates) as one flat CSV."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1136,7 +1128,6 @@ def export_materials():
 @app.get("/api/export/bom")
 def export_bom():
     """Export all BOM as flat CSV (one row per FG SKU)."""
-    from database import get_structured_bom
     skus = get_structured_bom()
     lines = ["product_sku,sku_name,pieces_per_unit,thickness_mm,width_mm,length_mm,"
              "base_board_code,base_board_qty,"
@@ -1515,8 +1506,7 @@ def create_packing_sku(body: PackingSkuIn):
 
 @app.put("/api/packing-skus/{pid}")
 def update_packing_sku_ep(pid: int, body: PackingSkuIn):
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     row = conn.execute("SELECT code FROM packing_skus WHERE id=?", (pid,)).fetchone()
     conn.close()
     if not row: raise HTTPException(404, "Packing spec not found")
@@ -1769,8 +1759,7 @@ def update_glue_recipe_ep(rid: int, body: dict):
 def delete_glue_recipe_ep(rid: int):
     """Delete a glue recipe. FG BOM lines referencing it lose their cost
     (the bom_lines.glue_recipe_id FK becomes a dangling reference)."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     try:
         # NULL out any references first to avoid FK errors
         conn.execute("UPDATE bom_lines SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
@@ -1866,8 +1855,7 @@ def touch_preset(pid: int):
 # ── Batch PATCH (edit) — requires auth ───────────────────────
 @app.patch("/api/batches/{batch_id}")
 def patch_batch(batch_id: int, body: dict):
-    from database import get_db as _gdb, row_to_dict
-    conn = _gdb()
+    conn = get_db()
     allowed = {'quantity', 'split_reason', 'notes', 'current_department'}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1882,8 +1870,7 @@ def patch_batch(batch_id: int, body: dict):
 
 @app.patch("/api/prod-batches/{batch_id}")
 def patch_prod_batch(batch_id: str, body: dict):
-    from database import get_db as _gdb, row_to_dict
-    conn = _gdb()
+    conn = get_db()
     allowed = {'qty_planned', 'notes', 'shift', 'production_date'}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1898,9 +1885,8 @@ def patch_prod_batch(batch_id: str, body: dict):
 
 @app.post("/api/fc/laminating-material-request", status_code=201)
 async def laminating_material_request(body: dict, user: dict = Depends(require_auth)):
-    from database import get_db as _gdb
     import uuid as _uuid
-    conn = _gdb()
+    conn = get_db()
     rid = "FCR-" + _uuid.uuid4().hex[:8].upper()
     conn.execute("""
         INSERT INTO fc_transfer_requests
@@ -2061,8 +2047,7 @@ def cancel_req(request_id: str):
 @app.get("/api/export/fc-stock")
 def export_fc_stock(user: dict = Depends(require_auth)):
     """Export all veneers & core boards with wh_stock and fc_stock as CSV."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, name, type, unit,
                COALESCE(current_stock,0) AS wh_stock,
@@ -2109,10 +2094,9 @@ async def upload_fc_stock(file: UploadFile = File(...), mode: str = "add",
     mode=adjust → add/subtract delta to existing fc_stock
     CSV columns required: code, fc_stock
     """
-    from database import get_db as _gdb
     content = (await file.read()).decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(content))
-    conn = _gdb()
+    conn = get_db()
     processed = 0
     errors = []
     for i, row in enumerate(reader, 2):
@@ -2298,7 +2282,6 @@ def warehouse_low_stock(category: Optional[str] = None,
     categories (adhesive / glue_formula / packing / other). When `category`
     is supplied it must be one of those four codes. Each row carries a
     suggested order qty = reorder_point*2 - current_stock (clamped >= 0)."""
-    from database import get_db
     if category and category in _WH_PR_CATEGORIES:
         types = (category,)
     else:
@@ -2330,7 +2313,6 @@ def warehouse_low_stock(category: Optional[str] = None,
 @app.get("/api/warehouse/dashboard")
 def warehouse_dashboard(user: dict = Depends(require_auth)):
     """One-shot KPI + this-week schedule payload for the warehouse portal."""
-    from database import get_db
     week_start, week_end = _wh_week_bounds()
     placeholders = ','.join('?' * len(_WH_PR_CATEGORIES))
     conn = get_db()
@@ -2419,7 +2401,6 @@ def warehouse_open_prs(category: Optional[str] = None,
     """Open PRs joined with their planned shipments, optionally filtered by
     material category. `category` accepts an internal type code (adhesive,
     glue_formula, packing, other, core_board, veneer_sheet)."""
-    from database import get_db
     conn = get_db()
     base = """
         SELECT pr.id, pr.request_number, pr.request_type, pr.material_id,
