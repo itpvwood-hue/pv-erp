@@ -6019,8 +6019,7 @@ function _accDateRange(){
   if(!t.value) t.value=new Date().toISOString().slice(0,10);
   return {from:f.value, to:t.value};
 }
-function _accFmt(n){return n!=null && n!==''?'฿'+Number(n).toLocaleString(undefined,{maximumFractionDigits:2}):'—';}
-function _accFmtN(n){return n!=null && n!==''?Number(n).toLocaleString(undefined,{maximumFractionDigits:2}):'—';}
+// _accFmt / _accFmtN now alias to fmtMoney / fmtNum (declared centrally).
 
 async function loadAccounting(){
   const {from,to}=_accDateRange();
@@ -9349,10 +9348,47 @@ function toast(msg,type='success'){
   document.getElementById('toast-msg').textContent=msg;
   bootstrap.Toast.getOrCreateInstance(el,{delay:type==='success'?3000:6000}).show();
 }
-function fmt(n){return n!=null?Number(n).toLocaleString():'-';}
-function fmtB(n){return n!=null && n!==''?'฿'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—';}
+// ── Formatters ────────────────────────────────────────────
+// Canonical: fmtNum / fmtMoney(n, ccy) / fmtDate / fmtQty.
+// Consolidated from fmt/fmtB/fmtD + _accFmt/_accFmtN + _whFmtQty.
+// Null/empty/NaN render as em-dash '—' for visual consistency.
+//
+// fmtMoney is currency-aware so the upcoming dual-currency accounting
+// surface (THB + USD invoices, USD-priced imports) needs zero new helpers
+// to add another currency — register the symbol in CURRENCY_SYMBOL and
+// you can call fmtMoney(amount, 'EUR') anywhere.
+const CURRENCY_SYMBOL = {
+  THB: '฿',
+  USD: '$',
+};
+function fmtNum(n){
+  if(n == null || n === '') return '—';
+  const v = Number(n);
+  return Number.isFinite(v)
+    ? v.toLocaleString(undefined, {maximumFractionDigits: 2})
+    : '—';
+}
+function fmtMoney(n, ccy){
+  if(n == null || n === '') return '—';
+  const v = Number(n);
+  if(!Number.isFinite(v)) return '—';
+  const sym = CURRENCY_SYMBOL[ccy] || CURRENCY_SYMBOL.THB;
+  return sym + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtDate(d){ return d ? String(d).slice(0,10) : '—'; }
+function fmtQty(n, unit){ return fmtNum(n) + (unit ? ' ' + unit : ''); }
+
+// Hoisted aliases — old call sites work untouched from anywhere in script.
+function fmt(n){ return fmtNum(n); }
+function fmtB(n){ return fmtMoney(n, 'THB'); }   // legacy ฿ helper
+function fmtD(d){ return fmtDate(d); }
+function _accFmt(n){ return fmtMoney(n, 'THB'); }   // legacy accounting alias
+function _accFmtB(n){ return fmtMoney(n, 'THB'); }  // explicit Thai Baht
+function _accFmtU(n){ return fmtMoney(n, 'USD'); }  // explicit USD
+function _accFmtN(n){ return fmtNum(n); }
+function _whFmtQty(n){ return fmtNum(n); }
+
 function timeAgo(ts){if(!ts)return '';const d=new Date(ts.endsWith('Z')||ts.includes('+')?ts:ts+'Z');const m=Math.round((Date.now()-d)/60000);if(m<1)return 'just now';if(m<60)return m+'m ago';const h=Math.floor(m/60),rm=m%60;if(h<24)return h+'h'+(rm?` ${rm}m`:'')+' ago';return Math.floor(h/24)+'d ago';}
-function fmtD(d){return d?d.slice(0,10):'-';}
 function prioBadge(p){
   const cls={1:'p1',2:'p2',3:'p3'}[p]||'p2';
   const lbl={1:'P1 HIGH',2:'P2 MED',3:'P3 LOW'}[p]||'P'+p;
@@ -17446,11 +17482,7 @@ function _whFmtDate(iso){
   const s = String(iso).slice(0,10);
   return s || '—';
 }
-function _whFmtQty(n){
-  if(n == null || n === '') return '—';
-  const v = Number(n);
-  return Number.isFinite(v) ? v.toLocaleString(undefined,{maximumFractionDigits:2}) : '—';
-}
+// _whFmtQty now aliases to fmtNum (declared centrally).
 function _whMatName(m){
   // Materials returned by /api/warehouse/* carry name_th; respect language toggle.
   if(typeof _LANG !== 'undefined' && _LANG === 'th' && m.material_name_th) return m.material_name_th;
