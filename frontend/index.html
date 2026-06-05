@@ -12802,11 +12802,15 @@ let _bbPicked = {};
 let _bbAllFg = [];
 let _bbLoaded = false;
 
-function openBomBuilder(){
+// Returns a promise that resolves once the builder is ready to pre-fill.
+// The previous version fired loadBomBuilder() without awaiting it, so an
+// edit-flow caller could call bbLoadFg before _bbMats.faceG was populated
+// with glue recipes — the eventual loadBomBuilder finish then re-rendered
+// the dropdown and wiped the user-visible selection.
+async function openBomBuilder(){
   const panel = document.getElementById('bom-builder-panel');
-  const col = bootstrap.Collapse.getOrCreateInstance(panel);
-  col.show();
-  if(!_bbLoaded) loadBomBuilder();
+  bootstrap.Collapse.getOrCreateInstance(panel).show();
+  if(!_bbLoaded) await loadBomBuilder();
 }
 
 async function loadBomBuilder(){
@@ -13108,8 +13112,9 @@ function renderBom(rows){
 }
 
 async function editBomCard(skuCode){
-  openBomBuilder();
-  await new Promise(r=>setTimeout(r,150));
+  // Wait for the picker options to load before populating the form, otherwise
+  // glue dropdown loses its selection when loadBomBuilder finishes late.
+  await openBomBuilder();
   await bbLoadFg(skuCode);
 }
 
