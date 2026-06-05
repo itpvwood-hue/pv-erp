@@ -4034,12 +4034,10 @@ def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
                                    estimated_arrival: str = '') -> dict:
     # NEW              = Request raised by Planning/Warehouse
     # APPROVED         = Purchasing has reviewed and approved
-    # PO_ISSUED        = Purchase order sent to supplier (use 'ORDERED' alias for compat)
+    # PO_ISSUED        = Purchase order sent to supplier
     # AWAITING_ARRIVAL = Supplier confirmed; materials in transit, ETA known
     # RECEIVED         = Materials physically received
     # CANCELLED        = Request cancelled
-    aliases = {'ORDERED': 'PO_ISSUED'}  # legacy synonym
-    status = aliases.get(status, status)
     valid = ('NEW','APPROVED','PO_ISSUED','AWAITING_ARRIVAL','RECEIVED','OVER_RECEIVED','CANCELLED')
     if status not in valid:
         raise ValueError(f"invalid status (must be one of {valid})")
@@ -4062,9 +4060,6 @@ def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
             sets.append("supplier_po_ref = ?"); params.append(supplier_po_ref)
         if estimated_arrival:
             sets.append("estimated_arrival = ?"); params.append(estimated_arrival)
-        # Also stamp the legacy ordered_at when PO_ISSUED so old reports keep working
-        if status == 'PO_ISSUED':
-            sets.append("ordered_at = COALESCE(ordered_at, datetime('now'))")
         params.append(pr_id)
         conn.execute(f"UPDATE purchase_requests SET {', '.join(sets)} WHERE id = ?", params)
         conn.commit()
