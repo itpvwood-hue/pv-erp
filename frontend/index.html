@@ -5939,53 +5939,66 @@ function navigateTo(page){
     window.scrollTo(0,0);
   });
 }
+// ── Page loader registry ─────────────────────────────────────
+// Each key maps a `data-page` value to the function (or thunk) that
+// fetches/initialises that page. The old 40-branch if/else chain caused
+// silent fall-through bugs (e.g. 'station-log' matched two separate chains).
+// Add new pages here — that's the only place.
+const PAGE_LOADERS = {
+  'dashboard':           loadDashboard,
+  'order-intake':        loadOrderIntake,
+  'line-board':          loadLineBoard,
+  'prod-flow':           loadKanban,
+  'fc-hub':              fcHubLoad,
+  'dept-fg_warehouse':   loadFgWarehouse,
+  'materials':           loadMaterials,
+  'fg':                  loadFg,
+  'products':            loadFg,      // legacy alias for fg
+  'bom':                 loadBom,
+  'orders':              loadOrders,
+  'machines':            loadMachines,
+  'prod-logs':           loadLogs,
+  'reports':             () => { const el = document.getElementById('report-date'); if(el) el.value = new Date().toISOString().slice(0,10); },
+  'employees':           loadEmployees,
+  'station-log':         loadStationLog,
+  'glue-mix-station':    gmLoad,
+  'station-tools':       stLoad,
+  'prod-reports':        () => { prSetPeriod(30); loadProdReports(); },
+  'consumable-requests': crLoad,
+  'warehouse-queue':     wqLoad,
+  'wh-dashboard':        whDashLoad,
+  'wh-low-stock':        whLowStockLoad,
+  'wh-open-prs':         whOpenPRsLoad,
+  'dept-costs':          () => { const m = document.getElementById('dc-month'); if(m && !m.value) m.value = new Date().toISOString().slice(0,7); dcLoad(); },
+  'accounting':          loadAccounting,
+  'material-shortfalls': msfLoad,
+  'raw-receiving':       rrecLoad,
+  'forklift-refuel':     frflLoad,
+  'forklift-dash':       fkDashLoad,
+  'forklift-report':     frptLoad,
+  'scrap-bin':           scrapLoad,
+  'purchasing':          () => { prLoad(); prPrimePOSelect(); },
+  'lots-docs':           () => { lotsPrimeMatSelect(); lotsLoad(); docsLoad(); },
+  'traceability':        () => { tracePrimePOSelect(); },
+  'vcmx':                vcmxLoad,
+  'vcmx-lam':            vcmxLamLoad,
+};
+
 function loadPage(p){
-  if(p==='dashboard') loadDashboard();
-  else if(p==='order-intake') loadOrderIntake();
-  else if(p==='line-board') loadLineBoard();
-  else if(p==='prod-flow') loadKanban();
-  else if(p==='fc-hub')  fcHubLoad();
-  else if(p==='dept-fg_warehouse') loadFgWarehouse();
-  else if(p.startsWith('dept-')) loadDeptPage(p.replace('dept-',''));
-  else if(p==='materials') loadMaterials();
-  else if(p==='products'||p==='fg') loadFg();
-  else if(p==='bom') loadBom();
-  else if(p==='orders') loadOrders();
-  else if(p==='machines') loadMachines();
-  else if(p==='prod-logs') loadLogs();
-  else if(p==='reports') document.getElementById('report-date').value=new Date().toISOString().slice(0,10);
-  // Production module pages
-  else if(p==='employees') loadEmployees();
-  else if(p==='station-log') loadStationLog();
-  else if(p==='glue-mix-station') gmLoad();
-  else if(p==='station-tools') stLoad();
-  else if(p==='prod-reports'){prSetPeriod(30);loadProdReports();}
-  // Supply / Warehouse / Admin pages
-  else if(p==='consumable-requests') crLoad();
-  else if(p==='warehouse-queue') wqLoad();
-  else if(p==='wh-dashboard')    whDashLoad();
-  else if(p==='wh-low-stock')    whLowStockLoad();
-  else if(p==='wh-open-prs')     whOpenPRsLoad();
-  else if(p==='dept-costs'){
-    const m=document.getElementById('dc-month');
-    if(m&&!m.value) m.value=new Date().toISOString().slice(0,7);
-    dcLoad();
+  const fn = PAGE_LOADERS[p];
+  if(fn){
+    fn();
+  } else if(p.startsWith('dept-')){
+    // Generic department page (laminating, cold_press, hot_press, bleach,
+    // repair, sanding, grading). Wins after the specific 'dept-fg_warehouse'
+    // and 'dept-costs' entries above.
+    loadDeptPage(p.replace('dept-',''));
   }
-  else if(p==='accounting') loadAccounting();
-  else if(p==='material-shortfalls') msfLoad();
-  // initialise SLH scope chip + dynamic header on page show
-  if(p==='station-log'){ try{ slhSetScope(); }catch{ try{ slhUpdateHeader(); }catch{} } }
-  else if(p==='raw-receiving') rrecLoad();
-  else if(p==='forklift-refuel') frflLoad();
-  else if(p==='forklift-dash')   fkDashLoad();
-  else if(p==='forklift-report') frptLoad();
-  else if(p==='scrap-bin')       scrapLoad();
-  else if(p==='purchasing'){ prLoad(); prPrimePOSelect(); }
-  else if(p==='lots-docs'){ lotsPrimeMatSelect(); lotsLoad(); docsLoad(); }
-  else if(p==='traceability'){ tracePrimePOSelect(); }
-  else if(p==='vcmx'){ vcmxLoad(); }
-  else if(p==='vcmx-lam'){ vcmxLamLoad(); }
-  // user-management moved to /admin portal
+  // Station Leader Hub needs an extra scope/header refresh after its loader.
+  if(p === 'station-log'){
+    try { slhSetScope(); } catch { try { slhUpdateHeader(); } catch {} }
+  }
+  // user-management moved to /admin portal — no loader here.
 }
 
 // ══════════════════════════════════════════════════════════
