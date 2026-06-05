@@ -9078,7 +9078,12 @@ const SL_DEPT_OPTIONS = {
   packing:    ['fg_receiving'],
   fc:         ['laminating'],
 };
-const SL_LINE_OPTIONS = ['P01','P02','P37'];
+// Station Leader Hub line options — main production lines only (excludes
+// aux PUV/PVS/PSP which don't have a station-leader workflow).
+function SL_LINE_OPTIONS_get(){
+  const codes = catalogLineCodes('main');
+  return codes.length ? codes : ['P01','P02','P37'];
+}
 
 function slPostReportPrompt(batch, pcsReported, opts){
   opts = opts || {};
@@ -9150,7 +9155,7 @@ function slPostReportPrompt(batch, pcsReported, opts){
         <div class="col-md-5"><label class="form-label small">Production Line</label>
           <select class="form-select form-select-sm" id="sl-post-line">
             <option value="">— keep current —</option>
-            ${SL_LINE_OPTIONS.map(l=>`<option value="${l}"${batch.production_line===l?' selected':''}>${l}</option>`).join('')}
+            ${SL_LINE_OPTIONS_get().map(l=>`<option value="${l}"${batch.production_line===l?' selected':''}>${l}</option>`).join('')}
           </select></div>
         <div class="col-12"><label class="form-label small">Notes</label>
           <input class="form-control form-control-sm" id="sl-post-notes" placeholder="Optional note for the move"></div>
@@ -9426,9 +9431,44 @@ function populateSel(id,items,vk,lk){
   const el=document.getElementById(id);if(!el)return;
   el.innerHTML=items.map(i=>`<option value="${i[vk]}">${typeof lk==='function'?lk(i):i[lk]}</option>`).join('');
 }
+// ── Catalog (lines / departments / line flow) ────────────────
+// Single source of truth replacing the hardcoded LINE_OPTIONS, DEPTS, DLBL,
+// DICO, LINE_FLOW globals. Loaded once at startup; access via the helpers
+// below. The legacy hardcoded copies stay in place during migration so any
+// site not yet migrated keeps working.
+let _catalogLines = [];          // [{code, label, line_type, sort_order}]
+let _catalogDepts = [];          // [{code, label, icon, is_centralised, sort_order}]
+let _catalogFlow  = {};          // { line_code: [dept_code, ...] }
+
+function catalogLineCodes(line_type){
+  // line_type: undefined = all, 'main' or 'aux' to filter.
+  const list = line_type ? _catalogLines.filter(l => l.line_type === line_type) : _catalogLines;
+  return list.map(l => l.code);
+}
+function catalogDeptCode(code){ return _catalogDepts.find(d => d.code === code); }
+function catalogDeptLabel(code){
+  const d = catalogDeptCode(code);
+  return d ? d.label : code;
+}
+function catalogDeptIcon(code){
+  const d = catalogDeptCode(code);
+  return d ? d.icon : 'bi-circle';
+}
+
 async function preload(){
-  if(!products.length) products=await api('/api/products').catch(()=>[]);
-  if(!materials.length) materials=await api('/api/materials').catch(()=>[]);
+  if(!products.length)  products  = await api('/api/products').catch(()=>[]);
+  if(!materials.length) materials = await api('/api/materials').catch(()=>[]);
+  // Catalog: lines + departments + flow. Fetched once; cheap, ~100 rows total.
+  if(!_catalogLines.length){
+    const [lines, depts, flow] = await Promise.all([
+      api('/api/catalog/lines').catch(()=>[]),
+      api('/api/catalog/departments').catch(()=>[]),
+      api('/api/catalog/line-flow').catch(()=>({})),
+    ]);
+    _catalogLines = Array.isArray(lines) ? lines : [];
+    _catalogDepts = Array.isArray(depts) ? depts : [];
+    _catalogFlow  = (flow && typeof flow === 'object') ? flow : {};
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -17243,7 +17283,14 @@ const DEPT_OPTIONS = [
   {label:'FC / Cutting',value:'FC'},
   {label:'Packing',     value:'PACKING'},
 ];
-const LINE_OPTIONS = ['P01','P02','P37','PUV','PVS','PSP'];
+// LINE_OPTIONS is the canonical list of physical production lines (main +
+// aux). Sourced from /api/catalog/lines at startup; falls back to the
+// historical hardcoded list if catalog hasn't loaded yet (e.g. during a
+// dept-leader self-service action before preload finished).
+function LINE_OPTIONS_get(){
+  const codes = catalogLineCodes();
+  return codes.length ? codes : ['P01','P02','P37','PUV','PVS','PSP'];
+}
 
 // ── My Profile Modal (name + password only — no dept editing) ─────
 function openMyProfile(){
@@ -18538,7 +18585,7 @@ function _renderDeptGrid(containerId, existingDepts=[]){
       <div class="border rounded p-2">
         <div class="fw-semibold small mb-1">${d.label}</div>
         <div class="d-flex gap-2 flex-wrap">
-          ${LINE_OPTIONS.map(l=>{
+          ${LINE_OPTIONS_get().map(l=>{
             const chk=existingDepts.some(s=>s.department===d.value&&s.line_id===l)?'checked':'';
             return `<div class="form-check form-check-inline mb-0">
               <input class="form-check-input um-dept-check" type="checkbox" value="${d.value}|${l}" id="um-${d.value}-${l}" ${chk}>
