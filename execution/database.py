@@ -733,6 +733,12 @@ def init_db():
         # can batch deliveries (morning / afternoon).
         "ALTER TABLE consumable_request    ADD COLUMN needed_time TEXT",
         "ALTER TABLE fc_transfer_requests  ADD COLUMN needed_time TEXT",
+        # 2.10.0 — lines/stations promotion. Extend manufacturing_line so it
+        # can express aux lines (PUV/PVS/PSP) and sort order alongside main
+        # lines (P01/P02/P37). is_active mirrors the existing `active` column
+        # but uses the project's standard column name.
+        "ALTER TABLE manufacturing_line    ADD COLUMN line_type   TEXT NOT NULL DEFAULT 'main'",
+        "ALTER TABLE manufacturing_line    ADD COLUMN sort_order  INTEGER NOT NULL DEFAULT 0",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -781,6 +787,37 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vcmx_log_batch ON vcmx_laminating_log(batch_id)")
+
+    # ── Departments registry ────────────────────────────────────
+    # Replaces the hardcoded DEPARTMENTS list in database.py and the
+    # parallel DEPTS / DLBL / DICO dicts in the frontend. is_centralised=1
+    # means there is exactly one station regardless of how many lines feed
+    # in (currently: packing, fg_warehouse, fg_receiving).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS departments (
+            code           TEXT PRIMARY KEY,
+            label          TEXT NOT NULL,
+            icon           TEXT,
+            is_centralised INTEGER NOT NULL DEFAULT 0,
+            sort_order     INTEGER NOT NULL DEFAULT 0,
+            is_active      INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+
+    # ── Line flow ──────────────────────────────────────────────
+    # Replaces the hardcoded LINE_FLOW = { P01: [...], P02: [...], P37: [...] }
+    # dict in the frontend. One row per (line, sequence position, department).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS line_flow (
+            line_code        TEXT NOT NULL,
+            seq              INTEGER NOT NULL,
+            department_code  TEXT NOT NULL,
+            PRIMARY KEY (line_code, seq),
+            FOREIGN KEY (line_code)       REFERENCES manufacturing_line(line_id),
+            FOREIGN KEY (department_code) REFERENCES departments(code)
+        )
+    """)
+
     # Seed a default 11:00 refuel window if the table is empty
     if conn.execute("SELECT COUNT(*) FROM refuel_windows").fetchone()[0] == 0:
         conn.execute("""INSERT INTO refuel_windows
@@ -797,6 +834,8 @@ def init_db():
 
     # ── Seed actual PV Wood glue recipes (idempotent: keyed by recipe_code) ──
     _seed_real_glue_recipes(conn)
+    # ── Seed lines, departments, line flow (idempotent) ─────────────
+    _seed_lines_and_departments(conn)
     # Phase B cleanup removed glue_formula placeholders from materials entirely;
     # _normalize_glue_materials is no longer needed.
 
@@ -843,6 +882,86 @@ def _seed_real_glue_recipes(conn):
                  red_pigment_kg, black_pigment_kg, titanium_kg, total_kg, is_active, mix_time_min)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,20)""",
                 (code, name, vthk, species, core, e0, latex, flour, yp, hd, rp, bp, ti, total))
+    conn.commit()
+
+
+# ── Lines + Departments + Line Flow seed ─────────────────────
+# Single source of truth: edit these tuples to add/rename a line or dept.
+# All inserts are upserts keyed by primary key so re-running init_db is safe.
+
+# (code, label, line_type, sort_order)
+_DEFAULT_LINES = [
+    ('P01', 'Production Line 01', 'main', 1),
+    ('P02', 'Production Line 02', 'main', 2),
+    ('P37', 'Production Line 37', 'main', 3),
+    ('PUV', 'UV Line',             'aux',  10),
+    ('PVS', 'Veneer Slicing',      'aux',  11),
+    ('PSP', 'Veneer Splicing',     'aux',  12),
+]
+
+# (code, label, icon, is_centralised, sort_order)
+_DEFAULT_DEPARTMENTS = [
+    ('fc',            'FC / Cutting',  'bi-box-seam',    0,  1),
+    ('laminating',    'Laminating',    'bi-layers',      0,  2),
+    ('cold_press',    'Cold Press',    'bi-snow',        0,  3),
+    ('hot_press',     'Hot Press',     'bi-fire',        0,  4),
+    ('bleach',        'Bleach',        'bi-droplet',     0,  5),
+    ('repair',        'Repair',        'bi-tools',       0,  6),
+    ('sanding',       'Sanding',       'bi-circle-half', 0,  7),
+    ('grading',       'Grading',       'bi-stars',       0,  8),
+    ('packing',       'Packing',       'bi-box',         1,  9),  # centralised
+    ('fg_receiving',  'FG Receiving',  'bi-inbox',       1, 10),  # centralised
+    ('fg_warehouse',  'FG Warehouse',  'bi-building',    1, 11),  # centralised
+]
+
+# Production flow per line. Aux lines have no flow (they're request-only hubs).
+# Each list = department code sequence the line traverses.
+_DEFAULT_FLOW = {
+    'P01': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P02': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P37': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+}
+
+def _seed_lines_and_departments(conn):
+    """Upsert default lines, departments, and per-line flow. Idempotent:
+    existing rows keep their is_active state; only label/icon/sort_order
+    get refreshed from the canonical lists above. To remove a line/dept
+    cleanly, set is_active=0 in the DB (don't delete — rows in batches or
+    consumable_request may reference it)."""
+    for code, label, ltype, order in _DEFAULT_LINES:
+        existing = conn.execute(
+            "SELECT line_id FROM manufacturing_line WHERE line_id=?", (code,)).fetchone()
+        if existing:
+            conn.execute("""UPDATE manufacturing_line
+                            SET line_name=?, line_type=?, sort_order=?
+                            WHERE line_id=?""",
+                         (label, ltype, order, code))
+        else:
+            conn.execute("""INSERT INTO manufacturing_line
+                            (line_id, line_name, active, line_type, sort_order)
+                            VALUES (?,?,1,?,?)""",
+                         (code, label, ltype, order))
+
+    for code, label, icon, centralised, order in _DEFAULT_DEPARTMENTS:
+        existing = conn.execute(
+            "SELECT code FROM departments WHERE code=?", (code,)).fetchone()
+        if existing:
+            conn.execute("""UPDATE departments SET label=?, icon=?,
+                            is_centralised=?, sort_order=? WHERE code=?""",
+                         (label, icon, centralised, order, code))
+        else:
+            conn.execute("""INSERT INTO departments
+                            (code, label, icon, is_centralised, sort_order, is_active)
+                            VALUES (?,?,?,?,?,1)""",
+                         (code, label, icon, centralised, order))
+
+    # Replace line_flow rows for known lines (so renaming the flow is just
+    # editing _DEFAULT_FLOW). Untouched lines keep their custom flow if any.
+    for line_code, depts in _DEFAULT_FLOW.items():
+        conn.execute("DELETE FROM line_flow WHERE line_code=?", (line_code,))
+        for i, dept_code in enumerate(depts):
+            conn.execute("""INSERT INTO line_flow (line_code, seq, department_code)
+                            VALUES (?,?,?)""", (line_code, i, dept_code))
     conn.commit()
 
 
@@ -3249,9 +3368,20 @@ def delete_employee(emp_id):
     conn.execute("UPDATE employee SET active=0 WHERE emp_id=?", (emp_id,))
     conn.commit(); conn.close()
 
-def get_manufacturing_lines():
+def get_manufacturing_lines(active_only=True, line_type=None):
+    """Return all production lines, ordered by sort_order then code.
+    line_type can be 'main' or 'aux' to filter; None returns both."""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM manufacturing_line ORDER BY line_id").fetchall()
+    q = """SELECT line_id AS code, line_name AS label,
+                  COALESCE(line_type,'main') AS line_type,
+                  COALESCE(sort_order,0)     AS sort_order,
+                  active                     AS is_active
+             FROM manufacturing_line WHERE 1=1"""
+    params = []
+    if active_only:    q += " AND active = 1"
+    if line_type:      q += " AND COALESCE(line_type,'main') = ?"; params.append(line_type)
+    q += " ORDER BY sort_order ASC, line_id ASC"
+    rows = conn.execute(q, params).fetchall()
     conn.close(); return rows_to_list(rows)
 
 def get_prod_machines(machine_type=None):
@@ -3260,6 +3390,43 @@ def get_prod_machines(machine_type=None):
     if machine_type: q += " AND machine_type=?"; params.append(machine_type)
     rows = conn.execute(q + " ORDER BY machine_id", params).fetchall()
     conn.close(); return rows_to_list(rows)
+
+def get_departments(active_only=True):
+    """Return all departments, ordered by sort_order."""
+    conn = get_db()
+    q = "SELECT * FROM departments"
+    if active_only: q += " WHERE is_active = 1"
+    q += " ORDER BY sort_order ASC, code ASC"
+    rows = conn.execute(q).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+def get_line_flow(line_code):
+    """Return the ordered department sequence for one line.
+    Aux lines (PUV/PVS/PSP) return [] — they're request-only hubs."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT lf.seq, lf.department_code AS code,
+               d.label, d.icon, d.is_centralised
+          FROM line_flow lf
+          LEFT JOIN departments d ON d.code = lf.department_code
+         WHERE lf.line_code = ?
+         ORDER BY lf.seq ASC
+    """, (line_code,)).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+def get_all_line_flows():
+    """Return all line flows as { line_code: [dept_code, ...] }. Used by the
+    frontend to populate LINE_FLOW in one fetch instead of N+1."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT line_code, seq, department_code
+          FROM line_flow ORDER BY line_code, seq
+    """).fetchall()
+    conn.close()
+    flow = {}
+    for r in rows:
+        flow.setdefault(r['line_code'], []).append(r['department_code'])
+    return flow
 
 # ═══════════════════════════════════════════════════════════════
 # PRODUCTION MODULE — Mfg Orders & Batches

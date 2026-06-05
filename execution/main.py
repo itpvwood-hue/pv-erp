@@ -49,6 +49,7 @@ from database import (
     # Production module
     get_employees, save_employee, delete_employee,
     get_manufacturing_lines, get_prod_machines,
+    get_departments, get_line_flow, get_all_line_flows,
     get_mfg_orders, create_mfg_order,
     get_prod_batches, create_prod_batch, advance_prod_batch_status, get_prod_batch,
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
@@ -476,6 +477,31 @@ def edit_bom_entry(bid: int, body: BomUpdate): return update_bom_entry(bid, body
 
 @app.delete("/api/bom/{bid}")
 def remove_bom_entry(bid: int): delete_bom_entry(bid); return {"ok":True}
+
+# ── Production Lines / Departments / Line Flow ────────────────
+# Replaces the hardcoded ['P01','P02','P37','PUV','PVS','PSP'], DEPARTMENTS
+# list, and LINE_FLOW dict in the frontend. /api/catalog/lines+departments+flow
+# is what the frontend fetches once at startup; the others are convenience.
+@app.get("/api/catalog/lines")
+def catalog_lines(line_type: Optional[str] = None,
+                  include_inactive: bool = False):
+    return get_manufacturing_lines(active_only=not include_inactive,
+                                   line_type=line_type)
+
+@app.get("/api/catalog/departments")
+def catalog_departments(include_inactive: bool = False):
+    return get_departments(active_only=not include_inactive)
+
+@app.get("/api/catalog/line-flow")
+def catalog_line_flow():
+    """All line flows as { line_code: [dept_code, ...] }. One round trip."""
+    return get_all_line_flows()
+
+@app.get("/api/catalog/lines/{code}/flow")
+def catalog_line_flow_one(code: str):
+    flow = get_line_flow(code)
+    if not flow: return []
+    return flow
 
 # ── Machines ──────────────────────────────────────────────────
 @app.get("/api/machines")
