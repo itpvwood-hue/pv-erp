@@ -22,38 +22,73 @@ frontend/
 ├── css/
 │   └── styles.css      (done — step 1)
 ├── js/
-│   ├── i18n.js         (done — step 2)
-│   ├── core.js         (partial — step 3; api, toast, formatters, timeAgo)
-│   ├── auth.js         (TODO — login, session, applySession, role+catalog fetch)
-│   ├── nav.js          (TODO — sidebar router, PAGE_LOADERS, navigateTo, loadPage)
-│   ├── portal_warehouse.js   (TODO)
-│   ├── portal_planning.js    (TODO)
-│   ├── portal_accounting.js  (TODO)
-│   └── portal_admin.js       (TODO)
+│   ├── i18n.js                (done — step 2)
+│   ├── core.js                (partial — api/toast/formatters/timeAgo;
+│   │                           still TODO: prioBadge family, escapeHtml,
+│   │                           matRow renderers used by 2+ portals)
+│   ├── nav.js                 (done — step 4: PAGE_LOADERS as empty
+│   │                           {} populated via Object.assign by other
+│   │                           scripts; navigateTo / loadPage; sidebar
+│   │                           click binding)
+│   ├── auth.js                (done — step 5: login, session, applySession,
+│   │                           openMyProfile, userCanActOnBatch,
+│   │                           initAuth IIFE; loads AFTER main inline so
+│   │                           it can see ROLE_PAGES / NAV_SEC_ROLES /
+│   │                           _PORTAL_MODE)
+│   ├── portal_warehouse.js    (done — step 6: wh-dashboard / wh-low-stock
+│   │                           / wh-open-prs. Self-registers via
+│   │                           Object.assign(PAGE_LOADERS, ...). Still
+│   │                           TODO inside the inline script: wqLoad,
+│   │                           rrecLoad, frflLoad, fkDashLoad, scrapLoad)
+│   ├── portal_planning.js     (TODO)
+│   ├── portal_accounting.js   (TODO)
+│   └── portal_admin.js        (TODO)
 ```
 
-## Load order in `index.html`
+## Load order in `index.html` (current)
 
 ```html
-<!-- third-party -->
-<script src="…bootstrap.bundle.min.js"></script>
-<script src="…chart.umd.min.js"></script>
-<script src="…marked.min.js"></script>
+<head>
+  <script src="…chart.umd.min.js"></script>
+  <script src="…marked.min.js"></script>
+</head>
+<body>
+  …HTML for every page lives here, in the body…
 
-<!-- shared -->
-<script src="/static/js/i18n.js"></script>
-<script src="/static/js/core.js"></script>
-<script src="/static/js/auth.js"></script>
-<script src="/static/js/nav.js"></script>
+  <!-- Static script tags, in this order -->
+  <script src="…bootstrap.bundle.min.js"></script>
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/core.js"></script>
+  <script src="/static/js/nav.js"></script>          <!-- declares PAGE_LOADERS = {} -->
 
-<!-- one portal per role; chosen dynamically after login -->
-<script>
-  // applySession reads the role from /api/auth/me and dynamically loads
-  // exactly one portal_*.js — the others stay un-fetched.
-</script>
+  <script>
+    /* main inline script — registers most pages, declares ROLE_PAGES,
+       NAV_SEC_ROLES, _PORTAL_MODE, and the dozens of loaders that haven't
+       been moved into a portal_*.js yet. */
+  </script>
+
+  <script src="/static/js/portal_warehouse.js"></script>  <!-- self-registers its 3 pages -->
+  <script src="/static/js/auth.js"></script>              <!-- runs initAuth IIFE last -->
+</body>
 ```
 
-## Dynamic portal loading
+Reasoning for the order:
+
+1. **nav.js before the inline script** — the inline script does
+   `Object.assign(PAGE_LOADERS, {…})` with most of the page-id keys. That
+   line needs `PAGE_LOADERS` declared upstream.
+2. **portal_warehouse.js after the inline script** — its
+   `Object.assign(PAGE_LOADERS, {…})` references `whDashLoad` etc. defined
+   in the same file, so it doesn't depend on the inline script. But its
+   `_whFmtQty` calls live in core.js (already loaded). The only reason it
+   sits AFTER the inline script is so a future `auth.js → navigateTo()`
+   call finds the registered pages.
+3. **auth.js LAST** — references `ROLE_PAGES`/`NAV_SEC_ROLES`/`_PORTAL_MODE`
+   declared in the inline script. The `initAuth` IIFE runs at parse time
+   and calls `applySession` → `navigateTo` → looks up `PAGE_LOADERS`. By
+   the time it runs, everything is in place.
+
+## Dynamic portal loading (once all 4 portals exist)
 
 Add this small helper to `auth.js`:
 
@@ -123,19 +158,27 @@ Likely candidates that turn up during the split:
 - `_msMachines` and the machine fetcher (used in planning + warehouse Raw Receiving)
 - `matRow`, `matDisplayName` and the materials table renderers
 
-## Step-by-step migration order
+## Step-by-step migration order — progress
 
-1. Extract `auth.js` and `nav.js` first — they have no portal-specific
-   dependencies and unblock dynamic loading. Test login + page navigation.
-2. Extract `portal_warehouse.js` next — smallest portal, well-bounded,
-   already in its own commented region in `index.html`. Test by signing
-   in as a warehouse user and exercising every page.
-3. Extract `portal_planning.js`. Largest portal — split into chunks
-   (line-board, BOM, station-log, glue, VCMX) committed one at a time.
-4. Extract `portal_accounting.js`.
-5. Extract `portal_admin.js`.
-6. Verify `index.html` is now ~500 lines of HTML shell + login + script
-   tags only.
+| # | Step | Status | Notes |
+|---|---|---|---|
+| 1 | `css/styles.css` | ✅ done | 14k chars |
+| 2 | `js/i18n.js` | ✅ done | 190 lines; declares `_LANG`, `I18N`, `t`, `applyI18n`, `setLang` |
+| 3 | `js/core.js` (partial) | ✅ done | `api`, `toast`, `CURRENCY_SYMBOL`, formatters, `timeAgo` |
+| 4 | `js/nav.js` | ✅ done | `PAGE_LOADERS`, `navigateTo`, `loadPage`, sidebar click binding |
+| 5 | `js/auth.js` | ✅ done | login, session, `applySession`, `initAuth` IIFE |
+| 6 | `js/portal_warehouse.js` (new pages only) | ✅ done | `wh-dashboard`, `wh-low-stock`, `wh-open-prs` |
+| 7 | Extend `portal_warehouse.js` | TODO | move `wq*`, `rrec*`, `frfl*`, `fkDash*`, `scrap*` |
+| 8 | `portal_planning.js` | TODO | line-board, BOM, station-log, glue, VCMX, FC hub, msf |
+| 9 | `portal_accounting.js` | TODO | accounting hub, `dc*` (dept costs) |
+| 10 | `portal_admin.js` | TODO | employees, user mgmt |
+| 11 | Extend `core.js` | TODO | `prioBadge` family, `escapeHtml`, `matRow` renderers used by 2+ portals |
+| 12 | Trim `index.html` | TODO | target: ~500 lines (HTML shell + login + script tags) |
+| 13 | Dynamic portal loader | TODO | replace per-role `<script src>` tags with `loadPortalScript(role)` |
+
+Test each chunk by hard-refreshing in the browser, signing in as the
+relevant role, and clicking every sidebar entry. The audit (37/37 today)
+should stay green throughout.
 
 ## Testing each chunk
 
