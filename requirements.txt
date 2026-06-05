@@ -1,0 +1,26 @@
+# PVWood ERP — Python dependencies
+# Versions pinned to what was validated in dev on 2026-05-27.
+# Re-install on the target server with:  pip install -r requirements.txt
+#
+# uvicorn runs natively on Windows — no Gunicorn/Waitress swap needed.
+
+# ── Web framework + ASGI server ──────────────────────────────
+fastapi==0.135.3
+uvicorn[standard]==0.42.0          # [standard] pulls httptools/websockets/watchfiles
+python-multipart==0.0.24           # required for FastAPI File/UploadFile (PDF imports)
+
+# ── Data validation ─────────────────────────────────────────
+pydantic==2.12.5
+
+# ── AI integration (Claude assistant features) ─────────────
+anthropic==0.88.0
+httpx==0.28.1                      # used by anthropic SDK + general HTTP
+
+# ── Spreadsheet import (one-off material seed scripts) ─────
+openpyxl==3.1.5
+
+# ── Config / secrets ───────────────────────────────────────
+python-dotenv==1.2.2
+
+# NOTE: `aiofiles` was in the previous requirements.txt but no source file
+# imports it anywhere; removed to keep the install footprint honest.

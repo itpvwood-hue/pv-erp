@@ -1,0 +1,74 @@
+name: veneer-erp-agent
+description: Claude AI agent for Veneer Overlay Factory ERP — BOM queries, production reports, capacity planning, and PDF PO extraction.
+model: claude-sonnet-4-6
+
+tools:
+  - type: custom
+    name: bom_query
+    description: Answer natural language questions about Bill of Materials, stock levels, and material costs.
+    input_schema:
+      type: object
+      properties:
+        question:
+          type: string
+          description: Natural language question about BOM, stock, or material costs.
+      required:
+        - question
+
+  - type: custom
+    name: daily_report
+    description: Auto-generate a shift or daily production report from raw log data.
+    input_schema:
+      type: object
+      properties:
+        date:
+          type: string
+          description: Report date in YYYY-MM-DD format.
+        report_type:
+          type: string
+          description: daily or shift.
+          enum: [daily, shift]
+      required:
+        - date
+
+  - type: custom
+    name: capacity_check
+    description: Answer order feasibility and bottleneck questions against machine capacity and active orders.
+    input_schema:
+      type: object
+      properties:
+        question:
+          type: string
+          description: Feasibility or capacity planning question.
+      required:
+        - question
+
+  - type: custom
+    name: pdf_po_extract
+    description: Parse a PDF purchase order into structured JSON using Claude native document understanding.
+    input_schema:
+      type: object
+      properties:
+        file:
+          type: string
+          description: Base64-encoded PDF file content.
+      required:
+        - file
+
+  - type: custom
+    name: confirm_veneer
+    description: FC department confirms face and back veneer selection for a production order before releasing to laminating.
+    input_schema:
+      type: object
+      properties:
+        order_id:
+          type: integer
+          description: Production order ID.
+        face_veneer_id:
+          type: integer
+          description: Material ID of the confirmed face veneer.
+        back_veneer_id:
+          type: integer
+          description: Material ID of the confirmed back veneer.
+      required:
+        - order_id

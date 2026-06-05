@@ -1,0 +1,25 @@
+# Database (live SQLite + WAL/SHM)
+erp.db
+erp.db-shm
+erp.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Runtime
+logs/
+backups/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Env / secrets
+.env
+.venv/
+venv/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
