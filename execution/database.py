@@ -854,6 +854,24 @@ def _seed_real_glue_recipes(conn):
 # ═══════════════════════════════════════════════════════════════
 # MATERIALS
 # ═══════════════════════════════════════════════════════════════
+# Internal helpers — pass the open connection in. The repeated
+# `SELECT * FROM materials WHERE id=?` / `WHERE code=?` patterns used to
+# be inlined at 16+ call sites; centralising lets schema additions land
+# in one place. Helpers return the raw Row / scalar — callers wrap with
+# row_to_dict() when they need a dict.
+def _mat_by_id(conn, mid):
+    return _mat_by_id(conn, mid)
+
+def _mat_by_code(conn, code):
+    return _mat_by_code(conn, code)
+
+def _mat_id_by_code(conn, code):
+    """Return materials.id for a code, or None if not present."""
+    if not code: return None
+    row = conn.execute("SELECT id FROM materials WHERE code=?", (code,)).fetchone()
+    return row[0] if row else None
+
+
 def get_all_materials():
     conn = get_db()
     rows = conn.execute("SELECT * FROM materials ORDER BY type, name").fetchall()
@@ -861,7 +879,7 @@ def get_all_materials():
 
 def get_material(mid):
     conn = get_db()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
+    row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
 def create_material(data):
@@ -878,7 +896,7 @@ def create_material(data):
          data.get('auto_glue_code'))
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (cur.lastrowid,)).fetchone()
+    row = _mat_by_id(conn, cur.lastrowid)
     conn.close(); return row_to_dict(row)
 
 def update_material(mid, data):
@@ -900,7 +918,7 @@ def update_material(mid, data):
          data.get('auto_glue_code'), mid)
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
+    row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
 def delete_material(mid):
@@ -924,7 +942,7 @@ def bulk_upsert_material(data):
 
     ex = None
     if code:
-        ex = conn.execute("SELECT * FROM materials WHERE code=?", (code,)).fetchone()
+        ex = _mat_by_code(conn, code)
     if not ex:
         ex = conn.execute("SELECT * FROM materials WHERE name=?", (name,)).fetchone()
 
