@@ -168,12 +168,13 @@ Likely candidates that turn up during the split:
 | 4 | `js/nav.js` | ✅ done | `PAGE_LOADERS`, `navigateTo`, `loadPage`, sidebar click binding |
 | 5 | `js/auth.js` | ✅ done | login, session, `applySession`, `initAuth` IIFE |
 | 6 | `js/portal_warehouse.js` (new pages only) | ✅ done | `wh-dashboard`, `wh-low-stock`, `wh-open-prs` |
-| 7 | Extend `portal_warehouse.js` | TODO | move `wq*`, `rrec*`, `frfl*`, `fkDash*`, `scrap*` |
-| 8 | `portal_planning.js` | TODO | line-board, BOM, station-log, glue, VCMX, FC hub, msf |
+| 7 | Extend `portal_warehouse.js` | ✅ done | `wq*` (Supply Queue), `rrec*` (Raw Receiving), `frfl*` + `fkDash*` (Forklift), `scrap*` (Scrap Bin) + hookup wrappers — 1,218 lines moved |
+| 8 | `portal_planning.js` (chunks 1+2) | ✅ partial | chunk 1: VCMX (562 lines, `vcmx` + `vcmx-lam`). chunk 2: Material Shortfalls + FC Material Requests + FC Hub (958 lines, `material-shortfalls` + `fc-hub`) |
+| 8b | extend `portal_planning.js` | TODO | line-board, prod-flow (kanban), BOM (loadBom + builder + glue editor), station-log + glue-mix-station + station-tools cluster, order-intake, prod-logs, prod-reports |
 | 9 | `portal_accounting.js` | TODO | accounting hub, `dc*` (dept costs) |
 | 10 | `portal_admin.js` | TODO | employees, user mgmt |
 | 11 | Extend `core.js` | TODO | `prioBadge` family, `escapeHtml`, `matRow` renderers used by 2+ portals |
-| 12 | Trim `index.html` | TODO | target: ~500 lines (HTML shell + login + script tags) |
+| 12 | Trim `index.html` | TODO | target: ~500 lines (HTML shell + login + script tags). Current: ~835k chars |
 | 13 | Dynamic portal loader | TODO | replace per-role `<script src>` tags with `loadPortalScript(role)` |
 
 Test each chunk by hard-refreshing in the browser, signing in as the

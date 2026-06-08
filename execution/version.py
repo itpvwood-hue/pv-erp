@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.12.0"
+VERSION    = "2.13.0"
 BUILD_DATE = "2026-06-05"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.13.0", "2026-06-05", "Portal split progress: portal_warehouse.js gained wq/rrec/frfl/fkDash/scrap (+1,218 lines); new portal_planning.js created with VCMX (chunk 1, 562 lines) and Material Shortfalls + FC Material Requests + FC Hub (chunk 2, 958 lines). index.html down from ~1.2 MB to 835k (~30% smaller). 8 page loaders self-registered out of inline script. SPLIT_PLAN.md updated"),
     ("2.12.0", "2026-06-05", "Portal split progress: extracted /static/js/nav.js (PAGE_LOADERS empty + navigateTo + loadPage; main script registers loaders via Object.assign), /static/js/auth.js (login + session + applySession + initAuth IIFE; loads at end of body to see main-script globals), and /static/js/portal_warehouse.js (the three new warehouse-portal pages — wh-dashboard, wh-low-stock, wh-open-prs — self-register via Object.assign(PAGE_LOADERS, {...})). SPLIT_PLAN.md updated with current load order and 13-step progress table"),
     ("2.11.1", "2026-06-05", "Stations: new `stations` table joins lines × departments — 27 rows seeded (8 per-line depts × 3 main lines + 3 centralised hubs with line_code NULL). UNIQUE(line_code, department_code) prevents duplicates. /api/catalog/stations endpoint (filter by line_code='' for centralised, by department_code, or both). dept_activities and station_presets gained line_id columns so per-station analytics can JOIN against stations going forward"),
     ("2.11.0", "2026-06-05", "Factory Assistant AI: Claude-powered chat surface (Managerial role) replacing the unrouted BOM-AI + Capacity placeholders. Five tools — query_database (SELECT only, PRAGMA query_only enforced, 10k row cap), list_tables, describe_table, read_server_log, export_to_excel. Excel files saved under backups/factory_assistant/ and served via /api/factory-assistant/export/{file}. Frontend chat page with transcript, exports tray, and 4 sample prompts. Also: frontend portal split foundation (extracted styles.css, i18n.js, core.js; SPLIT_PLAN.md documents the per-portal carve-up)"),
