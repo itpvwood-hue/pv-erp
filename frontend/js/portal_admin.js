@@ -56,11 +56,7 @@ function _faAppendMessage(role, body, isMarkdown){
   return div;
 }
 
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => (
-    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
-  ));
-}
+// escapeHtml moved to /static/js/core.js
 
 async function faSend(){
   const input = document.getElementById('fa-input');
