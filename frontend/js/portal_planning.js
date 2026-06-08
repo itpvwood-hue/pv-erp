@@ -5631,6 +5631,1323 @@ async function createNewBatch(){
 }
 
 
+
+
+// ════════════════════════════════════════════════════════════
+// Forklift Report (managerial reports & AI)
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// FORKLIFT REPORT (Reports & AI)
+// ══════════════════════════════════════════════════════════════
+async function frptLoad(){
+  // Default date range to last 30 days if blank
+  const fEl=document.getElementById('frpt-from'), tEl=document.getElementById('frpt-to');
+  if(!fEl.value){
+    const d=new Date(); d.setDate(d.getDate()-30); fEl.value=d.toISOString().slice(0,10);
+    tEl.value=new Date().toISOString().slice(0,10);
+  }
+  try{
+    const [flk, reqs] = await Promise.all([api('/api/forklifts'), api('/api/forklifts/oil-requests')]);
+    const inRange = (reqs||[]).filter(r => {
+      const t=(r.requested_at||'').slice(0,10);
+      return t >= fEl.value && t <= tEl.value;
+    });
+    // KPIs
+    const totalL = inRange.filter(r=>r.status==='FULFILLED').reduce((s,r)=>s+Number(r.fulfilled_qty||r.qty_litres||0),0);
+    const urgentCnt = inRange.filter(r=>r.priority==='URGENT').length;
+    const cards = [
+      {l:'Forklifts',          v:(flk||[]).length,         bg:'primary', ico:'bi-truck-flatbed'},
+      {l:'Oil Requests',       v:inRange.length,            bg:'info',    ico:'bi-list-ul'},
+      {l:'Litres Dispensed',   v:totalL.toFixed(1)+' L',   bg:'success', ico:'bi-droplet-half'},
+      {l:'Urgent Requests',    v:urgentCnt,                 bg:'danger',  ico:'bi-exclamation-triangle'},
+    ];
+    document.getElementById('frpt-kpi').innerHTML = cards.map(c=>`
+      <div class="col-md-3 col-6"><div class="card border-${c.bg}"><div class="card-body py-2 px-3">
+        <div class="small text-muted"><i class="bi ${c.ico} me-1"></i>${c.l}</div>
+        <div class="fs-5 fw-semibold">${c.v}</div></div></div></div>`).join('');
+    // Aggregate per forklift
+    const agg = {};
+    inRange.forEach(r => {
+      const k = r.forklift_id;
+      if(!agg[k]) agg[k] = {code:r.forklift_code, dept:r.forklift_dept||'', litres:0, count:0};
+      if(r.status==='FULFILLED') agg[k].litres += Number(r.fulfilled_qty||r.qty_litres||0);
+      agg[k].count++;
+    });
+    document.getElementById('frpt-by-flk').innerHTML = Object.values(agg)
+      .sort((a,b)=>b.litres-a.litres)
+      .map(a=>`<tr>
+        <td class="small fw-semibold">${a.code}</td>
+        <td class="small">${a.dept}</td>
+        <td class="text-end">${a.litres.toFixed(1)} L</td>
+        <td class="text-end">${a.count}</td>
+      </tr>`).join('') || '<tr><td colspan="4" class="text-muted text-center py-3">No data in range</td></tr>';
+    document.getElementById('frpt-recent').innerHTML = inRange.slice(0,40).map(r=>`<tr>
+      <td class="small">${(r.requested_at||'').slice(0,16).replace('T',' ')}</td>
+      <td class="small fw-semibold">${r.forklift_code}</td>
+      <td class="small">${r.oil_type}</td>
+      <td class="text-end">${Number(r.qty_litres).toFixed(1)}</td>
+      <td>${r.priority==='URGENT'?'<span class="badge bg-danger">URG</span>':'<span class="badge bg-light text-dark">N</span>'}</td>
+      <td><span class="badge bg-${({PENDING:'warning text-dark',FULFILLED:'success',CANCELLED:'dark'})[r.status]||'secondary'}">${r.status}</span></td>
+    </tr>`).join('');
+  }catch(e){
+    document.getElementById('frpt-by-flk').innerHTML=`<tr><td colspan="4" class="text-danger small p-3">${e.message||e}</td></tr>`;
+  }
+}
+
+
+// Refuel Window Settings moved to /static/js/portal_warehouse.js
+
+// Scrap / LG Bin moved to /static/js/portal_warehouse.js
+
+// Hook-ups: oil-drum picker + settings button moved to /static/js/portal_warehouse.js
+
+
+// Smart post-report flow (SL_DEPT_OPTIONS + slPostReportPrompt) moved to /static/js/portal_planning.js
+
+
+// ════════════════════════════════════════════════════════════
+// Production Logs
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// PRODUCTION LOGS
+// ══════════════════════════════════════════════════════════
+async function loadLogs(){
+  try{
+    const rows=await api('/api/production-logs?limit=200').catch(()=>[]);
+    const tbody=document.querySelector('#logs-table tbody');
+    if(!tbody) return;
+    if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="text-center text-muted py-4">No production logs yet.</td></tr>';return;}
+    tbody.innerHTML=rows.map(l=>{
+      const eff=l.planned_qty?Math.round((l.actual_qty/l.planned_qty)*100):null;
+      return `<tr>
+        <td>${fmtD(l.log_date||l.created_at)}</td>
+        <td>${l.machine_name||l.machine_id||'—'}</td>
+        <td>${l.product_name||l.product_id||'—'}</td>
+        <td>${fmt(l.planned_qty)}</td>
+        <td>${fmt(l.actual_qty)}</td>
+        <td>${eff!=null?`<span class="badge ${eff>=90?'bg-success':eff>=70?'bg-warning text-dark':'bg-danger'}">${eff}%</span>`:'—'}</td>
+        <td>${l.shift||'—'}</td>
+      </tr>`;
+    }).join('');
+  }catch(e){const tb=document.querySelector('#logs-table tbody');if(tb)tb.innerHTML=`<tr><td colspan="7" class="text-danger text-center py-3">${e.message}</td></tr>`;}
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Order Intake + PDF PO Upload
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// ORDER INTAKE + PDF PO UPLOAD
+// ══════════════════════════════════════════════════════════
+async function loadOrderIntake(){
+  await preload();
+  await loadPoList();
+  // Auto-select first PO if none selected
+  if(!selectedPoId){
+    const pos=await api('/api/purchase-orders').catch(()=>[]);
+    if(pos.length) selectPo(pos[0].id);
+  }
+}
+
+async function loadPoList(){
+  const pos=await api('/api/purchase-orders').catch(()=>[]);
+  const el=document.getElementById('po-list');
+  if(!pos.length){el.innerHTML='<p class="text-muted small">No purchase orders yet.</p>';return;}
+  el.innerHTML=pos.map(p=>`
+    <div class="border rounded p-2 mb-2 ${selectedPoId===p.id?'border-primary bg-light':''}" style="cursor:pointer" onclick="selectPo(${p.id})">
+      <div class="d-flex justify-content-between align-items-start">
+        <span class="fw-bold small">${p.po_number}</span>
+        <div class="d-flex gap-1">
+          ${prioBadge(p.priority||2)}
+          <button class="btn btn-xs btn-outline-secondary py-0 px-1" style="font-size:.7rem" onclick="event.stopPropagation();editPoModal(${p.id})" title="Edit PO"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem" onclick="event.stopPropagation();deletePo(${p.id})" title="Delete PO"><i class="bi bi-trash"></i></button>
+        </div>
+      </div>
+      <small class="text-muted">${p.customer||''} &mdash; ${fmtD(p.delivery_date)}</small>
+      <div class="mt-1">${statusBadge(p.status||'open')}</div>
+    </div>`).join('');
+}
+
+async function selectPo(id){
+  selectedPoId=id;
+  document.getElementById('btn-add-line').disabled=false;
+  document.getElementById('btn-create-po').disabled=false;
+  await loadPoList();
+  const lines=await api(`/api/purchase-orders/${id}/lines`).catch(()=>[]);
+  document.getElementById('po-lines-label').textContent='PO #'+id;
+  const el=document.getElementById('po-lines-list');
+
+  // Stash for bulk release; fetch material readiness so we can colour & gate each line
+  _poLines = lines.slice();
+  let readinessBySku = {};
+  let readinessLoaded = false;
+  try{
+    const mr = await api(`/api/purchase-orders/${id}/material-readiness`).catch(()=>null);
+    if(mr && Array.isArray(mr.materials)){
+      // For each line's SKU, accumulate the worst material status used by that SKU
+      const skuStatus = {};
+      mr.materials.forEach(m => {
+        (m.used_by||[]).forEach(sku => {
+          const cur = skuStatus[sku];
+          const rank = {short:3, low:2, ok:1};
+          if(!cur || rank[m.status] > rank[cur]) skuStatus[sku] = m.status;
+        });
+      });
+      readinessBySku = skuStatus;
+      readinessLoaded = true;
+    }
+  }catch{}
+  // Also note which lines already have a non-draft production order (so we don't re-release)
+  const existingPords = await api(`/api/production-orders?po_id=${id}`).catch(()=>[]);
+  const lineHasPord = {};
+  (existingPords||[]).forEach(p => { if(p.po_line_id) lineHasPord[p.po_line_id]=p.status; });
+
+  if(!lines.length){
+    el.innerHTML='<p class="text-muted small">No lines yet.</p>';
+  } else {
+    // Header bar: select-all + "Release Selected to Production" action
+    const header = `
+      <div class="d-flex justify-content-between align-items-center mb-2 p-2"
+           style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">
+        <div class="d-flex align-items-center gap-2 small">
+          <i class="bi bi-info-circle text-success"></i>
+          <strong>Bulk-release to production:</strong>
+          Tick the lines whose materials are ready, then click Release Selected.
+          Lines flagged <span class="badge bg-danger">SHORT</span> are disabled until raw materials are received.
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="small text-muted" id="po-release-count">0 selected</span>
+          <button class="btn btn-sm btn-success" id="po-release-btn" disabled
+                  onclick="releaseSelectedPoLines(${id})">
+            <i class="bi bi-play-circle me-1"></i>Release Selected to Production
+          </button>
+        </div>
+      </div>`;
+    el.innerHTML = header + `<table class="table table-sm mb-0">
+      <thead class="table-light"><tr>
+        <th style="width:36px"><input type="checkbox" id="po-line-cb-all" onchange="togglePoLineAll(this.checked)"></th>
+        <th>FG Code</th><th>Name</th><th>Line</th>
+        <th class="text-center">Pallets</th><th class="text-center">Pcs/Pallet</th>
+        <th class="text-center">Total Pcs</th>
+        <th class="text-end">Price/pcs <span class="badge bg-primary-subtle text-primary border border-primary" style="font-size:.6rem">USD</span></th>
+        <th class="text-end">Line Total <span class="badge bg-primary-subtle text-primary border border-primary" style="font-size:.6rem">USD</span></th>
+        <th>Material Readiness</th>
+        <th></th></tr></thead>
+      <tbody>${lines.map(l=>{
+        const ppp=l.pcs_per_pallet||null;
+        const totalPcs=ppp?l.quantity*ppp:null;
+        const lineTotal = (Number(l.unit_price)||0) * (Number(totalPcs)||0);
+        const status = readinessBySku[l.sku] || (readinessLoaded ? 'ok' : 'unknown');
+        const already = lineHasPord[l.id];
+        const canRelease = (status==='ok' || status==='low') && !already;
+        const cb = `<input type="checkbox" class="po-line-cb" data-line-id="${l.id}"
+                    ${canRelease?'':'disabled'} onchange="onPoLineCheck()">`;
+        let readinessCell;
+        if(already){
+          readinessCell = `<span class="badge bg-secondary">Already in production (${already})</span>`;
+        }else if(!readinessLoaded){
+          readinessCell = '<span class="text-muted small">—</span>';
+        }else if(status==='short'){
+          readinessCell = '<span class="badge bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>SHORT</span>';
+        }else if(status==='low'){
+          readinessCell = '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-circle me-1"></i>LOW (covered)</span>';
+        }else{
+          readinessCell = '<span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>READY</span>';
+        }
+        return `<tr class="${already?'table-secondary':(status==='short'?'table-danger':'')}" data-line-id="${l.id}">
+          <td>${cb}</td>
+          <td><code class="text-primary">${l.sku||l.product_id}</code></td>
+          <td>${l.product_name||''}${l.notes?`<br><small class="text-muted">${l.notes}</small>`:''}
+              ${l.packing_sku_code?` <span class="badge bg-success-subtle text-success border border-success" style="font-size:.7rem"><i class="bi bi-box me-1"></i>${l.packing_sku_code}</span>`:''}
+          </td>
+          <td>${lineBadge(l.production_line)}</td>
+          <td class="text-center fw-bold">${fmt(l.quantity)}</td>
+          <td class="text-center">${ppp?`<span class="badge bg-secondary">${ppp}</span>`:'<span class="text-muted">—</span>'}</td>
+          <td class="text-center">${totalPcs?`<strong>${totalPcs.toLocaleString()}</strong>`:'<span class="text-muted">—</span>'}</td>
+          <td class="text-end">${l.unit_price?`<span class="text-primary fw-semibold">$${Number(l.unit_price).toLocaleString(undefined,{maximumFractionDigits:4})}</span> <span class="text-muted small">USD</span>`:'<span class="text-muted">—</span>'}</td>
+          <td class="text-end">${lineTotal>0?`<span class="text-primary fw-bold">$${lineTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>`:'<span class="text-muted">—</span>'}</td>
+          <td>${readinessCell}</td>
+          <td class="text-end" style="white-space:nowrap">
+            <button class="btn btn-xs btn-outline-secondary py-0 px-1 me-1" onclick="editPoLine(${l.id},${l.product_id},'${(l.sku||'').replace(/'/g,"\\'")}','${(l.product_name||'').replace(/'/g,"\\'")}','${l.production_line||'P01'}',${l.quantity},${l.unit_price||0},'${(l.notes||'').replace(/'/g,"\\'")}',${l.packing_sku_id||null},${ppp||null})"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-xs btn-outline-danger py-0 px-1" onclick="deletePoLine(${l.id})"><i class="bi bi-trash"></i></button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+  }
+  const pords=await api(`/api/production-orders?po_id=${id}`).catch(()=>[]);
+  const pe=document.getElementById('prod-orders-list');
+  if(!pords.length){
+    pe.innerHTML='<p class="text-muted small">No production orders yet.</p>';
+  } else {
+    pe.innerHTML=pords.map(o=>`
+      <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+        <div><small class="fw-bold">${o.prod_order_number||o.order_number||'#'+o.id}</small><small class="text-muted ms-1">${lineBadge(o.production_line)}</small></div>
+        <div class="d-flex gap-1 align-items-center">
+          ${statusBadge(o.status)}
+          ${o.status==='draft'?`<button class="btn btn-success btn-sm" onclick="releasePO(${o.id})" style="padding:1px 8px;font-size:.7rem">Release</button>`:''}
+          <button class="btn btn-xs btn-outline-danger py-0 px-1" onclick="deleteProdOrder(${o.id})" title="Delete production order"><i class="bi bi-trash"></i></button>
+        </div>
+      </div>`).join('');
+  }
+  loadMaterialReadiness(id);
+}
+
+// ── Material Readiness ──────────────────────────────────────
+async function loadMaterialReadiness(poId){
+  const card=document.getElementById('po-material-readiness-card');
+  const panel=document.getElementById('po-material-readiness');
+  const badge=document.getElementById('mr-summary-badge');
+  if(!card||!panel) return;
+  card.style.display='block';
+  panel.innerHTML='<div class="text-muted small py-2"><span class="spinner-border spinner-border-sm me-2"></span>Checking material readiness…</div>';
+  badge.innerHTML='';
+  let data;
+  try{
+    data=await api(`/api/purchase-orders/${poId}/material-readiness`);
+  }catch(e){
+    panel.innerHTML=`<div class="alert alert-secondary py-2 mb-0"><i class="bi bi-info-circle me-1"></i>${e.message||'Could not load material readiness.'}</div>`;
+    return;
+  }
+
+  // Summary badge
+  const nShort=(data.materials||[]).filter(m=>m.status==='short').length;
+  const nLow=(data.materials||[]).filter(m=>m.status==='low').length;
+  const nMissBom=(data.missing_bom_skus||[]).length;
+  if(data.all_ok && !nMissBom){
+    badge.innerHTML='<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>All materials ready</span>';
+  } else if(nShort>0){
+    badge.innerHTML=`<span class="badge bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>${nShort} material${nShort>1?'s':''} short</span>`;
+    if(nLow>0) badge.innerHTML+=` <span class="badge bg-warning text-dark ms-1">${nLow} low</span>`;
+  } else if(nLow>0){
+    badge.innerHTML=`<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-circle me-1"></i>${nLow} material${nLow>1?'s':''} low</span>`;
+  } else {
+    badge.innerHTML='<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Materials OK</span>';
+  }
+
+  let html='';
+
+  // Missing BOM warnings
+  if(nMissBom>0){
+    html+=`<div class="alert alert-warning py-2 mb-2">
+      <strong><i class="bi bi-exclamation-triangle me-1"></i>${nMissBom} SKU${nMissBom>1?'s':''} missing BOM — cannot check materials:</strong>
+      <ul class="mb-0 mt-1">
+        ${(data.missing_bom_skus||[]).map(s=>`<li><code>${s}</code>
+          <a href="#" onclick="event.preventDefault();openBomBuilderWithSku('${s}')" class="ms-1 text-warning fw-bold" style="font-size:.78rem">→ Set up BOM</a>
+        </li>`).join('')}
+      </ul>
+    </div>`;
+  }
+
+  // All ok — no shortfalls, no missing BOMs
+  if(data.all_ok && !nMissBom && (data.materials||[]).length>0){
+    html+=`<div class="alert alert-success py-2 mb-2">
+      <i class="bi bi-check-circle-fill me-1"></i>
+      All <strong>${data.materials.length}</strong> material${data.materials.length>1?'s':''} sufficiently stocked for this PO.
+    </div>`;
+  }
+
+  // Lines checked / missing BOM note
+  if(data.lines_checked!==undefined){
+    const checked=data.lines_checked-(data.lines_missing_bom||0);
+    html+=`<div class="text-muted mb-2" style="font-size:.72rem">
+      <i class="bi bi-bar-chart-steps me-1"></i>
+      Checked <strong>${checked}</strong> of <strong>${data.lines_checked}</strong> line${data.lines_checked!==1?'s':''} (${data.lines_missing_bom||0} missing BOM).
+      ${data.total_shortfall_cost>0?`Total shortfall cost impact: <strong class="text-danger">฿${data.total_shortfall_cost.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong>`:''}
+    </div>`;
+  }
+
+  // Materials table (only if we have materials to show)
+  const mats=data.materials||[];
+  if(mats.length>0){
+    const rowBg={short:'#fef2f2',low:'#fffbeb',ok:'#f0fdf4'};
+    const statusHtml={
+      short:'<span class="status-pill insufficient">Short</span>',
+      low:'<span class="status-pill low">Low</span>',
+      ok:'<span class="status-pill ok">OK</span>'
+    };
+    html+=`<div style="max-height:260px;overflow-y:auto;border-radius:6px;border:1px solid #e2e8f0;">
+      <table class="table table-sm mb-0" style="font-size:.76rem">
+        <thead class="table-light" style="position:sticky;top:0;z-index:1">
+          <tr>
+            <th>Material</th><th class="text-end">Required</th><th class="text-end">In Stock</th>
+            <th class="text-end">Shortfall</th><th class="text-end">Cost Impact</th><th>Used by SKU</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${mats.map(m=>{
+            const sf=m.shortfall>0?`<span class="text-danger fw-bold">-${fmt(m.shortfall)}</span>`:`<span class="text-success">—</span>`;
+            const cost=m.shortfall_cost>0?`<span class="text-danger">฿${m.shortfall_cost.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>`:'—';
+            const skus=(m.used_by||[]).map(s=>`<code style="font-size:.68rem">${s}</code>`).join(' ');
+            return `<tr style="background:${rowBg[m.status]||''}">
+              <td><span class="fw-semibold">${m.material_name||m.material_id}</span><span class="text-muted ms-1" style="font-size:.68rem">${m.unit||''}</span></td>
+              <td class="text-end">${fmt(m.required)}</td>
+              <td class="text-end">${fmt(m.stock)}</td>
+              <td class="text-end">${sf}</td>
+              <td class="text-end">${cost}</td>
+              <td>${statusHtml[m.status]||''} ${skus}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } else if(!nMissBom){
+    html+=`<div class="text-muted small">No BOM materials found for this PO's lines.</div>`;
+  }
+
+  panel.innerHTML=html||'<div class="text-muted small">No material data available.</div>';
+}
+
+// PDF PO Upload
+async function uploadPdfPo(input){
+  const file=input.files[0]; if(!file) return;
+  const st=document.getElementById('pdf-status');
+  st.className='text-muted small';st.textContent='Extracting PO from PDF…';st.classList.remove('d-none');
+  try{
+    const fd=new FormData(); fd.append('file',file);
+    const r=await fetch('/api/upload/po-pdf',{method:'POST',body:fd});
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.detail||'Extraction failed');
+
+    // Pre-fill PO header modal
+    document.getElementById('po-id').value='';
+    document.getElementById('po-number').value=data.po_number||'';
+    document.getElementById('po-customer').value=data.customer||'';
+    document.getElementById('po-order-date').value=data.order_date||'';
+    document.getElementById('po-req-date').value=data.delivery_date||'';
+    document.getElementById('po-notes').value=data.notes||'';
+
+    // Show extracted lines + BOM warnings in a review panel
+    showPdfPoReview(data);
+
+    st.className='text-success small';
+    st.textContent=`Extracted: ${data.po_number} — ${(data.lines||[]).length} line(s)${data.has_warnings?' ⚠ BOM warnings':' ✓ All SKUs matched'}`;
+    input.value='';
+  }catch(e){st.className='text-danger small';st.textContent='Error: '+e.message;}
+}
+
+let _pdfExtracted = null; // store last extracted data for import
+
+function showPdfPoReview(data){
+  _pdfExtracted = data;
+  const lines=data.lines||[];
+  const warnings=data.sku_warnings||[];
+  const warnMap=Object.fromEntries(warnings.map(w=>[w.sku||`line${w.line}`,w]));
+  const totals=data.totals||{};
+
+  const warnHtml=warnings.length?`
+    <div class="alert alert-warning py-2 mb-3">
+      <strong><i class="bi bi-exclamation-triangle me-1"></i>${warnings.length} SKU issue(s) found:</strong>
+      <ul class="mb-0 mt-1">
+        ${warnings.map(w=>`<li><code>${w.sku||'(blank)'}</code> — ${w.message}
+          ${w.status==='missing_bom'?`<a href="#" onclick="event.preventDefault();openBomBuilderWithSku('${w.sku||''}')" class="ms-1 text-warning fw-bold">→ Set up BOM</a>`:''}
+          ${w.status==='unknown_product'?`<a href="#" onclick="event.preventDefault();openBomBuilderWithSku('${w.sku||''}')" class="ms-1 text-warning fw-bold">→ Create in BOM Builder</a>`:''}
+        </li>`).join('')}
+      </ul>
+    </div>`:'<div class="alert alert-success py-2 mb-3"><i class="bi bi-check-circle me-1"></i>All SKUs matched to products with BOM.</div>';
+
+  const lineRows=lines.map((l,i)=>{
+    const w=warnMap[l.sku||`line${i+1}`];
+    const rowClass=w?'table-warning':'';
+    const ppp = l.pcs_per_unit||0;
+    const pallets = l.unit||0;
+    const totalPcs = pallets*ppp || l.total_pcs||0;
+    return `<tr class="${rowClass}">
+      <td><code>${l.sku||'—'}</code>${w?` <span class="badge bg-warning text-dark" style="font-size:.6rem">${w.status==='missing_bom'?'NO BOM':w.status==='unknown_product'?'UNKNOWN':'?'}</span>`:' <span class="badge bg-success" style="font-size:.6rem">✓</span>'}</td>
+      <td><small>${l.description||''}</small></td>
+      <td><small>${l.base||''} ${l.thickness||''}mm &nbsp;${l.width_inch||''}×${l.length_inch||''}"</small></td>
+      <td><small>${[l.species,l.cut,l.veneer_thickness,l.face_grade,l.matching].filter(Boolean).join(' ')}</small></td>
+      <td class="text-center fw-bold">${pallets}</td>
+      <td class="text-center">
+        <input type="number" class="form-control form-control-sm text-center p-0" style="width:65px;display:inline-block"
+          value="${ppp}" min="1" id="pdf-ppp-${i}" oninput="updatePdfLinePcs(${i})">
+      </td>
+      <td class="text-center fw-bold" id="pdf-totpcs-${i}">${totalPcs.toLocaleString()}</td>
+      <td><small>${l.price_per_msf?`<span class="text-primary">$${l.price_per_msf}</span>/MSF <span class="text-muted">USD</span>`:''}</small></td>
+      <td class="fw-bold"><small><span class="text-primary">$${(l.amount_usd||0).toLocaleString()}</span> <span class="text-muted">USD</span></small></td>
+    </tr>`;
+  }).join('');
+
+  const totRow=`<tr class="table-secondary fw-bold">
+    <td colspan="4" class="text-end">TOTAL</td>
+    <td class="text-center">${fmt(totals.unit||0)} pallets</td>
+    <td></td>
+    <td class="text-center">${fmt(totals.total_pcs||0)} pcs</td>
+    <td></td>
+    <td>$${(totals.amount_usd||0).toLocaleString()}</td>
+  </tr>`;
+
+  // Show in a modal
+  let rev=document.getElementById('pdfReviewModal');
+  if(!rev){
+    rev=document.createElement('div');
+    rev.id='pdfReviewModal';
+    rev.className='modal fade';
+    rev.setAttribute('tabindex','-1');
+    rev.innerHTML=`<div class="modal-dialog modal-xl"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-filetype-pdf me-2"></i>PDF PO Review</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body overflow-auto" id="pdf-review-body"></div>
+      <div class="modal-footer gap-2">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-outline-primary" onclick="bootstrap.Modal.getInstance(document.getElementById('pdfReviewModal')).hide();new bootstrap.Modal(document.getElementById('poModal')).show()">
+          <i class="bi bi-pencil me-1"></i>Edit PO Header
+        </button>
+        <button class="btn btn-success" id="pdf-import-btn" onclick="importPdfLinesToPo()">
+          <i class="bi bi-download me-1"></i>Import Lines into PO
+        </button>
+      </div>
+    </div></div>`;
+    document.body.appendChild(rev);
+  }
+
+  document.getElementById('pdf-review-body').innerHTML=`
+    <div class="mb-3 d-flex justify-content-between align-items-start">
+      <div>
+        <h6 class="mb-1">${data.po_number||'PO'} — ${data.customer||''}</h6>
+        <small class="text-muted">Order: ${data.order_date||''} &nbsp;|&nbsp; Ship: ${data.delivery_date||''}</small>
+      </div>
+      <div class="text-muted small text-end">
+        <strong>${lines.length}</strong> line${lines.length!==1?'s':''} &nbsp;|&nbsp;
+        <strong>${totals.unit||0}</strong> pallets &nbsp;|&nbsp;
+        <strong>${fmt(totals.total_pcs||0)}</strong> pcs &nbsp;|&nbsp;
+        <strong>$${(totals.amount_usd||0).toLocaleString()}</strong>
+      </div>
+    </div>
+    ${warnHtml}
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered align-middle" style="font-size:.8rem">
+        <thead class="table-dark">
+          <tr>
+            <th>SKU</th><th>Description</th><th>Base / Thick / Size</th>
+            <th>Veneer Spec</th>
+            <th class="text-center">Pallets</th>
+            <th class="text-center">Pcs/Pallet <span class="text-warning small">(edit)</span></th>
+            <th class="text-center">Total Pcs</th>
+            <th>US$/MSF</th><th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>${lineRows}${totRow}</tbody>
+      </table>
+    </div>
+    <p class="text-muted small mt-2"><i class="bi bi-pencil me-1"></i>You can edit <strong>Pcs/Pallet</strong> values above before importing. Mixed-pallet lines are shown in blue.</p>`;
+
+  // Import button always enabled — will auto-save PO header if needed
+  const importBtn=document.getElementById('pdf-import-btn');
+  if(importBtn) importBtn.disabled=false;
+
+  new bootstrap.Modal(rev).show();
+}
+
+function updatePdfLinePcs(i){
+  const pppEl=document.getElementById('pdf-ppp-'+i);
+  const totEl=document.getElementById('pdf-totpcs-'+i);
+  if(!pppEl||!totEl) return;
+  const l=(_pdfExtracted&&_pdfExtracted.lines||[])[i];
+  if(!l) return;
+  const ppp=parseInt(pppEl.value)||0;
+  const pallets=l.unit||0;
+  totEl.textContent=(pallets*ppp).toLocaleString();
+}
+
+async function importPdfLinesToPo(){
+  if(!_pdfExtracted) return;
+
+  // ── Step 1: ensure PO header is saved ─────────────────────────────────────
+  let poId = selectedPoId;
+  if(!poId){
+    // Auto-save PO from the pre-filled header fields
+    const body={
+      po_number:  document.getElementById('po-number').value  || (_pdfExtracted.po_number||''),
+      customer:   document.getElementById('po-customer').value || (_pdfExtracted.customer||''),
+      order_date: document.getElementById('po-order-date').value || (_pdfExtracted.order_date||''),
+      delivery_date: document.getElementById('po-req-date').value || (_pdfExtracted.delivery_date||''),
+      notes:      document.getElementById('po-notes').value    || (_pdfExtracted.notes||''),
+      status: 'open',
+    };
+    if(!body.po_number){toast('PO Number is required — fill in the header first','warning');return;}
+    try{
+      const saved = await api('/api/purchase-orders','POST',body);
+      poId = saved.id;
+      selectedPoId = poId;
+      await loadPoList();
+    }catch(e){toast('Could not save PO header: '+e.message,'danger');return;}
+  }
+
+  // ── Step 2: build import payload from review table ─────────────────────────
+  const lines=_pdfExtracted.lines||[];
+  const toImport=lines
+    .filter(l=>l.product_id)
+    .map((l,i)=>{
+      const pppEl=document.getElementById('pdf-ppp-'+i);
+      const ppp=pppEl?parseInt(pppEl.value)||null:l.pcs_per_unit||null;
+      return {
+        product_id:    l.product_id,
+        quantity:      l.unit||1,
+        pcs_per_pallet: ppp||null,
+        unit_price:    l.price_per_msf||0,
+        notes:         l.notes||'',
+        production_line: 'P01',
+      };
+    });
+  if(!toImport.length){toast('No matched SKUs to import — check SKU warnings above','warning');return;}
+
+  // ── Step 3: import ────────────────────────────────────────────────────────
+  try{
+    const r=await api(`/api/purchase-orders/${poId}/import-pdf-lines`,'POST',{lines:toImport});
+    bootstrap.Modal.getInstance(document.getElementById('pdfReviewModal')).hide();
+    toast(`Imported ${r.created} line${r.created!==1?'s':''}${r.skipped?' ('+r.skipped+' already existed)':''}`, 'success');
+    selectPo(poId);
+  }catch(e){toast('Import failed: '+e.message,'danger');}
+}
+
+function openBomBuilderWithSku(sku){
+  // Close any open modals first
+  document.querySelectorAll('.modal.show').forEach(m=>{
+    const inst=bootstrap.Modal.getInstance(m);
+    if(inst) inst.hide();
+  });
+  // Navigate to BOM page
+  navigateTo('bom');
+  // After the page is visible, activate the FG BOM tab and pre-fill the SKU
+  setTimeout(()=>{
+    // Click the "FG BOM" tab (first tab)
+    const firstTab=document.querySelector('#bom-main-tabs .nav-link');
+    if(firstTab && !firstTab.classList.contains('active')) firstTab.click();
+    // Pre-fill the SKU code field
+    if(sku){
+      const codeEl=document.getElementById('bb-code');
+      if(codeEl){
+        codeEl.value=sku.toUpperCase();
+        codeEl.focus();
+        codeEl.classList.add('is-valid');
+        setTimeout(()=>codeEl.classList.remove('is-valid'),2000);
+      }
+    }
+    // Scroll the builder into view
+    document.getElementById('bb-code')?.scrollIntoView({behavior:'smooth',block:'center'});
+  }, 350);
+}
+
+function openPoModal(){
+  document.getElementById('po-id').value='';
+  document.getElementById('po-number').value='';
+  document.getElementById('po-customer').value='';
+  document.getElementById('po-order-date').value='';
+  document.getElementById('po-req-date').value='';
+  document.getElementById('po-notes').value='';
+  document.getElementById('po-priority').value=2;
+  document.querySelector('#poModal .modal-title').textContent='New Purchase Order';
+}
+async function editPoModal(id){
+  const po=await api(`/api/purchase-orders/${id}`).catch(()=>null);
+  if(!po){toast('PO not found','danger');return;}
+  document.getElementById('po-id').value=po.id;
+  document.getElementById('po-number').value=po.po_number||'';
+  document.getElementById('po-customer').value=po.customer||'';
+  document.getElementById('po-order-date').value=(po.order_date||'').slice(0,10);
+  document.getElementById('po-req-date').value=(po.delivery_date||'').slice(0,10);
+  document.getElementById('po-notes').value=po.notes||'';
+  document.getElementById('po-priority').value=po.priority||2;
+  document.querySelector('#poModal .modal-title').textContent=`Edit PO — ${po.po_number}`;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('poModal')).show();
+}
+async function deletePo(id){
+  if(!confirm('Delete this PO and all its lines?')) return;
+  try{await api(`/api/purchase-orders/${id}`,'DELETE');if(selectedPoId===id){selectedPoId=null;document.getElementById('po-lines-list').innerHTML='';document.getElementById('prod-orders-list').innerHTML='';}toast('PO deleted');loadPoList();}
+  catch(e){toast(e.message,'danger');}
+}
+async function deleteProdOrder(id){
+  if(!confirm('Delete this production order and all its batches/records? This cannot be undone.')) return;
+  try{
+    await api(`/api/production-orders/${id}`,'DELETE');
+    toast('Production order deleted');
+    selectPo(selectedPoId);
+  }catch(e){toast(e.message,'danger');}
+}
+async function voidBatch(id, batchNum, dept){
+  if(!confirm(`Void batch ${batchNum}? This removes it from the system permanently.`)) return;
+  try{
+    await api(`/api/batches/${id}`,'DELETE');
+    toast(`Batch ${batchNum} voided`);
+    loadDeptPage(dept);
+  }catch(e){toast(e.message,'danger');}
+}
+async function savePo(){
+  const id=document.getElementById('po-id').value;
+  const body={po_number:document.getElementById('po-number').value,customer:document.getElementById('po-customer').value,order_date:document.getElementById('po-order-date').value,delivery_date:document.getElementById('po-req-date').value,priority:parseInt(document.getElementById('po-priority').value),notes:document.getElementById('po-notes').value,status:'open'};
+  try{
+    if(id) await api(`/api/purchase-orders/${id}`,'PUT',body); else await api('/api/purchase-orders','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('poModal')).hide();
+    toast('PO saved'); loadPoList();
+  }catch(e){toast(e.message,'danger');}
+}
+
+let _polFgAll=[];
+async function openPoLineModal(){
+  document.getElementById('pol-line-id').value='';
+  document.getElementById('pol-modal-title').textContent='Add PO Line';
+  document.getElementById('pol-fg-search').value='';
+  document.getElementById('pol-notes').value='';
+  document.getElementById('pol-qty').value='';
+  document.getElementById('pol-price').value='';
+  document.getElementById('pol-pcs-per-pallet').value='';
+  document.getElementById('pol-total-pcs').value='';
+  _polTotalPcsOverridden=false;
+  document.getElementById('pol-fg-info').classList.add('d-none');
+  document.getElementById('pol-qty-hint').classList.add('d-none');
+  document.getElementById('pol-packing-id').value='';
+
+  // Load FG list and packing specs in parallel
+  const [fgs, packSpecs] = await Promise.all([
+    api('/api/fg'),
+    api('/api/packing-skus').catch(()=>[]),
+  ]);
+  _polFgAll = fgs;
+  // Populate packing dropdown
+  const packSel = document.getElementById('pol-packing-id');
+  packSel.innerHTML = '<option value="">\u2014 No packing selected \u2014</option>' +
+    packSpecs.map(p=>`<option value="${p.id}">${p.code}${p.customer?' ('+p.customer+')':''}</option>`).join('');
+
+  const noFg  = document.getElementById('pol-no-fg');
+  const picker = document.getElementById('pol-fg-picker');
+  const saveBtn = document.getElementById('pol-save-btn');
+
+  if(!fgs.length){
+    noFg.classList.remove('d-none');
+    picker.classList.add('d-none');
+    saveBtn.disabled=true;
+    return;
+  }
+  noFg.classList.add('d-none');
+  picker.classList.remove('d-none');
+  saveBtn.disabled=false;
+  renderPolFgOptions(fgs);
+}
+
+function renderPolFgOptions(list){
+  const sel=document.getElementById('pol-product-id');
+  sel.innerHTML=list.map(s=>`<option value="${s.id}">${s.code} — ${s.name}</option>`).join('');
+  if(list.length) onPolFgSelect(sel.value);
+}
+
+function filterPolFg(q){
+  const s=q.toLowerCase();
+  renderPolFgOptions(s?_polFgAll.filter(r=>r.code.toLowerCase().includes(s)||(r.name||'').toLowerCase().includes(s)):_polFgAll);
+}
+
+function onPolFgSelect(id){
+  const fg=_polFgAll.find(s=>String(s.id)===String(id));
+  const info=document.getElementById('pol-fg-info');
+  const hint=document.getElementById('pol-qty-hint');
+  if(!fg){info.classList.add('d-none');hint.classList.add('d-none');return;}
+  info.classList.remove('d-none');
+  info.innerHTML=`<span class="fw-bold text-primary">${fg.code}</span>
+    &nbsp;|&nbsp; ${fg.thickness_mm||'—'}mm
+    &nbsp;|&nbsp; ${fg.width_mm||'—'} × ${fg.length_mm||'—'} mm
+    &nbsp;|&nbsp; BOM default: <b>${fg.pallet_qty||'—'}</b> pcs/pallet`;
+  const pq=fg.pallet_qty||0;
+  document.getElementById('pol-pallet-qty').value=pq;
+  // Pre-fill pcs/pallet from BOM if empty
+  const pcsEl=document.getElementById('pol-pcs-per-pallet');
+  if(!pcsEl.value && pq) pcsEl.value=pq;
+  hint.classList.remove('d-none');
+  updatePolPalletHint();
+}
+let _polTotalPcsOverridden = false;
+function onPolTotalPcsOverride(){
+  // User typed a custom total — mark as overridden so calc doesn't clobber
+  _polTotalPcsOverridden = !!document.getElementById('pol-total-pcs').value;
+  updatePolPalletHint();
+}
+function updatePolPalletHint(){
+  const pallets=parseFloat(document.getElementById('pol-qty').value)||0;
+  const pcsPerPallet=parseInt(document.getElementById('pol-pcs-per-pallet').value)||
+                     parseInt(document.getElementById('pol-pallet-qty').value)||0;
+  const totalEl=document.getElementById('pol-total-pcs');
+  const hint=document.getElementById('pol-qty-hint');
+  if(!pallets){hint.innerHTML='<i class="bi bi-info-circle me-1"></i>Enter pallet quantity above';hint.classList.remove('d-none');return;}
+  const calculated=Math.round(pallets*(pcsPerPallet||0));
+  // Auto-fill total pcs unless user has manually overridden
+  if(!_polTotalPcsOverridden){
+    totalEl.value = calculated || '';
+  }
+  const finalPcs = parseInt(totalEl.value) || calculated || 0;
+  const isOverride = _polTotalPcsOverridden && finalPcs !== calculated;
+  const palletsDisplay = pallets % 1 === 0 ? pallets : pallets.toFixed(2);
+  hint.innerHTML = `<i class="bi bi-calculator me-1"></i>
+    <b>${palletsDisplay}</b> pallet${pallets!==1?'s':''}
+    ${pcsPerPallet?` × <b>${pcsPerPallet}</b> pcs/pallet = <b>${calculated.toLocaleString()}</b> pcs`:''}
+    ${isOverride?` &nbsp;<span class="badge bg-warning text-dark ms-1">Override → ${finalPcs.toLocaleString()} pcs</span>`:''}
+    ${pcsPerPallet?` &nbsp;<span class="text-muted small">(saved as <b>${finalPcs.toLocaleString()}</b> pcs)</span>`:''}`;
+  hint.classList.remove('d-none');
+}
+
+async function savePoLine(){
+  const lineId=document.getElementById('pol-line-id').value;
+  const palletsRaw=parseFloat(document.getElementById('pol-qty').value)||0;
+  if(!palletsRaw){toast('Please enter a pallet quantity','danger');return;}
+  let pcsPerPallet=parseInt(document.getElementById('pol-pcs-per-pallet').value)||
+                   parseInt(document.getElementById('pol-pallet-qty').value)||null;
+  // Resolve total pcs (user override or calculated)
+  const overrideTotal=parseInt(document.getElementById('pol-total-pcs').value)||0;
+  const calculatedTotal=Math.round(palletsRaw*(pcsPerPallet||0));
+  const finalTotalPcs = (overrideTotal && overrideTotal!==calculatedTotal) ? overrideTotal : calculatedTotal;
+  // Convert to (pallets-as-integer, pcs_per_pallet) so total stays exact
+  // For fractional/partial pallets we recalc pcs_per_pallet so quantity*pcs_per_pallet === finalTotalPcs
+  let qty, finalPcsPerPallet;
+  if(palletsRaw % 1 !== 0 || (overrideTotal && overrideTotal!==calculatedTotal)){
+    // Partial pallets OR pcs override → store as 1 pallet with custom pcs_per_pallet = total
+    qty = 1;
+    finalPcsPerPallet = finalTotalPcs;
+    if(palletsRaw % 1 !== 0){
+      // Persist the original pallet count info in notes (since DB col is INT)
+      const origNotes=document.getElementById('pol-notes').value||'';
+      const palletInfo=`[${palletsRaw} pallets × ${pcsPerPallet||'?'} pcs/plt]`;
+      if(!origNotes.includes(palletInfo)) document.getElementById('pol-notes').value=(origNotes?origNotes+' ':'')+palletInfo;
+    }
+  } else {
+    qty = parseInt(palletsRaw);
+    finalPcsPerPallet = pcsPerPallet;
+  }
+  const polPackId = document.getElementById('pol-packing-id').value ? parseInt(document.getElementById('pol-packing-id').value) : null;
+  const body={
+    production_line:document.getElementById('pol-line').value,
+    quantity:qty,
+    pcs_per_pallet:finalPcsPerPallet,
+    unit_price:parseFloat(document.getElementById('pol-price').value)||0,
+    notes:document.getElementById('pol-notes').value,
+    packing_sku_id: polPackId,
+  };
+
+  if(lineId){
+    // Edit mode — just PATCH the existing line
+    try{
+      await api(`/api/po-lines/${lineId}`,'PUT',body);
+      bootstrap.Modal.getInstance(document.getElementById('poLineModal')).hide();
+      toast('Line updated');
+      selectPo(selectedPoId);
+    }catch(e){toast(e.message,'danger');}
+    return;
+  }
+
+  // Add mode — need FG selection
+  const sel=document.getElementById('pol-product-id');
+  const fg=_polFgAll.find(s=>String(s.id)===String(sel.value));
+  if(!fg){toast('Please select an FG code','danger');return;}
+  let prodRow=(products||[]).find(p=>p.sku===fg.code);
+  if(!prodRow){
+    const all=await api('/api/products');
+    prodRow=all.find(p=>p.sku===fg.code);
+  }
+  if(!prodRow){toast(`FG ${fg.code} not linked to a product record yet`,'danger');return;}
+  body.po_id=selectedPoId;
+  body.product_id=prodRow.id;
+  try{
+    await api('/api/po-lines','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('poLineModal')).hide();
+    toast('Line added');
+    selectPo(selectedPoId);
+  }catch(e){toast(e.message,'danger');}
+}
+
+async function editPoLine(id, productId, sku, name, line, qty, price, notes, packingSkuId, pcsPerPallet){
+  document.getElementById('pol-line-id').value=id;
+  document.getElementById('pol-modal-title').textContent=`Edit Line — ${sku}`;
+  document.getElementById('pol-line').value=line||'P01';
+  document.getElementById('pol-qty').value=qty||'';
+  document.getElementById('pol-price').value=price||'';
+  document.getElementById('pol-notes').value=notes||'';
+  document.getElementById('pol-pcs-per-pallet').value=pcsPerPallet||'';
+  document.getElementById('pol-total-pcs').value=(qty&&pcsPerPallet)?Math.round(qty*pcsPerPallet):'';
+  _polTotalPcsOverridden=false;
+  // Look up pallet_qty from BOM for reference display
+  if(!_polFgAll.length) _polFgAll=await api('/api/fg').catch(()=>[]);
+  const fgMatch=_polFgAll.find(s=>s.code===sku);
+  const pq=fgMatch?fgMatch.pallet_qty||0:0;
+  document.getElementById('pol-pallet-qty').value=pq;
+  updatePolPalletHint();
+  // Show FG info strip with locked badge; hide the picker search
+  document.getElementById('pol-fg-search').value='';
+  document.getElementById('pol-fg-search').disabled=true;
+  document.getElementById('pol-product-id').disabled=true;
+  const picker=document.getElementById('pol-fg-picker');
+  if(picker) picker.classList.remove('d-none');
+  document.getElementById('pol-no-fg').classList.add('d-none');
+  const info=document.getElementById('pol-fg-info');
+  info.classList.remove('d-none');
+  info.innerHTML=`<span class="fw-bold text-primary">${sku}</span> &nbsp;|&nbsp; <span class="text-muted">${name}</span>${pq?` &nbsp;|&nbsp; BOM default: <b>${pq}</b> pcs/pallet`:''} <span class="badge bg-secondary ms-2">FG locked &mdash; delete &amp; re-add to change</span>`;
+  document.getElementById('pol-save-btn').disabled=false;
+  // Set packing dropdown
+  if(document.getElementById('pol-packing-id').options.length <= 1){
+    const pks = await api('/api/packing-skus').catch(()=>[]);
+    document.getElementById('pol-packing-id').innerHTML = '<option value="">— No packing selected —</option>' +
+      pks.map(p=>`<option value="${p.id}">${p.code}${p.customer?' ('+p.customer+')':''}</option>`).join('');
+  }
+  document.getElementById('pol-packing-id').value = packingSkuId || '';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('poLineModal')).show();
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  // Wrap loose text in each sidebar nav-link with a <span> so the collapsed
+  // CSS can hide labels but keep icons + badges visible.
+  document.querySelectorAll('#sidebar a.nav-link').forEach(a => {
+    [...a.childNodes].forEach(n => {
+      if(n.nodeType === Node.TEXT_NODE && n.textContent.trim()){
+        const sp = document.createElement('span');
+        sp.className = 'sb-label';
+        sp.textContent = n.textContent;
+        a.replaceChild(sp, n);
+      }
+    });
+  });
+  // Restore pinned state from localStorage
+  if(localStorage.getItem('erp_sb_pinned') === '1'){
+    document.getElementById('sidebar')?.classList.add('pinned');
+    document.body.classList.add('sb-pinned');
+    const ic = document.getElementById('sidebar-pin-icon');
+    if(ic){ ic.classList.remove('bi-pin-angle-fill'); ic.classList.add('bi-pin-fill'); }
+  }
+  window.toggleSidebarPin = function(ev){
+    ev?.stopPropagation();
+    const sb = document.getElementById('sidebar');
+    const ic = document.getElementById('sidebar-pin-icon');
+    const pinned = sb.classList.toggle('pinned');
+    document.body.classList.toggle('sb-pinned', pinned);
+    localStorage.setItem('erp_sb_pinned', pinned ? '1' : '0');
+    if(ic){
+      ic.classList.toggle('bi-pin-fill', pinned);
+      ic.classList.toggle('bi-pin-angle-fill', !pinned);
+    }
+  };
+  const poLineModal=document.getElementById('poLineModal');
+  if(poLineModal){
+    poLineModal.addEventListener('hidden.bs.modal',()=>{
+      document.getElementById('pol-line-id').value='';
+      document.getElementById('pol-modal-title').textContent='Add PO Line';
+      document.getElementById('pol-fg-search').disabled=false;
+      document.getElementById('pol-product-id').disabled=false;
+    });
+  }
+});
+
+async function deletePoLine(id){
+  if(!confirm('Remove this line from the PO?')) return;
+  try{
+    await api(`/api/po-lines/${id}`,'DELETE');
+    toast('Line removed');
+    selectPo(selectedPoId);
+  }catch(e){toast(e.message,'danger');}
+}
+
+let _pordLines=[], _pordTotalOverridden=false;
+async function openProdOrderModal(){
+  document.getElementById('pord-qty').value='';
+  document.getElementById('pord-notes').value='';
+  document.getElementById('pord-pcs-edit').value='';
+  document.getElementById('pord-total-pcs').value='';
+  document.getElementById('pord-pcs-per-pallet').value='';
+  document.getElementById('pord-qty-hint').classList.add('d-none');
+  _pordTotalOverridden=false;
+  document.getElementById('pord-start').value=new Date().toISOString().slice(0,10);
+  _pordLines = await api(`/api/purchase-orders/${selectedPoId}/lines`).catch(()=>[]);
+  const sel=document.getElementById('pord-line-id');
+  sel.innerHTML=_pordLines.map(l=>{
+    const pcsPerPlt=l.pcs_per_pallet||0;
+    const totalPcs=(l.quantity||0)*(pcsPerPlt||1);
+    return `<option value="${l.id}">${l.product_name} — ${l.quantity} plt${pcsPerPlt?' × '+pcsPerPlt+'pcs/plt = '+totalPcs+' pcs':''} (${l.production_line})</option>`;
+  }).join('');
+  onPordLineChange();
+}
+function onPordLineChange(){
+  const lineId=parseInt(document.getElementById('pord-line-id').value);
+  const line=_pordLines.find(l=>l.id===lineId);
+  if(!line) return;
+  // Pre-fill pcs/pallet from PO line
+  const pp=line.pcs_per_pallet||0;
+  document.getElementById('pord-pcs-per-pallet').value=pp;
+  document.getElementById('pord-pcs-edit').value=pp||'';
+  document.getElementById('pord-pcs-edit').placeholder=pp?`From PO line: ${pp}`:'Pcs per pallet';
+  // Suggest pallets from PO line
+  if(!document.getElementById('pord-qty').value) document.getElementById('pord-qty').value=line.quantity||'';
+  updatePordHint();
+}
+function onPordTotalOverride(){
+  _pordTotalOverridden = !!document.getElementById('pord-total-pcs').value;
+  updatePordHint();
+}
+function updatePordHint(){
+  const pallets=parseFloat(document.getElementById('pord-qty').value)||0;
+  const pcsPerPallet=parseInt(document.getElementById('pord-pcs-edit').value)||
+                     parseInt(document.getElementById('pord-pcs-per-pallet').value)||0;
+  const totalEl=document.getElementById('pord-total-pcs');
+  const hint=document.getElementById('pord-qty-hint');
+  if(!pallets){hint.innerHTML='<i class="bi bi-info-circle me-1"></i>Enter pallet quantity';hint.classList.remove('d-none');return;}
+  const calculated=Math.round(pallets*(pcsPerPallet||0));
+  if(!_pordTotalOverridden) totalEl.value=calculated||'';
+  const finalPcs=parseInt(totalEl.value)||calculated||0;
+  const isOverride=_pordTotalOverridden && finalPcs!==calculated;
+  const palletsDisplay=pallets%1===0?pallets:pallets.toFixed(2);
+  hint.innerHTML=`<i class="bi bi-calculator me-1"></i>
+    <b>${palletsDisplay}</b> pallet${pallets!==1?'s':''}
+    ${pcsPerPallet?` × <b>${pcsPerPallet}</b> pcs/pallet = <b>${calculated.toLocaleString()}</b> pcs`:''}
+    ${isOverride?` &nbsp;<span class="badge bg-warning text-dark ms-1">Override → ${finalPcs.toLocaleString()} pcs</span>`:''}`;
+  hint.classList.remove('d-none');
+}
+async function saveProdOrder(release){
+  const lineId=parseInt(document.getElementById('pord-line-id').value);
+  const lines=_pordLines.length?_pordLines:await api(`/api/purchase-orders/${selectedPoId}/lines`).catch(()=>[]);
+  const line=lines.find(l=>l.id===lineId)||{};
+  const palletsRaw=parseFloat(document.getElementById('pord-qty').value)||0;
+  if(!palletsRaw){toast('Enter pallet quantity','danger');return;}
+  let pcsPerPallet=parseInt(document.getElementById('pord-pcs-edit').value)||
+                   parseInt(document.getElementById('pord-pcs-per-pallet').value)||1;
+  const overrideTotal=parseInt(document.getElementById('pord-total-pcs').value)||0;
+  const calculatedTotal=Math.round(palletsRaw*pcsPerPallet);
+  const finalTotalPcs=(overrideTotal && overrideTotal!==calculatedTotal)?overrideTotal:calculatedTotal;
+  // For partial pallets / overrides, store as 1×pcs to keep totals exact
+  let qty;
+  if(palletsRaw % 1 !== 0 || (overrideTotal && overrideTotal!==calculatedTotal)){
+    qty=Math.max(1, Math.round(finalTotalPcs/pcsPerPallet));
+    // If still not exact, fall back to qty=1 with pcs_per_pallet=total
+    if(qty*pcsPerPallet !== finalTotalPcs){
+      qty=1;
+    }
+  } else {
+    qty=parseInt(palletsRaw);
+  }
+  const notesBase=document.getElementById('pord-notes').value||'';
+  const partialNote=(palletsRaw%1!==0)?`[${palletsRaw} pallets ordered]`:'';
+  const finalNotes=partialNote && !notesBase.includes(partialNote)?(notesBase?notesBase+' '+partialNote:partialNote):notesBase;
+  const body={prod_order_number:'PO-'+Date.now(),product_id:line.product_id||0,production_line:line.production_line||'P01',quantity:qty,po_line_id:lineId,po_id:selectedPoId,planned_start:document.getElementById('pord-start').value,notes:finalNotes,status:'draft',priority:2};
+  try{
+    const ord=await api('/api/production-orders','POST',body);
+    if(release) await api(`/api/production-orders/${ord.id}/release`,'POST');
+    bootstrap.Modal.getInstance(document.getElementById('prodOrderModal')).hide();
+    toast(release?'Released to production!':'Draft saved');selectPo(selectedPoId);
+  }catch(e){toast(e.message,'danger');}
+}
+async function releasePO(id){try{await api(`/api/production-orders/${id}/release`,'POST');toast('Released');selectPo(selectedPoId);}catch(e){toast(e.message,'danger');}}
+
+// ── Bulk release: PO-lines tick boxes → production orders ────────
+let _poLines = [];
+function togglePoLineAll(checked){
+  document.querySelectorAll('.po-line-cb:not(:disabled)').forEach(cb => cb.checked = checked);
+  onPoLineCheck();
+}
+function onPoLineCheck(){
+  const checked = document.querySelectorAll('.po-line-cb:checked').length;
+  const cnt = document.getElementById('po-release-count');
+  const btn = document.getElementById('po-release-btn');
+  if(cnt) cnt.textContent = `${checked} selected`;
+  if(btn) btn.disabled = checked === 0;
+}
+async function releaseSelectedPoLines(poId){
+  const cbs = [...document.querySelectorAll('.po-line-cb:checked')];
+  if(!cbs.length){ toast('Pick at least one line','warning'); return; }
+  const ids = cbs.map(cb => Number(cb.dataset.lineId));
+  const lines = _poLines.filter(l => ids.includes(l.id));
+  if(!confirm(`Release ${lines.length} PO line(s) to Production?\n\nThis creates a draft production order for each and immediately releases it (creates the batch).`)){
+    return;
+  }
+  const btn = document.getElementById('po-release-btn');
+  if(btn){ btn.disabled = true; btn.innerHTML='<span class="spinner-border spinner-border-sm me-2"></span>Releasing…'; }
+  let ok=0, fail=0;
+  for(const l of lines){
+    const ppp = l.pcs_per_pallet || 1;
+    const body = {
+      prod_order_number: 'PO-'+Date.now()+'-'+l.id,
+      product_id: l.product_id,
+      production_line: l.production_line || 'P01',
+      quantity: l.quantity,            // pallets
+      po_line_id: l.id,
+      po_id: poId,
+      planned_start: new Date().toISOString().slice(0,10),
+      notes: `Bulk-released from PO line #${l.id}`,
+      status: 'draft',
+      priority: 2,
+    };
+    try{
+      const ord = await api('/api/production-orders','POST',body);
+      await api(`/api/production-orders/${ord.id}/release`,'POST');
+      ok++;
+    }catch(e){
+      fail++; console.error('Release failed for line', l.id, e);
+    }
+  }
+  if(btn){ btn.disabled = false; btn.innerHTML='<i class="bi bi-play-circle me-1"></i>Release Selected to Production'; }
+  toast(`Released ${ok} line(s)${fail?` · ${fail} failed`:''}`, fail?'warning':'success');
+  selectPo(poId);
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Line Board (TrainingPeaks-style)
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// LINE BOARD  (TrainingPeaks-style)
+// ══════════════════════════════════════════════════════════
+async function loadLineBoard(){
+  const [flow, porders] = await Promise.all([
+    api(`/api/planning/line-board${lbLine!=='all'?'?production_line='+lbLine:''}`).catch(()=>({})),
+    api('/api/production-orders').catch(()=>[])
+  ]);
+  renderLbSidebar(porders);
+  renderLbBoard(flow);
+}
+
+function setLbLine(line, btn){
+  lbLine=line;
+  document.querySelectorAll('.lb-line-btns button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadLineBoard();
+}
+
+function renderLbSidebar(porders){
+  const filtered=lbLine==='all'?porders:porders.filter(o=>o.production_line===lbLine);
+  const active=filtered.filter(o=>['planned','in_progress'].includes(o.status))
+                       .sort((a,b)=>(a.priority||2)-(b.priority||2));
+  document.getElementById('lb-order-list').innerHTML=active.length?active.map(o=>`
+    <div class="lb-order-card p${o.priority||2}">
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="lo-num">${o.prod_order_number||o.order_number||'#'+o.id} ${lineBadge(o.production_line)}</div>
+        ${prioBadge(o.priority||2)}
+      </div>
+      <div class="lo-prod">${o.product_name||''}</div>
+      <div class="lo-meta">${fmt(o.quantity)} pcs &middot; ${statusBadge(o.status)}</div>
+    </div>`).join(''):'<p class="text-muted small p-2">No active orders.</p>';
+}
+
+function renderLbBoard(flow){
+  const sections=LINE_FLOW[lbLine]||LINE_FLOW.all;
+  document.getElementById('lb-cols').innerHTML=sections.map(dept=>{
+    const batches=flow[dept]||[];
+    return `<div class="lb-col">
+      <div class="lb-col-head"><span><i class="bi ${DICO[dept]} me-1"></i>${DLBL[dept]}</span><span class="cnt">${batches.length}</span></div>
+      <div class="lb-col-body" id="lb-body-${dept}"
+        ondragover="event.preventDefault();this.closest('.lb-col').classList.add('drag-over')"
+        ondragleave="this.closest('.lb-col').classList.remove('drag-over')"
+        ondrop="lbDrop(event,'${dept}')">
+        ${batches.map(b=>lbCard(b)).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function lbCard(b){
+  return `<div class="bc p${b.priority||2}" draggable="true"
+    ondragstart="dragBatchId=${b.id};event.dataTransfer.effectAllowed='move'"
+    ondragend="document.querySelectorAll('.lb-col').forEach(c=>c.classList.remove('drag-over'))"
+    oncontextmenu="event.preventDefault();deptBatchDetail(${b.id},'${b.current_department}');return false;"
+    title="Click to open · Right-click for details">
+    <div style="cursor:pointer" onclick="deptBatchDetail(${b.id},'${b.current_department}')">
+      <div class="bc-num d-flex justify-content-between align-items-center">
+        <span>${b.batch_number||'B#'+b.id}${b.parent_batch_id?` <span class="badge bg-warning text-dark" style="font-size:.58rem">SPLIT</span>`:''}</span>
+        ${prioBadge(b.priority||2)}
+      </div>
+      <div class="bc-prod">${b.product_name||b.product_sku||''}</div>
+      <div class="bc-qty">${fmt(b.quantity)} plt · ${fmt(b.total_pcs ?? b.pcs_actual ?? ((b.quantity||0)*(b.pallet_qty||1)))} pcs</div>
+      ${b.po_number?`<div style="font-size:.65rem;color:#94a3b8">PO: ${b.po_number}</div>`:''}
+    </div>
+  </div>`;
+}
+
+function lbDrop(e,dept){
+  e.preventDefault();
+  e.currentTarget.closest('.lb-col').classList.remove('drag-over');
+  if(dragBatchId) openMove(dragBatchId,null,null,dept);
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Kanban (prod-flow)
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// KANBAN
+// ══════════════════════════════════════════════════════════
+async function loadKanban(){
+  const flow=await api('/api/planning/flow').catch(()=>({}));
+  document.getElementById('kanban-board').innerHTML=DEPTS.map(dept=>{
+    const bs=flow[dept]||[];
+    return `<div class="kanban-col" ondragover="event.preventDefault();this.classList.add('drag-over')" ondrop="kanbanDrop(event,'${dept}')" ondragleave="this.classList.remove('drag-over')">
+      <div class="col-head"><span><i class="bi ${DICO[dept]} me-1"></i>${DLBL[dept]}</span><span class="badge bg-secondary">${bs.length}</span></div>
+      ${bs.map(b=>`<div class="batch-card priority-${b.priority||2}" draggable="true"
+        ondragstart="dragBatchId=${b.id};event.dataTransfer.effectAllowed='move'"
+        ondragend="document.querySelectorAll('.kanban-col').forEach(c=>c.classList.remove('drag-over'))">
+        <div class="fw-bold" style="font-size:.75rem">${b.batch_number||'B#'+b.id}</div>
+        <div style="font-size:.7rem;color:#64748b">${b.product_name||''}</div>
+        <div style="font-size:.72rem;color:#1f4a1f;font-weight:600">${fmt(b.quantity)} plt · ${fmt(b.total_pcs ?? b.pcs_actual ?? ((b.quantity||0)*(b.pallet_qty||1)))} pcs</div>
+        <div class="d-flex gap-1 mt-1">
+          <button class="btn btn-outline-primary btn-sm" style="padding:1px 6px;font-size:.67rem" onclick="openMove(${b.id},'${dept}',${b.quantity})">Move</button>
+          <button class="btn btn-outline-warning btn-sm" style="padding:1px 6px;font-size:.67rem" onclick="openSplit(${b.id},${b.quantity})">Split</button>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+function kanbanDrop(e,dept){e.preventDefault();e.currentTarget.classList.remove('drag-over');if(dragBatchId)openMove(dragBatchId,null,null,dept);}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Production Reports
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// PRODUCTION REPORTS
+// ══════════════════════════════════════════════════════════
+function prSetPeriod(days){
+  const to=new Date().toISOString().slice(0,10);
+  const from=new Date(Date.now()-days*86400000).toISOString().slice(0,10);
+  document.getElementById('pr-from').value=from;
+  document.getElementById('pr-to').value=to;
+}
+async function loadProdReports(){
+  const line=document.getElementById('pr-line').value||null;
+  const from=document.getElementById('pr-from').value||null;
+  const to=document.getElementById('pr-to').value||null;
+  const qs=(p,v)=>v?`${p}=${encodeURIComponent(v)}`:'';
+  const q=(parts)=>{const s=parts.filter(Boolean).join('&');return s?'?'+s:'';};
+
+  const [daily,lam,sand,ncgReason]=await Promise.all([
+    api('/api/reports/daily'+q([qs('line_id',line),qs('from_date',from),qs('to_date',to)])).catch(()=>[]),
+    api('/api/reports/lam-efficacy'+q([qs('line_id',line),qs('from_date',from)])).catch(()=>[]),
+    api('/api/reports/sanding-defects'+q([qs('line_id',line),qs('from_date',from)])).catch(()=>[]),
+    api('/api/reports/ncg-reasons'+q([qs('line_id',line)])).catch(()=>[]),
+  ]);
+
+  // KPIs
+  const totGood=daily.reduce((s,r)=>s+(r.qty_good||0),0);
+  const totNcg=daily.reduce((s,r)=>s+(r.qty_ncg||0),0);
+  const totAll=daily.reduce((s,r)=>s+(r.qty_good||0)+(r.qty_ncg||0)+(r.qty_reject||0),0);
+  const ncgRate=totAll?((totNcg/totAll)*100).toFixed(2):0;
+  const avgSand=sand.length?(sand.reduce((s,r)=>s+(r.defect_rate_pct||0),0)/sand.length).toFixed(2):0;
+  const avgLam=lam.length?(lam.reduce((s,r)=>s+(r.efficacy_pct||0),0)/lam.length).toFixed(1):0;
+
+  document.getElementById('pr-kpi-boards').textContent=fmt(totGood);
+  const ncgEl=document.getElementById('pr-kpi-ncg');
+  ncgEl.textContent=ncgRate+'%';
+  ncgEl.className='val '+(ncgRate>=4?'text-danger':ncgRate>=2.5?'text-warning':'text-success');
+  const sandEl=document.getElementById('pr-kpi-sand');
+  sandEl.textContent=avgSand+'%';
+  sandEl.className='val '+(avgSand>=3?'text-danger':avgSand>=1.5?'text-warning':'text-success');
+  const lamEl=document.getElementById('pr-kpi-lam');
+  lamEl.textContent=avgLam+'%';
+  lamEl.className='val '+(avgLam<88?'text-danger':avgLam<95?'text-warning':'text-success');
+
+  // Daily table
+  const dailyTb=document.querySelector('#pr-daily-table tbody');
+  dailyTb.innerHTML=daily.length?daily.map(r=>`<tr>
+    <td>${r.production_date||'—'}</td>
+    <td><span class="line-badge line-${r.line_id}">${r.line_id||'—'}</span></td>
+    <td><code class="text-primary">${r.sku_code||'—'}</code></td>
+    <td>${r.batches||0}</td>
+    <td>${fmt(r.qty_planned)}</td>
+    <td class="text-success fw-bold">${fmt(r.qty_good)}</td>
+    <td class="${r.qty_ncg>0?'text-warning fw-bold':''}">${fmt(r.qty_ncg)}</td>
+    <td class="${r.qty_reject>0?'text-danger fw-bold':''}">${fmt(r.qty_reject)}</td>
+    <td><span class="badge ${(r.ncg_rate_pct||0)>=4?'bg-danger':(r.ncg_rate_pct||0)>=2.5?'bg-warning text-dark':'bg-success'}">${(r.ncg_rate_pct||0).toFixed(1)}%</span></td>
+  </tr>`).join(''):'<tr><td colspan="9" class="text-center text-muted py-3">No data for selected period.</td></tr>';
+
+  // Lam efficacy table
+  const lamTb=document.querySelector('#pr-lam-table tbody');
+  lamTb.innerHTML=lam.length?lam.map(r=>{
+    const eff=r.efficacy_pct||0;
+    return `<tr>
+      <td><span class="badge bg-secondary">${r.table_id}</span></td>
+      <td><span class="line-badge line-${r.line_id}">${r.line_id}</span></td>
+      <td><code class="text-primary small">${r.sku_code||'—'}</code></td>
+      <td>${r.production_date||'—'}</td>
+      <td>${r.shift||'—'}</td>
+      <td><small>${r.emp_code_1||'—'} + ${r.emp_code_2||'—'}</small></td>
+      <td>${fmt(r.pcs_target)}</td>
+      <td>${fmt(r.pcs_actual)}</td>
+      <td><span class="badge ${eff>=95?'bg-success':eff>=88?'bg-warning text-dark':'bg-danger'}">${eff.toFixed(1)}%</span></td>
+    </tr>`;}).join(''):'<tr><td colspan="9" class="text-center text-muted py-3">No laminating data.</td></tr>';
+
+  // Sanding defects table
+  const sandTb=document.querySelector('#pr-sand-table tbody');
+  sandTb.innerHTML=sand.length?sand.map(r=>{
+    const rate=r.defect_rate_pct||0;
+    const pct=Math.min(rate*10,100);
+    return `<tr>
+      <td>${r.operator||'—'}</td>
+      <td><span class="line-badge line-${r.line_id}">${r.line_id||'—'}</span></td>
+      <td>${r.runs||0}</td>
+      <td>${fmt(r.total_pcs)}</td>
+      <td class="${rate>2.5?'text-danger fw-bold':rate>1.5?'text-warning':''}">${fmt(r.total_defects)}</td>
+      <td><span class="badge ${rate>=3?'bg-danger':rate>=1.5?'bg-warning text-dark':'bg-success'}">${rate.toFixed(2)}%</span></td>
+      <td style="width:100px"><div class="progress" style="height:8px"><div class="progress-bar ${rate>=3?'bg-danger':rate>=1.5?'bg-warning':'bg-success'}" style="width:${pct}%"></div></div></td>
+    </tr>`;}).join(''):'<tr><td colspan="7" class="text-center text-muted py-3">No sanding data.</td></tr>';
+
+  // Load NCG list
+  await loadNcgList();
+}
+async function loadNcgList(){
+  const line=document.getElementById('pr-line').value||null;
+  const from=document.getElementById('pr-from').value||null;
+  const reason=document.getElementById('pr-ncg-reason-filter').value||null;
+  const qs=(p,v)=>v?`${p}=${encodeURIComponent(v)}`:'';
+  const q=(parts)=>{const s=parts.filter(Boolean).join('&');return s?'?'+s:'';};
+  const rows=await api('/api/reports/ncg-list'+q([qs('line_id',line),qs('from_date',from),qs('reason_code',reason)])).catch(()=>[]);
+  const el=document.getElementById('pr-ncg-list');
+  if(!rows.length){el.innerHTML='<p class="text-muted small text-center py-3">No NCG batches found.</p>';return;}
+  el.innerHTML=rows.map(r=>`
+    <div class="card p-2 mb-2 border-warning">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <code class="text-primary">${r.batch_id}</code>
+          <span class="badge bg-warning text-dark ms-2">${r.ncg_reason_code||'—'}</span>
+          <span class="line-badge line-${r.line_id} ms-1">${r.line_id}</span>
+        </div>
+        <small class="text-muted">${r.production_date} ${r.shift}</small>
+      </div>
+      <div class="small mt-1">
+        <span class="text-muted">SKU:</span> <code>${r.sku_code||'—'}</code>
+        &nbsp;|&nbsp; <span class="text-danger fw-bold">${r.pcs_ncg||0} NCG</span>
+        &nbsp;|&nbsp; <span class="text-muted">Lam efficacy: ${r.lam_efficacy_pct!=null?r.lam_efficacy_pct+'%':'—'}</span>
+        &nbsp;|&nbsp; <span class="text-muted">Sand defects: ${r.sanding_defects!=null?r.sanding_defects:'—'}</span>
+      </div>
+      <div class="small text-muted mt-1">
+        Lam pairs: ${r.lam_pairs||'—'} &nbsp;|&nbsp; Repair: ${r.repair_pairs||'—'}
+        &nbsp;|&nbsp; Sanding op: ${r.sanding_operator||'—'} &nbsp;|&nbsp; HP op: ${r.hotpress_operator||'—'}
+      </div>
+    </div>`).join('');
+}
+
+// AI Chat for production reports
+let _prodAiHistory=[];
+function openProdAiChat(){
+  bootstrap.Collapse.getOrCreateInstance(document.getElementById('prod-ai-chat-panel')).show();
+  if(!_prodAiHistory.length){
+    document.getElementById('prod-ai-messages').innerHTML='<p class="text-muted small">Ask me anything about the production data — e.g. "Which sanding operator has the highest defect rate?" or "Is P01 performing worse than P02?"</p>';
+  }
+}
+async function sendProdAiMsg(){
+  const input=document.getElementById('prod-ai-input');
+  const msg=input.value.trim(); if(!msg)return;
+  input.value='';
+  _prodAiHistory.push({role:'user',content:msg});
+  const el=document.getElementById('prod-ai-messages');
+  el.innerHTML+=`<div class="mb-2"><span class="badge bg-primary">You</span> <span class="small">${msg}</span></div>`;
+  el.innerHTML+='<div id="ai-typing" class="text-muted small"><div class="spinner-border spinner-border-sm me-1"></div>Thinking...</div>';
+  el.scrollTop=el.scrollHeight;
+  try{
+    const line=document.getElementById('pr-line')?.value||null;
+    const r=await api('/api/production/ai/chat','POST',{messages:_prodAiHistory,line_id:line});
+    document.getElementById('ai-typing')?.remove();
+    _prodAiHistory.push({role:'assistant',content:r.reply});
+    el.innerHTML+=`<div class="mb-2 p-2 bg-white border rounded"><span class="badge bg-secondary">AI</span><div class="small mt-1">${(r.reply||'').replace(/\n/g,'<br>')}</div></div>`;
+    el.scrollTop=el.scrollHeight;
+  }catch(e){document.getElementById('ai-typing')?.remove();el.innerHTML+=`<div class="alert alert-danger small">${e.message}</div>`;}
+}
+
+// ── Router integration ─────────────────────────────────────────
+
+
 // ── Page loader registry ────────────────────────────────────
 Object.assign(PAGE_LOADERS, {
   'vcmx':                vcmxLoad,
@@ -5641,4 +6958,10 @@ Object.assign(PAGE_LOADERS, {
   'station-log':         loadStationLog,
   'glue-mix-station':    gmLoad,
   'station-tools':       stLoad,
+  'order-intake':        loadOrderIntake,
+  'line-board':          loadLineBoard,
+  'prod-flow':           loadKanban,
+  'prod-logs':           loadLogs,
+  'prod-reports':        () => { prSetPeriod(30); loadProdReports(); },
+  'forklift-report':     frptLoad,
 });
