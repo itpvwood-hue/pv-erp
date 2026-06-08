@@ -6948,6 +6948,1856 @@ async function sendProdAiMsg(){
 // ── Router integration ─────────────────────────────────────────
 
 
+
+
+// ════════════════════════════════════════════════════════════
+// Forklifts (SLH Forklifts tab)
+// ════════════════════════════════════════════════════════════
+// Material Shortfalls + FC Hub moved to /static/js/portal_planning.js
+// ══════════════════════════════════════════════════════════════
+// FORKLIFTS (Station Leader Hub → Forklifts tab)
+// ══════════════════════════════════════════════════════════════
+let _flkRows=[], _oilRows=[];
+const _OIL_BADGE_BG={PENDING:'warning text-dark',FULFILLED:'success',CANCELLED:'dark'};
+function _flkStatBadge(s){
+  const m={active:['success','Active'],maintenance:['warning text-dark','Maintenance'],retired:['secondary','Retired']};
+  const x=m[s]||['secondary',s]; return `<span class="badge bg-${x[0]}">${x[1]}</span>`;
+}
+
+async function flkLoad(){
+  try{
+    _flkRows = await api('/api/forklifts');
+    if(!Array.isArray(_flkRows)) _flkRows=[];
+    const tb=document.getElementById('flk-tbody');
+    if(!_flkRows.length){
+      tb.innerHTML='<tr><td colspan="8" class="text-center text-muted py-3">No forklifts registered yet.</td></tr>';
+    }else{
+      tb.innerHTML=_flkRows.map(f=>`<tr>
+        <td class="small fw-semibold">${f.code}${f.open_oil_requests?` <span class="badge bg-warning text-dark" title="Open oil request(s)"><i class="bi bi-droplet me-1"></i>${f.open_oil_requests}</span>`:''}</td>
+        <td class="small">${f.name||'—'}</td>
+        <td class="small">${f.dept||'—'}${f.production_line?' / '+f.production_line:''}</td>
+        <td class="small">${f.model||'—'}</td>
+        <td class="small">${f.fuel_type||'—'}</td>
+        <td class="text-end small">${f.hours_meter?Number(f.hours_meter).toLocaleString():'—'}</td>
+        <td>${_flkStatBadge(f.status)}</td>
+        <td class="text-end" style="white-space:nowrap">
+          <button class="btn btn-xs btn-outline-info text-info" title="Request oil" onclick="oilOpenNew(${f.id})"><i class="bi bi-droplet"></i></button>
+          <button class="btn btn-xs btn-outline-secondary" title="Edit" onclick='flkEdit(${JSON.stringify(f).replace(/'/g,"&apos;")})'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-xs btn-outline-danger" title="Retire" onclick="flkDelete(${f.id})"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join('');
+    }
+    // refresh oil request forklift dropdown
+    const sel=document.getElementById('oil-flk');
+    sel.innerHTML=_flkRows.filter(f=>f.status==='active').map(f=>
+      `<option value="${f.id}">${f.code} — ${f.name||''} (${f.dept||'—'}${f.production_line?' / '+f.production_line:''})</option>`).join('');
+    flkUpdateBadge();
+  }catch(e){
+    document.getElementById('flk-tbody').innerHTML=`<tr><td colspan="8" class="text-danger small p-3">${e.message||e}</td></tr>`;
+  }
+}
+
+function flkOpenNew(){
+  document.getElementById('flk-modal-title').textContent='Register Forklift';
+  ['flk-id','flk-code','flk-name','flk-line','flk-model','flk-hours','flk-notes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('flk-dept').value='';
+  document.getElementById('flk-status').value='active';
+  document.getElementById('flk-fuel').value='diesel';
+  new bootstrap.Modal(document.getElementById('flkModal')).show();
+}
+function flkEdit(f){
+  document.getElementById('flk-modal-title').textContent='Edit Forklift';
+  document.getElementById('flk-id').value=f.id;
+  document.getElementById('flk-code').value=f.code||'';
+  document.getElementById('flk-name').value=f.name||'';
+  document.getElementById('flk-dept').value=f.dept||'';
+  document.getElementById('flk-line').value=f.production_line||'';
+  document.getElementById('flk-model').value=f.model||'';
+  document.getElementById('flk-fuel').value=f.fuel_type||'diesel';
+  document.getElementById('flk-status').value=f.status||'active';
+  document.getElementById('flk-hours').value=f.hours_meter||'';
+  document.getElementById('flk-notes').value=f.notes||'';
+  new bootstrap.Modal(document.getElementById('flkModal')).show();
+}
+async function flkSubmit(){
+  const body={
+    id: Number(document.getElementById('flk-id').value)||null,
+    code: document.getElementById('flk-code').value.trim(),
+    name: document.getElementById('flk-name').value,
+    dept: document.getElementById('flk-dept').value,
+    production_line: document.getElementById('flk-line').value,
+    model: document.getElementById('flk-model').value,
+    fuel_type: document.getElementById('flk-fuel').value,
+    status: document.getElementById('flk-status').value,
+    hours_meter: Number(document.getElementById('flk-hours').value||0),
+    notes: document.getElementById('flk-notes').value,
+  };
+  if(!body.code){ alert('Code is required'); return; }
+  try{
+    await api('/api/forklifts','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('flkModal'))?.hide();
+    toast('Forklift saved');
+    flkLoad();
+  }catch(e){ alert('Save failed: '+(e.message||e)); }
+}
+async function flkDelete(id){
+  if(!confirm('Retire this forklift? (If it has any oil requests it will be marked retired rather than deleted.)')) return;
+  try{ await api('/api/forklifts/'+id,'DELETE'); flkLoad(); }
+  catch(e){ alert('Delete failed: '+(e.message||e)); }
+}
+
+async function oilLoad(){
+  const st=document.getElementById('oil-status-filter')?.value||'';
+  try{
+    _oilRows = await api('/api/forklifts/oil-requests'+(st?('?status='+st):''));
+    if(!Array.isArray(_oilRows)) _oilRows=[];
+    const tb=document.getElementById('oil-tbody');
+    if(!_oilRows.length){
+      tb.innerHTML='<tr><td colspan="6" class="text-center text-muted py-3">No oil requests.</td></tr>';
+    }else{
+      tb.innerHTML=_oilRows.map(r=>{
+        const stat = `<span class="badge bg-${_OIL_BADGE_BG[r.status]||'secondary'}">${r.status}</span>`;
+        const act = r.status==='PENDING'
+          ? `<button class="btn btn-xs btn-success" title="Mark fulfilled" onclick="oilFulfill(${r.id})"><i class="bi bi-check2"></i></button>
+             <button class="btn btn-xs btn-outline-secondary" title="Cancel" onclick="oilCancel(${r.id})"><i class="bi bi-x"></i></button>`
+          : '';
+        return `<tr>
+          <td class="small fw-semibold">${r.forklift_code}<br><span class="text-muted">${r.forklift_dept||''}${r.forklift_line?' / '+r.forklift_line:''}</span></td>
+          <td class="small">${r.oil_type}</td>
+          <td class="text-end">${Number(r.qty_litres).toFixed(1)} L</td>
+          <td class="small">${(r.requested_at||'').slice(0,16).replace('T',' ')}<br><span class="text-muted">${r.requested_by||''}</span></td>
+          <td>${stat}</td>
+          <td class="text-end" style="white-space:nowrap">${act}</td>
+        </tr>`;
+      }).join('');
+    }
+    flkUpdateBadge();
+  }catch(e){
+    document.getElementById('oil-tbody').innerHTML=`<tr><td colspan="6" class="text-danger small p-3">${e.message||e}</td></tr>`;
+  }
+}
+
+async function oilOpenNew(prefillId){
+  document.getElementById('oil-flk').value = prefillId || (_flkRows[0]?.id || '');
+  document.getElementById('oil-type').value='hydraulic';
+  document.getElementById('oil-qty').value='';
+  document.getElementById('oil-notes').value='';
+  document.getElementById('oil-prio-normal').checked = true;
+  // Fetch & display the warehouse refueling window
+  try{
+    const cfg = await api('/api/forklifts/refuel-config');
+    if(cfg){
+      document.getElementById('oil-window-hint').innerHTML =
+        `<i class="bi bi-info-circle me-1"></i>${cfg.description}`;
+    }
+  }catch{}
+  oilUpdateEtaHint();
+  // Live update when priority changes
+  document.querySelectorAll('input[name="oil-prio"]').forEach(el => el.onchange = oilUpdateEtaHint);
+  new bootstrap.Modal(document.getElementById('oilModal')).show();
+}
+
+function oilUpdateEtaHint(){
+  const prio = document.querySelector('input[name="oil-prio"]:checked')?.value || 'NORMAL';
+  const hint = document.getElementById('oil-eta-hint');
+  if(prio === 'URGENT'){
+    hint.innerHTML = '<span class="text-danger fw-semibold"><i class="bi bi-lightning-fill me-1"></i>Will appear at top of WH queue and be fulfilled as soon as possible.</span>';
+    return;
+  }
+  // Compute today vs tomorrow based on 10:30 cutoff
+  const now = new Date();
+  const cutoff = new Date(); cutoff.setHours(10,30,0,0);
+  const slot = new Date(); slot.setHours(11,0,0,0);
+  let when;
+  if(now > cutoff){
+    slot.setDate(slot.getDate()+1);
+    when = `tomorrow ${slot.toISOString().slice(0,10)} 11:00`;
+  }else{
+    when = `today 11:00`;
+  }
+  hint.innerHTML = `<i class="bi bi-calendar-check me-1"></i>Scheduled for the <b>${when}</b> refuel slot. Pick URGENT if you can't wait.`;
+}
+
+async function oilSubmit(){
+  const body={
+    forklift_id: Number(document.getElementById('oil-flk').value),
+    oil_type: document.getElementById('oil-type').value,
+    qty_litres: Number(document.getElementById('oil-qty').value||0),
+    priority: document.querySelector('input[name="oil-prio"]:checked')?.value || 'NORMAL',
+    notes: document.getElementById('oil-notes').value,
+  };
+  if(!body.forklift_id || body.qty_litres<=0){ alert('Forklift and positive litres required'); return; }
+  try{
+    const r = await api('/api/forklifts/oil-requests','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('oilModal'))?.hide();
+    const sched = (r?.scheduled_for||'').slice(0,16).replace('T',' ');
+    toast(`Oil request submitted (${body.priority}${sched?', scheduled '+sched:''})`, body.priority==='URGENT'?'warning':'success');
+    oilLoad(); flkLoad();
+  }catch(e){ alert('Submit failed: '+(e.message||e)); }
+}
+async function oilFulfill(id){
+  const q=prompt('Fulfilled litres? (leave blank to use the requested qty)','');
+  try{
+    await api(`/api/forklifts/oil-requests/${id}`,'PATCH',{
+      status:'FULFILLED', fulfilled_qty: q?Number(q):null});
+    oilLoad(); flkLoad();
+  }catch(e){ alert(e.message||e); }
+}
+async function oilCancel(id){
+  if(!confirm('Cancel this oil request?')) return;
+  try{ await api(`/api/forklifts/oil-requests/${id}`,'PATCH',{status:'CANCELLED'}); oilLoad(); flkLoad(); }
+  catch(e){ alert(e.message||e); }
+}
+
+function flkUpdateBadge(){
+  const n=(_oilRows||[]).filter(r=>r.status==='PENDING').length;
+  const b=document.getElementById('slh-forklift-badge');
+  if(b){ b.textContent=n; b.classList.toggle('d-none', n===0); }
+}
+
+
+// Forklift Refueling (warehouse) moved to /static/js/portal_warehouse.js
+
+// Forklift Dashboard + Oil drum stock moved to /static/js/portal_warehouse.js
+
+// Forklift Report (managerial reports & AI) moved to /static/js/portal_planning.js
+
+
+// ════════════════════════════════════════════════════════════
+// FC Material Check
+// ════════════════════════════════════════════════════════════
+// Kanban (prod-flow) moved to /static/js/portal_planning.js
+// ══════════════════════════════════════════════════════════
+// FC — MATERIAL CHECK
+// ══════════════════════════════════════════════════════════
+let _fcCurrentTab = 'prep';
+
+function fcSwitchTab(tab){
+  _fcCurrentTab = tab;
+  ['prep','stock'].forEach(t=>{
+    const tabEl  = document.getElementById(`fc-tab-${t}`);
+    const paneEl = document.getElementById(`fc-pane-${t}`);
+    if(tabEl)  tabEl.classList.toggle('active', t===tab);
+    if(paneEl) paneEl.classList.toggle('d-none', t!==tab);
+  });
+  if(tab==='stock') fcLoadStock();
+}
+
+function fcRefresh(){
+  // Inside FC Hub: load whichever pane the outer tabs currently show.
+  const outer = (typeof _fcHubTab !== 'undefined') ? _fcHubTab : null;
+  if(outer === 'inventory'){ fciSubReload(); }
+  else if(outer === 'check'){ loadFcPage(); }
+  else {
+    if(typeof loadFcPage === 'function') loadFcPage();
+    if(typeof fcLoadStock === 'function') fcLoadStock();
+  }
+}
+
+// FC Inventory sub-tabs (Stock / Requests / Movements)
+let _fciSubTab = 'stock';
+function fciSubSwitch(tab){
+  _fciSubTab = tab;
+  document.querySelectorAll('#fci-sub-tabs .nav-link').forEach(b =>
+    b.classList.toggle('active', b.dataset.fciSub === tab));
+  ['stock','requests','movements'].forEach(t => {
+    const el = document.getElementById('fci-sub-pane-' + t);
+    if(el) el.classList.toggle('d-none', t !== tab);
+  });
+  fciSubReload();
+}
+function fciSubReload(){
+  // fcLoadStock() fetches the grid AND fills the transfer list, the
+  // movement log, and the regrade log in one go, so a single call covers
+  // all three sub-tabs. Sub-tabs just toggle visibility on existing data.
+  if(typeof fcLoadStock === 'function') fcLoadStock();
+}
+
+async function loadFcPage(){
+  const batches=await api('/api/fc/batches').catch(()=>[]);
+  const el=document.getElementById('fc-batch-list');
+  if(!batches.length){
+    el.innerHTML='<p class="text-muted small p-2">No batches currently at FC.</p>';
+    document.getElementById('fc-detail').innerHTML=`<div class="text-center text-muted py-5"><i class="bi bi-check-circle-fill text-success" style="font-size:2.5rem"></i><p class="mt-3 fw-bold">FC is clear — no batches awaiting prep.</p></div>`;
+    return;
+  }
+  el.innerHTML=batches.map(b=>`
+    <div class="fc-batch-card" onclick="loadFcCheck(${b.prod_order_id},this)">
+      <div class="d-flex justify-content-between mb-1">
+        <span class="fw-bold small">${b.batch_number||'B#'+b.id}</span>
+        ${lineBadge(b.production_line)}
+      </div>
+      <div style="font-size:.78rem;font-weight:600">${b.product_name||''}</div>
+      <div class="text-muted" style="font-size:.72rem">${b.po_number||''} &mdash; ${b.customer||''}</div>
+      <div class="d-flex justify-content-between mt-1">
+        <small class="text-muted">${fmt(b.quantity)} pallet${b.quantity!=1?'s':''} &mdash; ${fmt((b.quantity||0)*(b.pallet_qty||1))} pcs</small>
+        <small class="text-muted">Order: ${fmt(b.order_qty)} plt / ${fmt((b.order_qty||0)*(b.pallet_qty||1))} pcs</small>
+      </div>
+    </div>`).join('');
+}
+
+// ── FC Inventory tab ──────────────────────────────────────────
+let _fcStockMats = [];
+
+let _fcTypeFilter = 'all'; // 'all' | 'veneer_sheet' | 'core_board'
+
+function fcSetTypeFilter(t){
+  _fcTypeFilter = t;
+  document.querySelectorAll('#fc-type-filter button').forEach(b=>b.classList.toggle('active', b.dataset.fcType===t));
+  fcRenderGrid();
+}
+
+function fcRenderGrid(){
+  const mats = _fcStockMats || [];
+  const grid = document.getElementById('fc-stock-grid');
+  if(!grid) return;
+  // Only items physically present at FC station (fc_stock > 0)
+  const inFc = mats.filter(m => (m.fc_stock || 0) > 0);
+  if(!inFc.length){
+    grid.innerHTML = '<div class="col-12 text-muted text-center py-4"><i class="bi bi-inbox me-2"></i>No materials currently at FC station. Use <b>Request from WH</b> to bring veneers or boards in.</div>';
+    const labelEl0 = document.getElementById('fc-stock-count-label');
+    if(labelEl0) labelEl0.innerHTML = '<b>0</b> at FC';
+    return;
+  }
+  // Apply user filters
+  const q = (document.getElementById('fc-stock-search')?.value || '').toLowerCase().trim();
+  const filtered = inFc.filter(m => {
+    if(_fcTypeFilter !== 'all' && m.type !== _fcTypeFilter) return false;
+    if(q && !((m.code||'').toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  // Update count label
+  const fcVeneers = inFc.filter(m=>m.type==='veneer_sheet').length;
+  const fcBoards = inFc.filter(m=>m.type==='core_board').length;
+  const labelEl = document.getElementById('fc-stock-count-label');
+  if(labelEl) labelEl.innerHTML = `<b>${filtered.length}</b> shown · ${fcVeneers} veneer${fcVeneers!==1?'s':''} · ${fcBoards} board${fcBoards!==1?'s':''} at FC`;
+
+  if(!filtered.length){
+    grid.innerHTML = '<div class="col-12 text-muted text-center py-4">No materials at FC match the current filters.</div>';
+    return;
+  }
+  const byType = {veneer_sheet: filtered.filter(m=>m.type==='veneer_sheet'),
+                  core_board: filtered.filter(m=>m.type==='core_board')};
+  let html = '';
+  [['veneer_sheet','Veneers','bi-layers','primary'],['core_board','Core Boards','bi-grid-3x3','secondary']].forEach(([type,label,icon,color])=>{
+    const items = byType[type] || [];
+    if(!items.length) return;
+    html += `<div class="col-12"><div class="fw-semibold small text-${color} mb-2 mt-2"><i class="bi ${icon} me-1"></i>${label} <span class="badge bg-${color} ms-1">${items.length}</span></div><div class="row g-2">`;
+    items.forEach(m=>{
+      const fcPct = m.wh_stock>0 ? Math.min(100,Math.round(m.fc_stock/(m.fc_stock+m.wh_stock)*100)) : (m.fc_stock>0?100:0);
+      const fcLow = m.fc_stock <= m.reorder_point && m.reorder_point > 0;
+      html += `<div class="col-md-4 col-lg-3">
+        <div class="card h-100 border-${m.fc_stock>0?color:'light'}" style="border-width:${m.fc_stock>0?'2px':'1px'}">
+          <div class="card-body py-2 px-3">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold small text-truncate" style="max-width:160px" title="${m.name}">${m.name}</div>
+                <code class="text-muted" style="font-size:.65rem">${m.code||'—'}</code>
+              </div>
+              <span class="badge ${m.fc_stock>0?'bg-'+color:'bg-light text-dark border'} ms-1" style="font-size:.65rem">
+                ${fmt(m.fc_stock)} ${m.unit}
+              </span>
+            </div>
+            <div class="mt-2">
+              <div class="d-flex justify-content-between small mb-1">
+                <span class="text-muted">FC Stock</span>
+                <span class="${fcLow?'text-danger fw-bold':''}">${fmt(m.fc_stock)} ${m.unit}${fcLow?' ⚠':''}</span>
+              </div>
+              <div class="progress mb-1" style="height:4px" title="FC vs WH split">
+                <div class="progress-bar bg-${color}" style="width:${fcPct}%"></div>
+              </div>
+              <div class="d-flex justify-content-between align-items-center small text-muted mt-1">
+                <span>WH: ${fmt(m.wh_stock)} ${m.unit}</span>
+                <div class="d-flex gap-1 flex-wrap">
+                  ${m.type==='veneer_sheet' && m.fc_stock>0 ? `
+                  <button class="btn btn-outline-warning btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
+                    title="Re-grade within FC station"
+                    onclick="fcOpenRegradeModal(${m.id},'prep')">Regrade</button>` : ''}
+                  ${m.fc_stock>0 ? `
+                  <button class="btn btn-outline-danger btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
+                    title="Request WH to pick up and return to WH stock"
+                    onclick="fcOpenReturnModal(${m.id})">↑WH</button>` : ''}
+                  <button class="btn btn-outline-${color} btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
+                    onclick="fcOpenTransferModal(${m.id})">↓Req</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    });
+    html += '</div></div>';
+  });
+  grid.innerHTML = html;
+}
+
+async function fcLoadStock(){
+  const [mats, transfers] = await Promise.all([
+    api('/api/fc/stock').catch(()=>[]),
+    api('/api/fc/transfer-requests').catch(()=>[]),
+  ]);
+  _fcStockMats = mats;
+
+  // Badge on tab
+  const fcCount = mats.filter(m=>m.fc_stock>0).length;
+  const badgeEl = document.getElementById('fc-stock-badge');
+  if(badgeEl) badgeEl.textContent = fcCount;
+
+  fcRenderGrid();
+
+  // Also load regrade log + unified movement log
+  fcLoadRegradeLog();
+  fcLoadMovements();
+
+  // Transfer requests
+  const list = document.getElementById('fc-transfer-list');
+  const active = transfers.filter(t=>['PENDING','PARTIAL'].includes(t.status));
+  if(!active.length){
+    list.innerHTML='<div class="text-muted small text-center py-2">No pending transfer requests.</div>';
+  } else {
+    const statusColor={PENDING:'warning',PARTIAL:'primary',FULFILLED:'success',CANCELLED:'secondary'};
+    list.innerHTML=active.map(t=>{
+      const remaining=t.qty_requested-t.qty_fulfilled;
+      const pct=Math.round((t.qty_fulfilled/t.qty_requested)*100);
+      return `<div class="card mb-2">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-start gap-3 flex-wrap">
+            <div style="flex:1;min-width:180px">
+              <code class="small text-warning">${t.request_id}</code>
+              <span class="badge bg-${statusColor[t.status]||'secondary'} ms-2 small">${t.status}</span>
+              <div class="fw-semibold small">${t.material_name||'—'} <span class="text-muted">(${t.unit||''})</span></div>
+              <div class="small text-muted">${t.notes||''}</div>
+            </div>
+            <div style="min-width:140px">
+              <div class="d-flex justify-content-between small mb-1">
+                <span>Transferred: ${t.qty_fulfilled} / ${t.qty_requested} ${t.unit||''}</span>
+                <span>${pct}%</span>
+              </div>
+              <div class="progress" style="height:5px">
+                <div class="progress-bar bg-success" style="width:${pct}%"></div>
+              </div>
+            </div>
+            ${t.status==='PENDING'?`<button class="btn btn-xs btn-outline-danger py-0 px-1" onclick="fcCancelTransfer('${t.request_id}')"><i class="bi bi-x"></i> Cancel</button>`:''}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function _fctrBuildOpts(mats){
+  return '<option value="">— Select veneer or board —</option>' +
+    mats.map(m=>`<option value="${m.id}" data-unit="${m.unit}" data-wh="${m.wh_stock}" data-cost="${m.unit_cost}">`+
+      `[${m.type==='veneer_sheet'?'Veneer':'Board'}] ${m.name}${m.code?' ('+m.code+')':''} — WH: ${fmt(m.wh_stock)} ${m.unit}`+
+    `</option>`).join('');
+}
+function fctrFilterMats(q){
+  const term = (q||'').trim().toLowerCase();
+  const mats = term
+    ? _fcStockMats.filter(m=>(m.code||'').toLowerCase().includes(term)||(m.name||'').toLowerCase().includes(term))
+    : _fcStockMats;
+  document.getElementById('fctr-material-id').innerHTML = _fctrBuildOpts(mats);
+  fctrOnMatSelect();
+}
+async function fcOpenTransferModal(preselectedId){
+  if(!_fcStockMats.length) _fcStockMats = await api('/api/fc/stock').catch(()=>[]);
+  document.getElementById('fctr-mat-search').value = '';
+  const sel = document.getElementById('fctr-material-id');
+  sel.innerHTML = _fctrBuildOpts(_fcStockMats);
+  if(preselectedId){
+    sel.value = preselectedId;
+    fctrOnMatSelect();
+  } else {
+    document.getElementById('fctr-wh-stock-note').textContent='';
+    document.getElementById('fctr-unit-label').textContent='unit';
+    document.getElementById('fctr-cost-note').textContent='';
+  }
+  document.getElementById('fctr-qty').value='';
+  document.getElementById('fctr-notes').value='';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('fcTransferModal')).show();
+}
+
+function fctrOnMatSelect(){
+  const sel = document.getElementById('fctr-material-id');
+  const opt = sel.options[sel.selectedIndex];
+  const unit = opt?.dataset?.unit||'unit';
+  const wh = parseFloat(opt?.dataset?.wh||0);
+  document.getElementById('fctr-unit-label').textContent = unit;
+  document.getElementById('fctr-wh-stock-note').textContent = opt?.value ? `WH available: ${fmt(wh)} ${unit}` : '';
+  fctrOnQtyInput();
+}
+
+function fctrOnQtyInput(){
+  const sel = document.getElementById('fctr-material-id');
+  const opt = sel.options[sel.selectedIndex];
+  const qty = parseFloat(document.getElementById('fctr-qty').value)||0;
+  const cost = parseFloat(opt?.dataset?.cost||0);
+  document.getElementById('fctr-cost-note').textContent =
+    qty>0&&cost>0 ? `Est. value: ฿${(qty*cost).toFixed(2)}` : '';
+}
+
+async function fctrSubmit(){
+  const matId = parseInt(document.getElementById('fctr-material-id').value);
+  const qty = parseFloat(document.getElementById('fctr-qty').value)||0;
+  if(!matId||qty<=0){toast('Select a material and enter quantity','warning');return;}
+  const body = {material_id:matId, qty_requested:qty,
+    notes:document.getElementById('fctr-notes').value||null,
+    priority:parseInt(document.getElementById('fctr-priority')?.value)||2,
+    needed_by:document.getElementById('fctr-needed-by')?.value||null,
+    needed_time:document.getElementById('fctr-needed-time')?.value||null};
+  try{
+    await api('/api/fc/transfer-requests','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('fcTransferModal')).hide();
+    toast('Transfer request submitted to Warehouse');
+    fcLoadStock();
+  }catch(e){toast(e.message,'danger');}
+}
+
+async function fcCancelTransfer(rid){
+  if(!confirm('Cancel this transfer request?')) return;
+  try{
+    await api(`/api/fc/transfer-requests/${rid}/cancel`,'PATCH');
+    toast('Cancelled');
+    fcLoadStock();
+  }catch(e){toast(e.message,'danger');}
+}
+
+// ── Veneer Re-grade Modal ──────────────────────────────────────
+// _rgrAllVeneers: cached full veneer list for regrade target dropdown
+let _rgrAllVeneers = [];
+
+/**
+ * Open the re-grade modal.
+ * @param {number|null} preselectedId  - material id to pre-select as source (from a card button)
+ * @param {string} mode                - 'prep' (fc→fc, for future orders) | 'return' (fc→wh)
+ */
+async function fcOpenRegradeModal(preselectedId=null, mode='return'){
+  // Always refresh fc stock for accurate source options
+  _fcStockMats = await api('/api/fc/stock').catch(()=>[]);
+  const fcVeneers = _fcStockMats.filter(m=>m.type==='veneer_sheet');
+
+  // Fetch all veneers for target dropdown (any grade in system can receive a regrade)
+  _rgrAllVeneers = await api('/api/materials?type=veneer_sheet').catch(()=>fcVeneers);
+
+  // Build source options (only veneers with FC stock > 0)
+  const buildSourceOpts = (items, selectedId) => items.map(m=>`
+    <option value="${m.id}"
+      data-fc="${m.fc_stock||0}" data-wh="${m.wh_stock||0}"
+      data-unit="${m.unit||'pcs'}" data-species="${m.species||''}" data-grade="${m.grade||''}"
+      ${Number(m.id)===Number(selectedId)?'selected':''}>
+      ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(m.fc_stock||0)} WH:${fmt(m.wh_stock||0)}
+    </option>`).join('');
+
+  // Build target options — sort same-species to top when preselecting
+  const renderTargetOpts = arr => arr.map(m=>{
+    const wh = m.wh_stock??m.current_stock??0;
+    const fc = m.fc_stock??0;
+    return `<option value="${m.id}"
+      data-wh="${wh}" data-fc="${fc}" data-unit="${m.unit||'pcs'}"
+      data-species="${m.species||''}" data-grade="${m.grade||''}">
+      ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}
+    </option>`;
+  }).join('');
+  const buildTargetOpts = (items, filterSpecies='') => {
+    const same  = filterSpecies ? items.filter(m=>(m.species||'')===(filterSpecies)) : [];
+    const other = filterSpecies ? items.filter(m=>(m.species||'')!==(filterSpecies)) : items;
+    if(same.length && other.length)
+      return `<optgroup label="— Same species (${filterSpecies}) —">${renderTargetOpts(same)}</optgroup>`
+           + `<optgroup label="— Other species —">${renderTargetOpts(other)}</optgroup>`;
+    return renderTargetOpts(items);
+  };
+
+  // Get species of preselected source for smart target sorting
+  const preselectedMat = preselectedId ? fcVeneers.find(m=>m.id===preselectedId) : null;
+  const preSpecies = preselectedMat?.species || '';
+
+  document.getElementById('rgr-from-mat').innerHTML =
+    '<option value="">— Select source veneer —</option>' + buildSourceOpts(fcVeneers, preselectedId);
+
+  const targetPool = _rgrAllVeneers.length ? _rgrAllVeneers : fcVeneers;
+  document.getElementById('rgr-to-mat').innerHTML =
+    '<option value="">— Select target grade —</option>' + buildTargetOpts(targetPool, preSpecies);
+
+  // Set mode defaults
+  const toLoc = document.getElementById('rgr-to-loc');
+  const fromLoc = document.getElementById('rgr-from-loc');
+  fromLoc.value = 'fc_station';
+  toLoc.value = mode === 'prep' ? 'fc_station' : 'main_warehouse';
+
+  // Update modal title + context hint
+  const modeHint = document.getElementById('rgr-mode-hint');
+  if(modeHint){
+    if(mode==='prep'){
+      modeHint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Regraded veneers stay in FC stock — ready for future order allocations.';
+      modeHint.className = 'alert alert-primary py-1 small mb-3';
+    } else {
+      modeHint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Regraded veneers return to main Warehouse stock after quality re-classification.';
+      modeHint.className = 'alert alert-info py-1 small mb-3';
+    }
+  }
+
+  // Trigger from-stock display if preselected
+  document.getElementById('rgr-from-stock').textContent='';
+  document.getElementById('rgr-to-stock').textContent='';
+  if(preselectedMat){
+    document.getElementById('rgr-qty-unit').textContent = preselectedMat.unit||'pcs';
+    document.getElementById('rgr-from-stock').textContent =
+      `FC stock: ${fmt(preselectedMat.fc_stock||0)} | WH stock: ${fmt(preselectedMat.wh_stock||0)} ${preselectedMat.unit||'pcs'}`;
+  } else {
+    document.getElementById('rgr-qty-unit').textContent='pcs';
+  }
+  document.getElementById('rgr-qty').value='';
+  document.getElementById('rgr-notes').value='';
+  document.getElementById('rgr-summary').style.display='none';
+
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('fcRegradeModal')).show();
+}
+
+function rgrOnFromChange(){
+  const sel = document.getElementById('rgr-from-mat');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('rgr-qty-unit').textContent = opt?.dataset?.unit||'pcs';
+  document.getElementById('rgr-from-stock').textContent = opt?.value
+    ? `FC stock: ${fmt(opt.dataset.fc||0)} | WH stock: ${fmt(opt.dataset.wh||0)} ${opt.dataset.unit||'pcs'}`
+    : '';
+  // Re-sort target dropdown to show same species at top
+  if(opt?.value && opt.dataset.species){
+    const targetPool = _rgrAllVeneers.length ? _rgrAllVeneers : _fcStockMats.filter(m=>m.type==='veneer_sheet');
+    const species = opt.dataset.species;
+    const same  = targetPool.filter(m=>(m.species||'')===species);
+    const other = targetPool.filter(m=>(m.species||'')!==species);
+    const renderOpt = m => {
+      const wh=m.wh_stock??m.current_stock??0; const fc=m.fc_stock??0;
+      return `<option value="${m.id}" data-wh="${wh}" data-fc="${fc}" data-unit="${m.unit||'pcs'}" data-species="${m.species||''}" data-grade="${m.grade||''}">
+        ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}</option>`;
+    };
+    const toSel = document.getElementById('rgr-to-mat');
+    const currentToVal = toSel.value;
+    let html = '<option value="">— Select target grade —</option>';
+    if(same.length && other.length){
+      html += `<optgroup label="— Same species (${species}) —">${same.map(renderOpt).join('')}</optgroup>`
+            + `<optgroup label="— Other species —">${other.map(renderOpt).join('')}</optgroup>`;
+    } else {
+      html += targetPool.map(renderOpt).join('');
+    }
+    toSel.innerHTML = html;
+    if(currentToVal) toSel.value = currentToVal; // restore previous selection if still valid
+  }
+  rgrUpdateSummary();
+}
+
+function rgrOnToChange(){
+  const sel = document.getElementById('rgr-to-mat');
+  const opt = sel.options[sel.selectedIndex];
+  if(!opt?.value){ document.getElementById('rgr-to-stock').textContent=''; rgrUpdateSummary(); return; }
+  const unit = opt.dataset.unit||'pcs';
+  // Regrade always stays in FC station
+  document.getElementById('rgr-to-stock').textContent =
+    `Current FC stock: ${fmt(opt.dataset.fc||0)} ${unit}`;
+  rgrUpdateSummary();
+}
+
+function rgrUpdateSummary(){
+  const fromSel = document.getElementById('rgr-from-mat');
+  const toSel   = document.getElementById('rgr-to-mat');
+  const fromOpt = fromSel.options[fromSel.selectedIndex];
+  const toOpt   = toSel.options[toSel.selectedIndex];
+  const qty     = parseFloat(document.getElementById('rgr-qty').value)||0;
+  const sumEl   = document.getElementById('rgr-summary');
+  const sumTxt  = document.getElementById('rgr-summary-text');
+  if(!fromOpt?.value || !toOpt?.value || !qty){ sumEl.style.display='none'; return; }
+  sumEl.style.display='';
+  // Regrade always operates within FC Station stock
+  sumTxt.innerHTML = `
+    <span class="text-danger">−${fmt(qty)} from <b>${fromOpt.text?.split('—')[0]?.trim()||'?'}</b> (FC Station)</span><br>
+    <span class="text-success">+${fmt(qty)} to <b>${toOpt.text?.split('—')[0]?.trim()||'?'}</b> (FC Station)</span>
+  `;
+}
+
+async function rgrSubmit(){
+  const fromId = parseInt(document.getElementById('rgr-from-mat').value)||0;
+  const toId   = parseInt(document.getElementById('rgr-to-mat').value)||0;
+  const qty    = parseFloat(document.getElementById('rgr-qty').value)||0;
+  const notes  = document.getElementById('rgr-notes').value;
+
+  if(!fromId||!toId||qty<=0){ toast('Fill in all required fields','warning'); return; }
+  if(fromId===toId){ toast('Source and target must be different materials','warning'); return; }
+
+  try{
+    await api('/api/fc/regrade','POST',{
+      from_material_id:fromId, to_material_id:toId, qty,
+      notes:notes||null,
+    });
+    bootstrap.Modal.getInstance(document.getElementById('fcRegradeModal')).hide();
+    toast(`Re-grade recorded — ${fmt(qty)} units moved in FC stock`);
+    fcLoadStock();
+  }catch(e){ toast(e.message,'danger'); }
+}
+
+async function fcLoadRegradeLog(){
+  const log = await api('/api/fc/regrade-log?limit=20').catch(()=>[]);
+  const el = document.getElementById('fc-regrade-log');
+  if(!el) return;
+  if(!log.length){
+    el.innerHTML='<div class="text-muted small text-center py-2">No re-grade records yet.</div>';
+    return;
+  }
+  const locLabel = l => l==='fc_station'?'FC':'WH';
+  el.innerHTML = `<div class="table-responsive"><table class="table table-sm table-hover mb-0" style="font-size:.78rem">
+    <thead class="table-light"><tr>
+      <th>Record</th><th>From</th><th>To</th><th class="text-end">Qty</th><th>Route</th><th>By</th><th>Date</th>
+    </tr></thead>
+    <tbody>
+    ${log.map(r=>`<tr>
+      <td><code style="font-size:.7rem">${r.record_id}</code></td>
+      <td>
+        <span class="text-danger fw-semibold">${r.from_species||''} ${r.from_grade?'['+r.from_grade+']':''}</span>
+        <br><span class="text-muted" style="font-size:.7rem">${r.from_material_name||''}</span>
+      </td>
+      <td>
+        <span class="text-success fw-semibold">${r.to_species||''} ${r.to_grade?'['+r.to_grade+']':''}</span>
+        <br><span class="text-muted" style="font-size:.7rem">${r.to_material_name||''}</span>
+      </td>
+      <td class="text-end fw-bold">${fmt(r.qty)}</td>
+      <td><span class="badge bg-secondary" style="font-size:.6rem">${locLabel(r.from_location)}→${locLabel(r.to_location)}</span></td>
+      <td class="small text-muted">${r.graded_by_name||r.graded_by||'—'}</td>
+      <td class="small text-muted">${(r.created_at||'').slice(0,10)}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+async function fcLoadMovements(){
+  const el=document.getElementById('fc-movement-log');
+  if(!el) return;
+  const kind=document.getElementById('fc-mvmt-filter')?.value||'';
+  const matType=document.getElementById('fc-mvmt-type')?.value||'';
+  const q=matType?`?material_type=${matType}&limit=80`:'?limit=80';
+  let rows=await api('/api/fc/movements'+q).catch(()=>[]);
+  if(kind) rows=rows.filter(r=>r.kind===kind);
+  if(!rows.length){
+    el.innerHTML='<div class="text-muted small text-center py-3">No FC movements yet matching filters.</div>';
+    return;
+  }
+  // Color/icon per kind
+  const meta={
+    TRANSFER_IN:   {icon:'bi-box-arrow-in-down', color:'success', label:'Transfer In',     dir:'WH → FC'},
+    RETURN_TO_WH:  {icon:'bi-box-arrow-up',      color:'danger',  label:'Return to WH',    dir:'FC → WH'},
+    REGRADE:       {icon:'bi-arrow-left-right',  color:'warning', label:'Regrade',         dir:'FC ⇄ FC'},
+    RELEASE_TO_LAM:{icon:'bi-arrow-right-circle',color:'primary', label:'Released to Lam', dir:'FC → Laminating'},
+  };
+  const typeBadge=t=>{
+    if(t==='veneer_sheet') return '<span class="badge bg-success-subtle text-success border border-success" style="font-size:.6rem">Veneer</span>';
+    if(t==='core_board') return '<span class="badge bg-secondary-subtle text-secondary border border-secondary" style="font-size:.6rem">Board</span>';
+    if(t==='batch') return '<span class="badge bg-info-subtle text-info border border-info" style="font-size:.6rem">Batch</span>';
+    return '';
+  };
+  el.innerHTML=`<div class="table-responsive"><table class="table table-sm table-hover mb-0" style="font-size:.78rem">
+    <thead class="table-light"><tr>
+      <th style="width:130px">When</th>
+      <th style="width:140px">Kind</th>
+      <th>Material / Batch</th>
+      <th style="width:80px">Type</th>
+      <th class="text-end" style="width:100px">Qty</th>
+      <th style="width:140px">Direction</th>
+      <th style="width:120px">By</th>
+      <th>Notes</th>
+    </tr></thead>
+    <tbody>
+    ${rows.map(r=>{
+      const m=meta[r.kind]||{icon:'bi-circle',color:'secondary',label:r.kind,dir:''};
+      const ts=(r.ts||'').replace('T',' ').slice(0,16);
+      return `<tr>
+        <td class="small text-muted">${ts}</td>
+        <td><i class="bi ${m.icon} text-${m.color} me-1"></i><span class="badge bg-${m.color}-subtle text-${m.color} border border-${m.color}" style="font-size:.65rem">${m.label}</span></td>
+        <td>
+          <div class="fw-semibold small text-truncate" style="max-width:300px" title="${(r.material_name||'').replace(/"/g,'&quot;')}">${r.material_name||'—'}</div>
+          ${r.material_code?`<code style="font-size:.65rem">${r.material_code}</code>`:''} ${r.ref?`<span class="text-muted small ms-1">${r.ref}</span>`:''}
+        </td>
+        <td>${typeBadge(r.material_type)}</td>
+        <td class="text-end fw-bold">${fmt(r.qty)} ${r.unit||''}</td>
+        <td class="small text-muted">${r.from_loc||''} → ${r.to_loc||''}</td>
+        <td class="small text-muted">${r.actor||r.requested_by||'—'}</td>
+        <td class="small text-muted text-truncate" style="max-width:200px" title="${(r.notes||'').replace(/"/g,'&quot;')}">${r.notes||''}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+async function loadFcCheck(prodOrderId, card){
+  document.querySelectorAll('.fc-batch-card').forEach(c=>c.classList.remove('active'));
+  if(card) card.classList.add('active');
+  const det=document.getElementById('fc-detail');
+  det.innerHTML='<p class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Checking materials...</p>';
+  try{
+    const data=await api(`/api/fc/material-check/${prodOrderId}`);
+    const o=data.order;
+    const reqs=data.requirements||[];
+    const allOk=data.all_ok;
+    const opts=data.veneer_options||[];
+    window._fcVeneerOpts = opts;          // cache for allocator row builder
+    _allocRowCounts = {face:1, back:1};   // reset row counters for new order
+    const confirmed=o.fc_confirmed===1||o.fc_confirmed===true;
+
+    // Separate BOM rows by veneer_role
+    const faceRows=reqs.filter(r=>r.veneer_role==='face');
+    const backRows=reqs.filter(r=>r.veneer_role==='back');
+    const otherRows=reqs.filter(r=>!r.veneer_role);
+
+    const matTable=(rows,label)=>{
+      if(!rows.length) return '';
+      const roleColor={face:'#dbeafe',back:'#fce7f3','':'#f8fafc'}[rows[0].veneer_role||''];
+      return `<div class="mb-3">
+        <div class="fw-bold small mb-1" style="color:#374151">${label}</div>
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light"><tr>
+            <th>Material</th><th>Code</th><th>Required</th><th>Available</th><th>Status</th><th>Grade Sub / Note</th>
+          </tr></thead>
+          <tbody>
+          ${rows.map(r=>`<tr class="mat-row ${r.status}" style="background:${roleColor}">
+            <td><small class="fw-bold">${r.material_name}</small><br><small class="text-muted">${r.supplier||''}</small></td>
+            <td><code style="font-size:.7rem">${r.material_code||'—'}</code></td>
+            <td><small class="fw-bold">${fmt(r.required_qty)} ${r.unit}</small><br><small class="text-muted">waste ${Math.round((r.waste_factor||0)*100)}%</small></td>
+            <td><small class="${r.available_qty<r.required_qty?'text-danger fw-bold':''}">${fmt(r.available_qty)} ${r.unit}</small>
+              ${r.stock_location==='fc_station'?'<br><span class="badge bg-info text-dark" style="font-size:.55rem">FC Station</span>':'<br><span class="badge bg-secondary" style="font-size:.55rem">WH</span>'}
+              ${r.shortfall>0?`<br><small class="text-danger">-${fmt(r.shortfall)} SHORT</small>`:''}</td>
+            <td><span class="status-pill ${r.status}">${r.status==='ok'?'✓ OK':r.status==='low'?'⚠ LOW':'✗ SHORT'}</span></td>
+            <td><input class="form-control form-control-sm" style="min-width:140px" placeholder="Grade sub / note…" id="gn-${r.material_id}"></td>
+          </tr>`).join('')}
+          </tbody>
+        </table></div>`;
+    };
+
+    // Grade-mix allocator builder
+    const existingFace = (data.existing_alloc||[]).filter(a=>a.side==='face');
+    const existingBack  = (data.existing_alloc||[]).filter(a=>a.side==='back');
+
+    const allocatorHtml=(side, label, requiredQty, existing)=>{
+      const sideId = `alloc-${side}`;
+      const noOpts = !opts.length;
+      return `<div class="mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label fw-bold small mb-0">${label}
+            <span class="badge bg-info text-dark ms-1" style="font-size:.6rem">FC Stock</span>
+          </label>
+          <span class="small text-muted">BOM requires <b>${fmt(requiredQty)}</b> pcs</span>
+        </div>
+        ${noOpts?`<div class="alert alert-warning py-1 small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>No veneers in FC station stock — request a transfer from WH first.</div>`:''}
+        <div id="${sideId}-rows" class="mb-2">
+          ${existing.length ? existing.map((e,i)=>allocRowHtml(side,i,e.material_id,e.qty_allocated)).join('') : allocRowHtml(side,0,null,null)}
+        </div>
+        <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem"
+          onclick="allocAddRow('${side}')"><i class="bi bi-plus me-1"></i>Add another grade</button>
+        <div class="d-flex justify-content-between align-items-center mt-2">
+          <span class="small text-muted">Total allocated: <b id="${sideId}-total">0</b> pcs</span>
+          <span class="small" id="${sideId}-status"></span>
+        </div>
+      </div>`;
+    };
+
+    const allocRowHtml=(side,idx,matId,qty)=>{
+      const selOpts = opts.map(v=>`<option value="${v.id}" data-fc="${v.fc_stock}" data-unit="${v.unit}"
+        data-species="${v.species||''}" data-grade="${v.grade||''}"
+        ${v.id==matId?'selected':''}>${v.species?v.species+' ':''}${v.grade?'['+v.grade+'] ':''}${v.name}${v.code?' ('+v.code+')':''} — ${fmt(v.fc_stock)} FC</option>`).join('');
+      return `<div class="d-flex gap-2 mb-1 align-items-center" id="alloc-${side}-row-${idx}">
+        <select class="form-select form-select-sm" style="flex:1"
+          id="alloc-${side}-mat-${idx}" onchange="allocUpdateTotal('${side}')">
+          <option value="">— select grade —</option>${selOpts}
+        </select>
+        <input type="number" class="form-control form-control-sm" style="width:90px"
+          id="alloc-${side}-qty-${idx}" value="${qty||''}" min="0.01" step="1"
+          placeholder="qty" oninput="allocUpdateTotal('${side}')">
+        <span class="small text-muted" id="alloc-${side}-avail-${idx}" style="min-width:60px;font-size:.7rem"></span>
+        ${idx>0?`<button class="btn btn-xs btn-outline-danger py-0 px-1"
+          onclick="allocRemoveRow('${side}',${idx})"><i class="bi bi-x"></i></button>`:'<div style="width:26px"></div>'}
+      </div>`;
+    };
+
+    det.innerHTML=`
+      <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+          <h5 class="mb-1">${o.product_name} <span class="text-muted fw-normal">(${o.product_sku||''})</span></h5>
+          <small class="text-muted">${o.prod_order_number||'Order #'+o.id} &mdash; ${o.po_number||''} &mdash; ${o.customer||''}</small>
+          <div class="mt-1">${lineBadge(o.production_line)} <span class="ms-2 badge bg-secondary">${fmt(o.quantity)} pallet${o.quantity!=1?'s':''} ordered (${fmt((o.quantity||0)*(o.pallet_qty||1))} pcs)</span>
+            ${confirmed?'<span class="ms-2 badge bg-success"><i class="bi bi-check-circle me-1"></i>FC Confirmed</span>':''}</div>
+        </div>
+        <span class="badge ${!reqs.length?'bg-secondary':allOk?'bg-success':'bg-danger'} fs-6">${!reqs.length?'NO BOM':allOk?'MATERIALS OK':'ACTION NEEDED'}</span>
+      </div>
+
+      ${!reqs.length?`<div class="alert alert-warning"><i class="bi bi-exclamation-triangle-fill me-2"></i><b>No BOM entries found.</b> Set up the BOM for this product first, then return here to check materials.<br><small class="text-muted">Go to <b>BOM</b> in the main menu → select the product → add materials.</small></div>`:`
+        ${matTable(faceRows,'<i class="bi bi-circle-fill text-primary me-1"></i>Face Veneer')}
+        ${matTable(backRows,'<i class="bi bi-circle text-info me-1"></i>Back Veneer')}
+        ${matTable(otherRows,'<i class="bi bi-box me-1 text-secondary"></i>Other Materials (Adhesive / Core / Banding)')}
+      `}
+
+      ${faceRows.length||backRows.length||opts.length?`
+      <div class="card p-3 mb-3 border-primary" style="background:#e8f3e8">
+        <div class="fw-bold mb-3"><i class="bi bi-check2-square me-1 text-primary"></i>Confirm Veneer Grade Mix for Production
+          <span class="badge bg-info text-dark ms-2" style="font-size:.65rem">Multi-grade allowed</span>
+        </div>
+        <div class="small text-muted mb-3">
+          Enter exact quantities per grade below. Totals don't need to match BOM exactly — FC may use grade substitutions. Confirming deducts from FC stock.
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            ${allocatorHtml('face','<i class="bi bi-circle-fill text-primary me-1"></i>Face Veneer',
+              faceRows.reduce((s,r)=>s+r.required_qty,0)||0, existingFace)}
+          </div>
+          <div class="col-md-6">
+            ${allocatorHtml('back','<i class="bi bi-circle text-info me-1"></i>Back Veneer',
+              backRows.reduce((s,r)=>s+r.required_qty,0)||0, existingBack)}
+          </div>
+        </div>
+      </div>`:''}
+
+      <div class="d-flex gap-2 mt-2 flex-wrap">
+        <button class="btn btn-sm btn-success" onclick="confirmFcRelease(${prodOrderId})">
+          <i class="bi bi-check-circle me-1"></i>${confirmed?'Update & Re-release to Laminating':'Confirm Materials & Release to Laminating'}
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadFcCheck(${prodOrderId},null)"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+      </div>`;
+  }catch(e){det.innerHTML=`<div class="alert alert-danger">${e.message}</div>`;}
+}
+
+// ── Grade-mix allocator helpers ───────────────────────────────
+let _allocRowCounts = {face:1, back:1};
+
+function allocRowHtml(side, idx, matId, qty){
+  const opts = window._fcVeneerOpts || [];
+  const selOpts = opts.map(v=>`<option value="${v.id}" data-fc="${v.fc_stock}" data-unit="${v.unit}"
+    data-species="${v.species||''}" data-grade="${v.grade||''}"
+    ${Number(v.id)===Number(matId)?'selected':''}>${v.species?v.species+' ':''}${v.grade?'['+v.grade+'] ':''}${v.name}${v.code?' ('+v.code+')':''} — ${fmt(v.fc_stock)} FC</option>`).join('');
+  return `<div class="d-flex gap-2 mb-1 align-items-center" id="alloc-${side}-row-${idx}">
+    <select class="form-select form-select-sm" style="flex:1"
+      id="alloc-${side}-mat-${idx}" onchange="allocUpdateTotal('${side}');allocShowAvail('${side}',${idx})">
+      <option value="">— select grade —</option>${selOpts}
+    </select>
+    <input type="number" class="form-control form-control-sm" style="width:90px"
+      id="alloc-${side}-qty-${idx}" value="${qty||''}" min="0.01" step="1"
+      placeholder="qty" oninput="allocUpdateTotal('${side}')">
+    <span class="small text-muted" id="alloc-${side}-avail-${idx}" style="min-width:60px;font-size:.7rem;white-space:nowrap"></span>
+    ${idx>0?`<button class="btn btn-xs btn-outline-danger py-0 px-1"
+      onclick="allocRemoveRow('${side}',${idx})"><i class="bi bi-x"></i></button>`:'<div style="width:26px"></div>'}
+  </div>`;
+}
+
+function allocAddRow(side){
+  const count = _allocRowCounts[side] || 1;
+  const container = document.getElementById(`alloc-${side}-rows`);
+  if(!container) return;
+  const div = document.createElement('div');
+  div.innerHTML = allocRowHtml(side, count, null, null);
+  container.appendChild(div.firstElementChild);
+  _allocRowCounts[side] = count + 1;
+}
+
+function allocRemoveRow(side, idx){
+  const row = document.getElementById(`alloc-${side}-row-${idx}`);
+  if(row) row.remove();
+  allocUpdateTotal(side);
+}
+
+function allocShowAvail(side, idx){
+  const sel = document.getElementById(`alloc-${side}-mat-${idx}`);
+  const opt = sel?.options[sel.selectedIndex];
+  const avail = document.getElementById(`alloc-${side}-avail-${idx}`);
+  if(avail && opt?.value) avail.textContent = `avail: ${fmt(opt.dataset.fc||0)}`;
+  else if(avail) avail.textContent = '';
+}
+
+function allocUpdateTotal(side){
+  const rows = document.querySelectorAll(`[id^="alloc-${side}-row-"]`);
+  let total = 0;
+  rows.forEach(row=>{
+    const idx = row.id.split('-').pop();
+    const qty = parseFloat(document.getElementById(`alloc-${side}-qty-${idx}`)?.value)||0;
+    total += qty;
+    allocShowAvail(side, idx);
+  });
+  const totalEl = document.getElementById(`alloc-${side}-total`);
+  if(totalEl) totalEl.textContent = fmt(total);
+}
+
+function allocGetLines(side){
+  const rows = document.querySelectorAll(`[id^="alloc-${side}-row-"]`);
+  const lines = [];
+  rows.forEach(row=>{
+    const idx = row.id.split('-').pop();
+    const matId = parseInt(document.getElementById(`alloc-${side}-mat-${idx}`)?.value)||0;
+    const qty = parseFloat(document.getElementById(`alloc-${side}-qty-${idx}`)?.value)||0;
+    if(matId && qty > 0) lines.push({material_id: matId, qty_allocated: qty});
+  });
+  return lines;
+}
+
+async function confirmFcRelease(prodOrderId){
+  const faceAlloc = allocGetLines('face');
+  const backAlloc  = allocGetLines('back');
+
+  if(!faceAlloc.length && !backAlloc.length){
+    toast('Please allocate at least one veneer grade before confirming','warning');
+    return;
+  }
+
+  // Build human-readable notes for the batch move
+  const allocLabel = (alloc) => alloc.map(a=>{
+    const sel = document.querySelector(`[id^="alloc-face-mat-"], [id^="alloc-back-mat-"]`);
+    return `${a.qty_allocated} pcs`;
+  }).join(', ');
+
+  const faceNotes = faceAlloc.map(a=>{
+    const opt = document.querySelector(`#alloc-face-mat-${faceAlloc.indexOf(a)}`);
+    return opt ? `${opt.options[opt.selectedIndex]?.text?.split('—')[0]?.trim()||'?'}: ${a.qty_allocated}` : `mat#${a.material_id}: ${a.qty_allocated}`;
+  }).join(' | ');
+  const backNotes = backAlloc.map(a=>{
+    const opt = document.querySelector(`#alloc-back-mat-${backAlloc.indexOf(a)}`);
+    return opt ? `${opt.options[opt.selectedIndex]?.text?.split('—')[0]?.trim()||'?'}: ${a.qty_allocated}` : `mat#${a.material_id}: ${a.qty_allocated}`;
+  }).join(' | ');
+
+  try{
+    // Save grade-mix allocation (deducts fc_stock)
+    await api(`/api/production-orders/${prodOrderId}/veneer-allocation`, 'POST', {
+      face_alloc: faceAlloc,
+      back_alloc:  backAlloc,
+      deduct_fc_stock: true,
+    });
+
+    // Find batch at FC and move to laminating
+    const batches = await api('/api/fc/batches').catch(()=>[]);
+    const b = batches.find(x=>x.prod_order_id===prodOrderId);
+    if(!b){ toast('No batch at FC for this order','danger'); return; }
+
+    const moveNotes = [
+      faceAlloc.length ? `Face: ${faceNotes}` : '',
+      backAlloc.length  ? `Back: ${backNotes}` : '',
+    ].filter(Boolean).join(' || ');
+
+    await api(`/api/batches/${b.id}/move`, 'POST', {
+      to_department: 'laminating', quantity: b.quantity, time_minutes: 0,
+      moved_by: 'FC',
+      notes: `Grade mix confirmed — ${moveNotes}`,
+    });
+
+    toast('Veneer grade mix confirmed — Batch released to Laminating');
+    loadFcPage();
+  } catch(e){ toast(e.message, 'danger'); }
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Packing Center (deprecated redirect)
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// PACKING CENTER
+// ══════════════════════════════════════════════════════════
+async function loadPackingCenter(){
+  // Fetch grading and packing batches from the unified batches table
+  const [gradingBatches, packingBatches] = await Promise.all([
+    api('/api/batches?department=grading').catch(()=>[]),
+    api('/api/batches?department=packing').catch(()=>[])
+  ]);
+  const allBatches = [...(gradingBatches||[]), ...(packingBatches||[])];
+  const byLine={P01:0,P02:0,P37:0};
+  packingBatches?.forEach(b=>{ byLine[b.production_line]=(byLine[b.production_line]||0)+(b.quantity||0); });
+  const totalPcs=packingBatches?.reduce((s,b)=>s+(b.quantity||0),0)||0;
+  document.getElementById('packing-stats').innerHTML=[
+    {val:(packingBatches||[]).length, lbl:'Batches at Packing',    ico:'bi-boxes',    c:'purple'},
+    {val:(gradingBatches||[]).length, lbl:'In Grading (incoming)', ico:'bi-patch-check',c:'success'},
+    {val:totalPcs,                    lbl:'Pcs Being Packed',      ico:'bi-stack',    c:'primary'},
+    {val:Object.values(byLine).filter(v=>v>0).length, lbl:'Lines Active', ico:'bi-diagram-3', c:'info'},
+  ].map(s=>`<div class="col-6 col-md-3"><div class="stat-card d-flex justify-content-between align-items-start">
+    <div><div class="val" style="color:${s.c==='purple'?'#8b5cf6':'var(--'+s.c+')'}">${fmt(s.val)}</div><div class="lbl">${s.lbl}</div></div>
+    <i class="bi ${s.ico}" style="font-size:2rem;opacity:.12;color:${s.c==='purple'?'#8b5cf6':''}"></i>
+  </div></div>`).join('');
+  const grid=document.getElementById('packing-grid');
+  if(!allBatches.length){
+    grid.innerHTML='<div class="text-center text-muted py-5"><i class="bi bi-boxes" style="font-size:2.5rem;color:#8b5cf6"></i><p class="mt-2">No batches in the grading or packing pipeline.</p></div>';
+    return;
+  }
+  grid.innerHTML=allBatches.map(b=>{
+    const isGrading=b.current_department==='grading';
+    const borderColor=isGrading?'#16a34a':'#8b5cf6';
+    return `
+    <div class="pack-card" style="border-top-color:${borderColor};cursor:pointer" onclick="deptBatchDetail(${b.id},'${b.current_department}')">
+      <div class="d-flex justify-content-between mb-2">
+        <span class="fw-bold small">${b.batch_number||'B#'+b.id}</span>
+        ${slDeptBadge(b.current_department)}
+      </div>
+      <div class="small fw-semibold text-muted">${b.product_name||b.sku||'—'}</div>
+      <div class="fw-bold mt-1" style="color:${borderColor}">${fmt(b.quantity||0)} pcs</div>
+      <div class="small text-muted mt-1">${(b.created_at||'').slice(0,10)} · ${b.production_line||''}</div>
+      <div class="small text-muted mt-1"><i class="bi bi-info-circle me-1"></i>Click to view batch detail</div>
+    </div>`;
+  }).join('');
+}
+function lineBadgeColor(line){
+  return {P01:'#1f4a1f',P02:'#16a34a',P37:'#9d174d'}[line]||'#64748b';
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Generic Dept Pages
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// GENERIC DEPT PAGES
+// ══════════════════════════════════════════════════════════
+const DEPT_EXTRAS={
+  laminating:`<div class="mb-2"><label class="form-label">Table #</label><input type="number" class="form-control" id="da-table" min="1" max="10"></div>
+    <div class="mb-2"><label class="form-label">Glue BOM Code</label><input class="form-control" id="da-glue"></div>
+    <div class="mb-2"><label class="form-label">Planned Qty</label><input type="number" class="form-control" id="da-planned"></div>`,
+  repair:`<div class="mb-2"><label class="form-label">Pair Number</label><input type="number" class="form-control" id="da-pair" placeholder="1-20"></div>
+    <div class="mb-2"><label class="form-label">Veneer Species</label><input class="form-control" id="da-species"></div>
+    <div class="mb-2"><label class="form-label">Repair Type</label><select class="form-select" id="da-repair-type"><option value="face">Face</option><option value="back">Back</option><option value="both">Both</option></select></div>`,
+  sanding:`<div class="mb-2"><label class="form-label">Belt Number</label><input type="number" class="form-control" id="da-belt"></div>
+    <div class="mb-2"><label class="form-label">Grit</label><input class="form-control" id="da-grit" placeholder="e.g. 120"></div>
+    <div class="mb-2"><label class="form-label">NCG Qty (veneer scraped off)</label><input type="number" class="form-control" id="da-ncg" value="0"></div>`,
+  grading:`<div class="mb-2"><label class="form-label">LG Grade Qty</label><input type="number" class="form-control" id="da-lg" value="0"></div>
+    <div class="mb-2"><label class="form-label">C Grade Qty</label><input type="number" class="form-control" id="da-c" value="0"></div>
+    <div class="mb-2"><label class="form-label">C Grade Action</label><select class="form-select" id="da-c-action"><option value="relaminate">Re-laminate</option><option value="downgrade">Downgrade &amp; Pack</option><option value="scrap">Scrap</option></select></div>`,
+  bleach:`<div class="mb-2"><label class="form-label">Pieces Bleached</label><input type="number" class="form-control" id="da-bleached"></div>
+    <div class="mb-2"><label class="form-label">Chemical Batch ID</label><input class="form-control" id="da-chem"></div>`,
+};
+
+
+
+// ════════════════════════════════════════════════════════════
+// Dept Batch Detail offcanvas
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════
+// DEPT BATCH DETAIL OFFCANVAS
+// ══════════════════════════════════════════════════════════════
+let _bdcBatch=null, _bdcDept=null, _bdcActiveTab='info';
+
+async function deptBatchDetail(batchId, dept){
+  _bdcDept=dept; _bdcActiveTab='info';
+  // Show offcanvas immediately with loader
+  const oc=bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('batchDetailCanvas'));
+  document.getElementById('bdc-title').innerHTML=`<i class="bi bi-layers me-2"></i>Batch #${batchId}`;
+  document.getElementById('bdc-body').innerHTML='<p class="text-muted small p-3">Loading…</p>';
+  oc.show();
+  // Fetch batch detail from batches API
+  try{
+    const b=await api(`/api/batches/${batchId}`).catch(()=>null);
+    const hist=await api(`/api/batches/${batchId}/history`).catch(()=>[]);
+    _bdcBatch=b;
+    document.getElementById('bdc-title').innerHTML=`<i class="bi bi-layers me-2"></i>${b?.batch_number||'Batch #'+batchId}`;
+    bdcRender('info', b, hist);
+  }catch(e){document.getElementById('bdc-body').innerHTML=`<div class="alert alert-danger p-3">${e.message}</div>`;}
+}
+
+function bdcTab(tab){
+  _bdcActiveTab=tab;
+  document.querySelectorAll('#bdc-tabs .nav-link').forEach(a=>a.classList.toggle('active',a.textContent.trim().toLowerCase()===tab));
+  if(_bdcBatch) {
+    if(tab==='logs') api(`/api/batches/${_bdcBatch.id}/history`).then(hist=>bdcRender('logs',_bdcBatch,hist));
+    else bdcRender(tab,_bdcBatch,[]);
+  }
+}
+
+function bdcRender(tab, b, hist){
+  const user=getCurrentUser();
+  const canEdit=user?.role=== ROLE.PRODUCTION_PLANNING||user?.role=== ROLE.MANAGERIAL;
+  const pq=b?.pallet_qty||1;
+  if(tab==='info'){
+    const pri=b?.priority||2;
+    document.getElementById('bdc-body').innerHTML=`
+      <div class="px-3 py-2">
+        <!-- Priority editor — top of detail -->
+        <div class="card mb-3" style="border-left:4px solid ${pri===1?'#ef4444':pri===3?'#16a34a':'#eab308'}">
+          <div class="card-body p-2 d-flex align-items-center gap-2 flex-wrap">
+            <i class="bi bi-flag-fill" style="color:${pri===1?'#ef4444':pri===3?'#16a34a':'#eab308'}"></i>
+            <span class="fw-semibold small">Priority:</span>
+            ${prioBadge(pri)}
+            <span class="ms-auto d-flex align-items-center gap-1">
+              <small class="text-muted">Change:</small>
+              ${prioSelect(pri, b?.id, 'batch', `deptBatchDetail(${b?.id},'${_bdcDept}')`)}
+            </span>
+          </div>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">Quantity</div><div class="fw-bold fs-5">${fmt(b?.total_pcs ?? ((b?.quantity||0)*pq))} pcs</div><div class="small text-muted">${fmt(b?.quantity)} pallet${b?.quantity!=1?'s':''}${b?.pcs_actual!=null?' <span class="badge bg-warning text-dark" style="font-size:.6rem">SPLIT</span>':''}</div></div></div>
+          <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">Department</div><div class="fw-bold">${DLBL[b?.current_department]||b?.current_department||'—'}</div></div></div>
+        </div>
+        <table class="table table-sm table-borderless" style="font-size:.82rem">
+          <tr><th class="text-muted fw-normal" style="width:38%">Batch #</th><td class="fw-semibold">${b?.batch_number||'—'}</td></tr>
+          <tr><th class="text-muted fw-normal">Product</th><td>${b?.product_name||'—'}</td></tr>
+          <tr><th class="text-muted fw-normal">Production Order</th><td>${b?.prod_order_number||'—'}</td></tr>
+          <tr><th class="text-muted fw-normal">PO / Customer</th><td>${b?.po_number||'—'}${b?.customer?' · '+b.customer:''}</td></tr>
+          <tr><th class="text-muted fw-normal">Created</th><td>${b?.created_at?.slice(0,16)||'—'}</td></tr>
+          ${b?.parent_batch_id?`<tr><th class="text-muted fw-normal">Split from</th><td><span class="badge bg-warning text-dark">Batch #${b.parent_batch_id}</span></td></tr>`:''}
+          ${b?.split_reason?`<tr><th class="text-muted fw-normal">Split reason</th><td class="fst-italic">${b.split_reason}</td></tr>`:''}
+        </table>
+        <div class="d-flex gap-2 flex-wrap mt-2">
+          <button class="btn btn-sm btn-outline-primary" onclick="openMove(${b?.id},'${_bdcDept}',${b?.quantity})"><i class="bi bi-arrow-right-circle me-1"></i>Move</button>
+          <button class="btn btn-sm btn-outline-warning" onclick="openSplit(${b?.id},${b?.quantity})"><i class="bi bi-scissors me-1"></i>Split</button>
+          ${canEdit?`<button class="btn btn-sm btn-outline-secondary" onclick="bdcTab('edit')"><i class="bi bi-pencil me-1"></i>Edit</button>`:''}
+        </div>
+      </div>`;
+  } else if(tab==='logs'){
+    const moves=hist||[];
+    document.getElementById('bdc-body').innerHTML=`
+      <div class="px-3 py-2">
+        <h6 class="small fw-bold text-muted text-uppercase mb-2">Movement History</h6>
+        ${moves.length?`<table class="table table-sm" style="font-size:.78rem">
+          <thead class="table-light"><tr><th>From</th><th>To</th><th>Qty</th><th>When</th><th>By</th><th>Notes</th></tr></thead>
+          <tbody>${moves.map(m=>`<tr>
+            <td>${DLBL[m.from_department]||m.from_department||'—'}</td>
+            <td>${DLBL[m.to_department]||m.to_department||'—'}</td>
+            <td>${fmt(m.quantity)}</td>
+            <td class="text-muted small">${(m.moved_at||'').slice(0,16)}</td>
+            <td class="small">${m.moved_by||'—'}</td>
+            <td class="small text-muted">${m.notes||''}</td>
+          </tr>`).join('')}</tbody>
+        </table>`:'<p class="text-muted small">No movement history yet.</p>'}
+      </div>`;
+  } else if(tab==='edit'){
+    if(!canEdit){document.getElementById('bdc-body').innerHTML='<div class="alert alert-warning m-3">Edit access requires Planning or Managerial role.</div>';return;}
+    document.getElementById('bdc-body').innerHTML=`
+      <div class="px-3 py-2">
+        <h6 class="small fw-bold text-muted text-uppercase mb-3">Edit Batch</h6>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Quantity (pallets)</label>
+          <input type="number" class="form-control form-control-sm" id="bdc-edit-qty" value="${b?.quantity||0}" min="0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Notes</label>
+          <textarea class="form-control form-control-sm" id="bdc-edit-notes" rows="3">${b?.split_reason||''}</textarea>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="bdcSave()"><i class="bi bi-floppy me-1"></i>Save Changes</button>
+      </div>`;
+  }
+}
+
+async function bdcSave(){
+  const qty=parseFloat(document.getElementById('bdc-edit-qty').value)||0;
+  const notes=document.getElementById('bdc-edit-notes').value||'';
+  try{
+    await api(`/api/batches/${_bdcBatch.id}`,'PATCH',{quantity:qty,split_reason:notes});
+    toast('Batch updated','success');
+    const dept=_bdcDept;
+    bootstrap.Offcanvas.getInstance(document.getElementById('batchDetailCanvas')).hide();
+    loadDeptPage(dept);
+  }catch(e){toast(e.message,'danger');}
+}
+
+// ── Station Log batch detail (prod_batch) ─────────────────────
+let _slDetailBatch=null;
+async function slOpenDetail(batchId){
+  _slDetailBatch=batchId;
+  document.getElementById('bdc-title').innerHTML=`<i class="bi bi-layers me-2"></i>${batchId}`;
+  document.getElementById('bdc-body').innerHTML='<p class="text-muted small p-3">Loading…</p>';
+  bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('batchDetailCanvas')).show();
+  const [b, logs] = await Promise.all([
+    api(`/api/prod-batches/${batchId}`).catch(()=>null),
+    api(`/api/prod-batches/${batchId}/full-history`).catch(()=>{}),
+  ]);
+  document.getElementById('bdc-body').innerHTML = _renderProdBatchDetail(b, logs||{});
+}
+
+function _renderProdBatchDetail(b, logs){
+  const stationLabels={glue_mix:'Glue Mix',laminating:'Laminating',cold_press:'Cold Press',
+    repair:'Repair',sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
+  const stationIcons={glue_mix:'bi-droplet-fill',laminating:'bi-table',cold_press:'bi-snow',
+    repair:'bi-tools',sanding:'bi-eraser',hot_press:'bi-thermometer-sun',grading:'bi-patch-check',packing:'bi-boxes'};
+  const user=getCurrentUser();
+  const canEdit=user?.role=== ROLE.PRODUCTION_PLANNING||user?.role=== ROLE.MANAGERIAL;
+
+  let logsHtml='';
+  for(const [key, entries] of Object.entries(logs)){
+    if(!entries?.length) continue;
+    logsHtml+=`<div class="mb-3">
+      <h6 class="small fw-bold text-muted text-uppercase mb-2"><i class="bi ${stationIcons[key]||'bi-circle'} me-1"></i>${stationLabels[key]||key}</h6>
+      ${entries.map(e=>{
+        const ncgIssues=(e.ncg_issues||[]);
+        return `<div class="border rounded p-2 mb-1" style="font-size:.78rem">
+          <div class="d-flex gap-3 flex-wrap">
+            ${Object.entries(e).filter(([k])=>!['ncg_issues'].includes(k)).slice(0,8).map(([k,v])=>
+              `<span><span class="text-muted">${k.replace(/_/g,' ')}:</span> <b>${v!=null?v:'—'}</b></span>`
+            ).join('')}
+          </div>
+          ${ncgIssues.length?`<div class="mt-1"><span class="text-warning small">NCG Issues: </span>${ncgIssues.map(i=>`<span class="badge bg-warning text-dark me-1">${i.reason_code} (${i.pcs_count} pcs)</span>`).join('')}</div>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  return `<div class="px-3 py-2">
+    <div class="row g-2 mb-3">
+      <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">SKU</div><div class="fw-bold small">${b?.sku_code||'—'}</div></div></div>
+      <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">Status</div><div class="fw-bold">${b?.status||'—'}</div></div></div>
+    </div>
+    <table class="table table-sm table-borderless mb-3" style="font-size:.82rem">
+      <tr><th class="text-muted fw-normal" style="width:38%">Batch ID</th><td class="fw-semibold">${b?.batch_id||'—'}</td></tr>
+      <tr><th class="text-muted fw-normal">Line</th><td>${b?.line_id||'—'}</td></tr>
+      <tr><th class="text-muted fw-normal">Qty Planned</th><td>${fmt(b?.qty_planned)} pcs</td></tr>
+      <tr><th class="text-muted fw-normal">Date / Shift</th><td>${b?.production_date||'—'} · ${b?.shift||'—'}</td></tr>
+    </table>
+    ${canEdit?`<div class="mb-3 p-2 border rounded bg-light">
+      <div class="small fw-semibold mb-2"><i class="bi bi-pencil me-1"></i>Quick Edit</div>
+      <div class="row g-2">
+        <div class="col-6"><label class="form-label small">Qty Planned</label>
+          <input type="number" class="form-control form-control-sm" id="bdc-sl-qty" value="${b?.qty_planned||0}"></div>
+        <div class="col-6"><label class="form-label small">Shift</label>
+          <select class="form-select form-select-sm" id="bdc-sl-shift">
+            <option ${b?.shift==='MORNING'?'selected':''}>MORNING</option>
+            <option ${b?.shift==='AFTERNOON'?'selected':''}>AFTERNOON</option>
+            <option ${b?.shift==='NIGHT'?'selected':''}>NIGHT</option>
+          </select></div>
+        <div class="col-12"><label class="form-label small">Notes</label>
+          <input class="form-control form-control-sm" id="bdc-sl-notes" value="${b?.notes||''}"></div>
+      </div>
+      <button class="btn btn-primary btn-sm mt-2" onclick="bdcSlSave('${b?.batch_id}')"><i class="bi bi-floppy me-1"></i>Save</button>
+    </div>`:''}
+    <h6 class="small fw-bold text-muted text-uppercase mb-2 mt-3">Station Logs</h6>
+    ${logsHtml||'<p class="text-muted small">No station logs recorded yet.</p>'}
+  </div>`;
+}
+
+async function bdcSlSave(batchId){
+  const body={
+    qty_planned: parseInt(document.getElementById('bdc-sl-qty').value)||0,
+    shift: document.getElementById('bdc-sl-shift').value||'MORNING',
+    notes: document.getElementById('bdc-sl-notes').value||'',
+  };
+  try{
+    await api(`/api/prod-batches/${batchId}`,'PATCH',body);
+    toast('Batch updated','success');
+    slOpenDetail(batchId);
+  }catch(e){toast(e.message,'danger');}
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Laminating → FC Material Request
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════
+// LAMINATING → FC MATERIAL REQUEST
+// ══════════════════════════════════════════════════════════════
+let _lfrMats=[], _lfrBatchRef='', _lfrRole='';
+
+// Role is a label only — all FC stock materials are always shown regardless of role
+const LFR_ROLE_FILTER={ face:()=>true, back:()=>true, base:()=>true, other:()=>true };
+const LFR_ROLE_LABEL={face:'Face Veneer',back:'Back Veneer',base:'Base Board',other:'Other'};
+
+async function openLamFcReturn(batchRef=''){
+  const br = batchRef || _slActiveBatch?.batch_number || '';
+  document.getElementById('lfret-batch-info').innerHTML =
+    `<i class="bi bi-exclamation-triangle me-1"></i>Return material to FC for batch <b>${br}</b>. FC will see this on the Movements page and re-confirm pickup.`;
+  document.getElementById('lfret-qty').value = '';
+  document.getElementById('lfret-actual').value = '';
+  document.getElementById('lfret-released').value =
+    _slActiveBatch?.total_pcs || ((_slActiveBatch?.quantity||0) * (_slActiveBatch?.pallet_qty||1)) || '';
+  document.getElementById('lfret-notes').value = '';
+  // Populate materials from suggestions (same boards/veneers FC sent for this batch),
+  // falling back to the full FC stock list.
+  if(!_lfrMats.length) _lfrMats = await api('/api/fc/stock').catch(()=>[]);
+  const sel = document.getElementById('lfret-material');
+  sel.innerHTML = '<option value="">— Pick the material to return —</option>';
+  // Suggested first
+  const poId = _slActiveBatch?.prod_order_id;
+  let suggestedIds = new Set();
+  if(poId){
+    const alloc = await api(`/api/production-orders/${poId}/veneer-allocation`).catch(()=>null);
+    if(alloc){
+      ['face_material','back_material','base_material'].forEach(k => {
+        if(alloc[k]?.id) suggestedIds.add(alloc[k].id);
+      });
+      (alloc.allocations||[]).forEach(a=>{ if(a.material?.id) suggestedIds.add(a.material.id); });
+    }
+  }
+  const suggested = _lfrMats.filter(m => suggestedIds.has(m.id));
+  const rest      = _lfrMats.filter(m => !suggestedIds.has(m.id));
+  if(suggested.length){
+    sel.innerHTML += `<optgroup label="↳ Materials used on this batch">`+
+      suggested.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}">${m.name}${m.code?' ('+m.code+')':''}</option>`).join('')+
+      `</optgroup>`;
+  }
+  if(rest.length){
+    sel.innerHTML += `<optgroup label="All FC materials">`+
+      rest.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}">${m.name}${m.code?' ('+m.code+')':''}</option>`).join('')+
+      `</optgroup>`;
+  }
+  sel.onchange = ()=>{
+    const o=sel.selectedOptions[0];
+    document.getElementById('lfret-uom').textContent=(o?.dataset.unit)||'pcs';
+  };
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('lamFcReturnModal')).show();
+}
+
+function lfretRecalc(){
+  const released = Number(document.getElementById('lfret-released').value||0);
+  const actual   = Number(document.getElementById('lfret-actual').value||0);
+  const surplus  = Math.max(0, actual - released);
+  document.getElementById('lfret-qty').value = surplus || '';
+  const hint=document.getElementById('lfret-qty-hint');
+  if(actual>0 && released>0){
+    if(surplus>0)
+      hint.innerHTML = `<span class="text-warning"><i class="bi bi-exclamation-circle me-1"></i>FC over-delivered ${surplus} pcs — returning surplus.</span>`;
+    else if(actual<released)
+      hint.innerHTML = `<span class="text-danger"><i class="bi bi-x-octagon me-1"></i>Under-delivery: missing ${released-actual} pcs. Consider requesting more from FC instead of returning.</span>`;
+    else
+      hint.innerHTML = '<i class="bi bi-check2-circle text-success me-1"></i>Quantities match — nothing to return.';
+  }else{
+    hint.textContent='Auto = actual − released.';
+  }
+}
+async function lfretSubmit(){
+  const mat=Number(document.getElementById('lfret-material').value);
+  const released=Number(document.getElementById('lfret-released').value||0);
+  const actual=Number(document.getElementById('lfret-actual').value||0);
+  const qty=Number(document.getElementById('lfret-qty').value||0);
+  const reason=document.getElementById('lfret-reason').value;
+  const notes=document.getElementById('lfret-notes').value;
+  if(!mat || qty<=0){ alert('Pick a material and enter a positive quantity to return'); return; }
+  const enriched = `${reason} — released ${released}, actual ${actual}, returning ${qty}. ${notes||''}`.trim();
+  try{
+    await api('/api/fc/return-material','POST',{
+      material_id: mat, qty,
+      batch_ref: _slActiveBatch?.batch_number||'',
+      reason: enriched,
+    });
+    bootstrap.Modal.getInstance(document.getElementById('lamFcReturnModal'))?.hide();
+    toast(`Return request sent to FC for ${qty} pcs surplus`, 'success');
+  }catch(e){ alert('Return failed: '+(e.message||e)); }
+}
+
+async function openLamFcRequest(batchRef=''){
+  _lfrBatchRef=batchRef||_slActiveBatch?.batch_number||'';
+  _lfrRole='';
+  if(!_lfrMats.length) _lfrMats=await api('/api/fc/stock').catch(()=>[]);
+  // Reset form
+  document.getElementById('lfr-mat-search').value='';
+  document.getElementById('lfr-material-id').innerHTML='<option value="">— Select material type first —</option>';
+  document.getElementById('lfr-mat-info').textContent='';
+  document.getElementById('lfr-qty').value='';
+  document.getElementById('lfr-notes').value='';
+  document.getElementById('lfr-unit-label').textContent='pcs';
+  document.getElementById('lfr-role').value='';
+  // Reset role buttons
+  document.querySelectorAll('#lfr-role-btns button').forEach(b=>b.classList.replace('btn-warning','btn-outline-secondary'));
+  // Show batch info
+  const batchLabel=_lfrBatchRef||_slActiveBatch?.prod_order_number||'';
+  document.getElementById('lfr-batch-info').textContent=batchLabel?`Batch: ${_lfrBatchRef}${_slActiveBatch?.prod_order_number?' · PO: '+_slActiveBatch.prod_order_number:''}`:'';
+  // Suggest the same materials this batch has consumed before (from BOM / readiness)
+  await _lfrLoadSuggestions();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('lamFcRequestModal')).show();
+}
+
+async function _lfrLoadSuggestions(){
+  const host = document.getElementById('lfr-suggestions');
+  if(!host) return;
+  host.innerHTML = '';
+  // Need the prod_order_id to look up BOM materials used in this batch
+  const poId = _slActiveBatch?.prod_order_id;
+  if(!poId){ host.innerHTML='<span class="text-muted small">No batch context — pick a material below.</span>'; return; }
+  try{
+    // Reuse the existing veneer-allocation endpoint to find the boards + veneers
+    // already linked to this production order.
+    const alloc = await api(`/api/production-orders/${poId}/veneer-allocation`).catch(()=>null);
+    const candidates = [];
+    const seen = new Set();
+    const push = (m, role) => {
+      if(!m || !m.id || seen.has(m.id)) return;
+      seen.add(m.id);
+      candidates.push({id:m.id, code:m.code||'', name:m.name||'', role});
+    };
+    // Allocation may carry confirmed face / back / base
+    if(alloc){
+      if(alloc.face_material) push(alloc.face_material, 'face');
+      if(alloc.back_material) push(alloc.back_material, 'back');
+      if(alloc.base_material) push(alloc.base_material, 'base');
+      (alloc.allocations||[]).forEach(a=> push(a.material||a, a.role||a.veneer_role||'face'));
+    }
+    if(!candidates.length){
+      host.innerHTML = '<span class="text-muted small">No material history for this batch yet — pick from the list below.</span>';
+      return;
+    }
+    host.innerHTML = '<span class="small text-muted me-2"><i class="bi bi-magic me-1"></i>Used before:</span>' +
+      candidates.map(c => `<button type="button" class="btn btn-sm btn-outline-info me-1 mb-1"
+        onclick="_lfrApplySuggestion(${c.id}, '${c.role}')"
+        title="Request more of ${c.name}">
+        <span class="badge bg-info text-white me-1" style="font-size:.6rem">${c.role||''}</span>${c.code||c.name}</button>`).join('');
+  }catch(e){
+    host.innerHTML='<span class="text-muted small">Suggestions unavailable.</span>';
+  }
+}
+
+function _lfrApplySuggestion(matId, role){
+  // Pick the appropriate role button to set up filtering, then select the material
+  const roleBtn = document.querySelector(`#lfr-role-btns button[data-role="${role}"]`)
+                || document.querySelector('#lfr-role-btns button');
+  if(roleBtn) roleBtn.click();
+  // After role filter applies, try to select the requested material in the dropdown
+  setTimeout(()=>{
+    const sel = document.getElementById('lfr-material-id');
+    const opt = [...sel.options].find(o=>String(o.value)===String(matId));
+    if(opt){ sel.value = matId; lfrOnMatSelect(); }
+    else { toast('That material is not in current FC stock — pick another','warning'); }
+  }, 50);
+}
+
+function lfrSelectRole(role, btn){
+  _lfrRole=role;
+  document.getElementById('lfr-role').value=role;
+  // Highlight selected button
+  document.querySelectorAll('#lfr-role-btns button').forEach(b=>{
+    b.classList.remove('btn-warning','btn-outline-secondary');
+    b.classList.add(b===btn?'btn-warning':'btn-outline-secondary');
+  });
+  // Reset search and filter material list
+  document.getElementById('lfr-mat-search').value='';
+  _lfrApplyFilter('');
+}
+
+function _lfrApplyFilter(q){
+  const term=(q||'').trim().toLowerCase();
+  const roleFn=_lfrRole?LFR_ROLE_FILTER[_lfrRole]||LFR_ROLE_FILTER.other:LFR_ROLE_FILTER.other;
+  const mats=_lfrMats.filter(m=>roleFn(m)&&(!term||((m.code||'').toLowerCase().includes(term)||(m.name||'').toLowerCase().includes(term))));
+  const placeholder=_lfrRole?`— Select ${LFR_ROLE_LABEL[_lfrRole]} —`:'— Select material type first —';
+  document.getElementById('lfr-material-id').innerHTML=
+    `<option value="">${placeholder}</option>`+
+    mats.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-stock="${m.wh_stock||0}">`+
+      `${m.name}${m.code?' ('+m.code+')':''} — FC Stock: ${fmt(m.wh_stock||0)} ${m.unit||'pcs'}`+
+    `</option>`).join('');
+  document.getElementById('lfr-mat-info').textContent=mats.length?`${mats.length} material${mats.length!==1?'s':''} available`:'No matching materials in FC stock';
+}
+
+function lfrFilterMats(q){ _lfrApplyFilter(q); }
+
+function lfrOnMatSelect(){
+  const sel=document.getElementById('lfr-material-id');
+  const opt=sel.selectedOptions[0];
+  if(opt&&opt.value){
+    const unit=opt.dataset.unit||'pcs';
+    document.getElementById('lfr-unit-label').textContent=unit;
+    document.getElementById('lfr-mat-info').textContent=`FC Stock: ${fmt(parseFloat(opt.dataset.stock)||0)} ${unit}`;
+  }
+}
+
+async function lfrSubmit(){
+  const role=document.getElementById('lfr-role').value;
+  if(!role){toast('Select a material type (Face / Back / Base / Other)','warning');return;}
+  const matId=parseInt(document.getElementById('lfr-material-id').value)||0;
+  const qty=parseFloat(document.getElementById('lfr-qty').value)||0;
+  const notes=document.getElementById('lfr-notes').value.trim();
+  if(!matId||qty<=0){toast('Select a specific material and enter quantity','warning');return;}
+  if(!notes){toast('Please describe the reason for this request','warning');return;}
+  // Auto-populate batch and PO refs from active batch
+  const batchRef=_lfrBatchRef||_slActiveBatch?.batch_number||'';
+  const poRef=_slActiveBatch?.prod_order_number||'';
+  const roleLabel=LFR_ROLE_LABEL[role]||role;
+  try{
+    await api('/api/fc/laminating-material-request','POST',{
+      material_id:matId, qty_requested:qty,
+      notes:`[LAM ${roleLabel.toUpperCase()} REQUEST${batchRef?' · '+batchRef:''}] ${notes}`,
+      batch_ref:batchRef, po_ref:poRef,
+    });
+    bootstrap.Modal.getInstance(document.getElementById('lamFcRequestModal')).hide();
+    toast(`${roleLabel} request sent to FC station`,'success');
+    _lfrMats=[];  // clear cache so FC stock refreshes on next open
+  }catch(e){toast(e.message,'danger');}
+}
+
+function renderDeptStats(dept,stats){
+  if(!stats) return '';
+  if(dept==='laminating'&&stats.by_table) return `<div class="card p-3 mb-3"><h6 class="fw-bold mb-2">Table Efficiency</h6><div class="row g-2">${(stats.by_table||[]).map(t=>`<div class="col-3"><div class="stat-card text-center"><div class="fw-bold">T${t.table_number||t.table_id}</div><div class="val text-primary">${Math.round((t.efficiency||0)*100)}%</div></div></div>`).join('')}</div></div>`;
+  if(dept==='repair'&&stats.by_pair) return `<div class="row g-3 mb-3">
+    <div class="col-md-6"><div class="card p-3"><h6 class="fw-bold mb-2">By Pair</h6>${(stats.by_pair||[]).map(p=>`<div class="d-flex justify-content-between border-bottom py-1"><small>Pair ${p.pair_number}</small><small class="text-muted">${fmt(p.repaired_qty)} pcs | ${Math.round(p.avg_minutes||0)} min avg</small></div>`).join('')||'<small class="text-muted">No data</small>'}</div></div>
+    <div class="col-md-6"><div class="card p-3"><h6 class="fw-bold mb-2">By Species</h6>${(stats.by_species||[]).map(s=>`<div class="d-flex justify-content-between border-bottom py-1"><small>${s.veneer_species}</small><small class="text-muted">${fmt(s.repaired_qty)} pcs | ${Math.round(s.avg_minutes||0)} min</small></div>`).join('')||'<small class="text-muted">No data</small>'}</div></div></div>`;
+  if(dept==='sanding'&&stats.by_operator) return `<div class="row g-3 mb-3">
+    <div class="col-md-6"><div class="card p-3"><h6 class="fw-bold mb-2">Operator NCG</h6>${(stats.by_operator||[]).map(o=>`<div class="d-flex justify-content-between border-bottom py-1"><small>${o.operator_name}</small><small class="text-muted">${fmt(o.sanded_qty)} pcs | NCG ${fmt(o.ncg_qty)} (${Math.round((o.ncg_rate||0)*100)}%)</small></div>`).join('')||'<small class="text-muted">No data</small>'}</div></div>
+    <div class="col-md-6"><div class="card p-3"><h6 class="fw-bold mb-2">Belt Efficiency</h6>${(stats.by_belt||[]).map(b=>`<div class="d-flex justify-content-between border-bottom py-1"><small>Belt ${b.belt_number}</small><small class="text-muted">${Math.round((b.efficiency||0)*100)}%</small></div>`).join('')||'<small class="text-muted">No data</small>'}</div></div></div>`;
+  return '';
+}
+
+function openDeptAct(dept){
+  document.getElementById('da-title').textContent='Record Activity — '+DLBL[dept];
+  document.getElementById('da-body').innerHTML=`
+    <div class="mb-2"><label class="form-label">Batch ID</label><input class="form-control" id="da-batch" placeholder="optional"></div>
+    <div class="mb-2"><label class="form-label">Quantity Processed</label><input type="number" class="form-control" id="da-qty" min="1"></div>
+    <div class="mb-2">
+      <label class="form-label">Veneer Side <span class="text-muted fw-normal">(for efficiency tracking)</span></label>
+      <div class="d-flex gap-2">
+        <div class="form-check"><input class="form-check-input" type="radio" name="da-vside" id="da-vs-face" value="face"><label class="form-check-label" for="da-vs-face"><span class="badge bg-primary" style="font-size:.7rem">FACE</span></label></div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="da-vside" id="da-vs-back" value="back"><label class="form-check-label" for="da-vs-back"><span class="badge bg-info text-dark" style="font-size:.7rem">BACK</span></label></div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="da-vside" id="da-vs-both" value="both" checked><label class="form-check-label" for="da-vs-both"><span class="badge bg-secondary" style="font-size:.7rem">BOTH</span></label></div>
+      </div>
+    </div>
+    <div class="mb-2"><label class="form-label">Operator</label><input class="form-control" id="da-op"></div>
+    <div class="mb-2"><label class="form-label">Time (min)</label><input type="number" class="form-control" id="da-time"></div>
+    ${DEPT_EXTRAS[dept]||''}
+    <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="da-notes" rows="2"></textarea></div>`;
+  document.getElementById('da-save').onclick=()=>saveDeptAct(dept);
+}
+
+async function saveDeptAct(dept){
+  try{
+    const vside=document.querySelector('input[name="da-vside"]:checked')?.value||'both';
+    const body={
+      department:dept,
+      batch_id:document.getElementById('da-batch')?.value?parseInt(document.getElementById('da-batch').value):null,
+      quantity:parseInt(document.getElementById('da-qty')?.value||0),
+      operator:document.getElementById('da-op')?.value||'',
+      time_minutes:parseInt(document.getElementById('da-time')?.value||0),
+      veneer_side:vside,
+      notes:document.getElementById('da-notes')?.value||''
+    };
+    if(dept==='laminating'){body.table_number=parseInt(document.getElementById('da-table')?.value||1);body.glue_bom_code=document.getElementById('da-glue')?.value;body.planned_qty=parseInt(document.getElementById('da-planned')?.value||0);}
+    if(dept==='repair'){body.pair_number=parseInt(document.getElementById('da-pair')?.value||1);body.veneer_species=document.getElementById('da-species')?.value;body.repair_type=document.getElementById('da-repair-type')?.value;}
+    if(dept==='sanding'){body.belt_number=parseInt(document.getElementById('da-belt')?.value||1);body.grit=document.getElementById('da-grit')?.value;body.ncg_qty=parseInt(document.getElementById('da-ncg')?.value||0);}
+    if(dept==='grading'){body.lg_grade_qty=parseInt(document.getElementById('da-lg')?.value||0);body.c_grade_qty=parseInt(document.getElementById('da-c')?.value||0);body.c_grade_action=document.getElementById('da-c-action')?.value;}
+    if(dept==='bleach'){body.pieces_bleached=parseInt(document.getElementById('da-bleached')?.value||0);body.chemical_batch=document.getElementById('da-chem')?.value;}
+    await api(`/api/dept/${dept}`,'POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('deptActModal')).hide();
+    toast('Activity recorded');loadDeptPage(dept);
+  }catch(e){toast(e.message,'danger');}
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Batch Move / Split / History
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// BATCH MOVE / SPLIT / HISTORY
+// ══════════════════════════════════════════════════════════
+function openMove(batchId,currentDept,qty,targetDept=null){
+  document.getElementById('mv-batch-id').value=batchId;
+  document.getElementById('mv-info').textContent=`Batch #${batchId} — ${qty||'?'} pcs — currently: ${DLBL[currentDept]||currentDept||'?'}`;
+  document.getElementById('mv-qty').value=qty||'';
+  document.getElementById('mv-time').value='';document.getElementById('mv-by').value='';document.getElementById('mv-notes').value='';
+  if(targetDept) document.getElementById('mv-dept').value=targetDept;
+  new bootstrap.Modal(document.getElementById('batchMoveModal')).show();
+}
+async function confirmMove(){
+  const id=document.getElementById('mv-batch-id').value;
+  const body={to_department:document.getElementById('mv-dept').value,quantity:parseInt(document.getElementById('mv-qty').value),time_minutes:parseInt(document.getElementById('mv-time').value)||0,moved_by:document.getElementById('mv-by').value||'operator',notes:document.getElementById('mv-notes').value};
+  // ── Laminating-log gate ─────────────────────────────────────────
+  // Block the move if the batch is currently at laminating and has no
+  // laminating_log entry yet — point the user at the Station Log to fill it.
+  try{
+    const batch = await api(`/api/batches/${id}`).catch(()=>null);
+    if(batch && (batch.current_department||'').toLowerCase()==='laminating'){
+      const hist = await api(`/api/batches/${id}/history`).catch(()=>null);
+      const hasLam = !!(hist && (hist.laminating_logs||hist.laminating||[]).length);
+      if(!hasLam){
+        if(!confirm(
+          `This batch hasn't been logged in the Laminating station yet.\n\n`+
+          `OK = jump to Station Leader Hub and log laminating now (recommended)\n`+
+          `Cancel = stay here`
+        )){ return; }
+        bootstrap.Modal.getInstance(document.getElementById('batchMoveModal'))?.hide();
+        // Set scope to laminating + select this batch, then navigate
+        try{
+          localStorage.setItem('erp_pending_batch_select', String(id));
+          loadPage('station-log');
+          const ds = document.getElementById('sl-dept-scope'); if(ds){ ds.value='laminating'; slhSetScope(); }
+          setTimeout(()=>{ try{ slSelectBatch(Number(id)); }catch{} }, 400);
+        }catch{}
+        return;
+      }
+    }
+  }catch{}
+  try{await api(`/api/batches/${id}/move`,'POST',body);bootstrap.Modal.getInstance(document.getElementById('batchMoveModal')).hide();toast('Batch moved');loadKanban();}catch(e){toast(e.message,'danger');}
+}
+
+function openSplit(batchId,qty){
+  document.getElementById('sp-batch-id').value=batchId;
+  document.getElementById('sp-info').textContent=`Batch #${batchId} — ${qty||'?'} pcs available`;
+  document.getElementById('sp-qty').value='';document.getElementById('sp-notes').value='';
+  new bootstrap.Modal(document.getElementById('batchSplitModal')).show();
+}
+async function confirmSplit(){
+  const id=document.getElementById('sp-batch-id').value;
+  const body={split_qty:parseInt(document.getElementById('sp-qty').value),reason:document.getElementById('sp-reason').value,new_dept:document.getElementById('sp-dept').value,notes:document.getElementById('sp-notes').value};
+  try{await api(`/api/batches/${id}/split`,'POST',body);bootstrap.Modal.getInstance(document.getElementById('batchSplitModal')).hide();toast('Split created');loadKanban();}catch(e){toast(e.message,'danger');}
+}
+
+// ── Merge sibling batches (same prod_order, same dept) ─────────
+async function openMergeBatch(batchId){
+  let siblings = [];
+  try {
+    siblings = await api(`/api/batches/${batchId}/mergeable`);
+  } catch(e){ toast('Could not load mergeable batches: '+e.message,'danger'); return; }
+  if(!siblings || !siblings.length){
+    toast('No mergeable sibling batches in this department','info');
+    return;
+  }
+  const main = await api(`/api/batches/${batchId}`).catch(()=>null);
+  if(!main){ toast('Batch not found','danger'); return; }
+  const mainPcs = main.total_pcs ?? ((main.quantity||0) * (main.pallet_qty||1));
+  // Build a quick selection prompt (works for 1+ siblings)
+  const labels = siblings.map((s,i)=>{
+    const p = s.total_pcs ?? ((s.quantity||0)*(s.pallet_qty||1));
+    return `${i+1}. ${s.batch_number} — ${p.toLocaleString()} pcs`;
+  });
+  const choice = prompt(
+    `Merge into batch ${main.batch_number} (${mainPcs.toLocaleString()} pcs)?\n\n`+
+    `Select sibling batch to absorb (1–${siblings.length}):\n`+
+    labels.join('\n')+'\n\nEnter number (or cancel):'
+  );
+  const idx = parseInt(choice) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= siblings.length) return;
+  const other = siblings[idx];
+  const otherPcs = other.total_pcs ?? ((other.quantity||0)*(other.pallet_qty||1));
+  if(!confirm(
+    `Merge:\n  • ${other.batch_number} (${otherPcs.toLocaleString()} pcs)\n`+
+    `INTO:\n  • ${main.batch_number} (${mainPcs.toLocaleString()} pcs)\n\n`+
+    `Result: ${main.batch_number} with ${(mainPcs+otherPcs).toLocaleString()} pcs.\n`+
+    `${other.batch_number} will be deleted; its station logs will be moved into ${main.batch_number}.\n\nProceed?`
+  )) return;
+  try {
+    const res = await api(`/api/batches/${batchId}/merge`,'POST',{other_batch_id: other.id});
+    toast(`Merged → ${res.batch_number} (now ${(mainPcs+otherPcs).toLocaleString()} pcs)`,'success');
+    // Refresh whatever view called this
+    if(typeof loadDeptPage === 'function' && main.current_department) loadDeptPage(main.current_department);
+    if(typeof loadLineBoard === 'function') loadLineBoard();
+    if(typeof slLoadBatches === 'function') slLoadBatches();
+  }catch(e){ toast('Merge failed: '+e.message,'danger'); }
+}
+
+async function showHist(batchId){
+  try{
+    const h=await api(`/api/batches/${batchId}/history`);
+    document.getElementById('hist-body').innerHTML=h.length?`<table class="table table-sm"><thead class="table-light"><tr><th>Time</th><th>From</th><th>To</th><th>Qty</th><th>By</th><th>Notes</th></tr></thead>
+      <tbody>${h.map(r=>`<tr><td><small>${(r.moved_at||'').slice(0,16)}</small></td><td><small>${DLBL[r.from_department]||r.from_department||'-'}</small></td><td><small>${DLBL[r.to_department]||r.to_department}</small></td><td>${fmt(r.quantity)}</td><td><small>${r.moved_by||''}</small></td><td><small>${r.notes||''}</small></td></tr>`).join('')}</tbody></table>`:'<p class="text-muted">No movement history.</p>';
+    new bootstrap.Modal(document.getElementById('histModal')).show();
+  }catch(e){toast(e.message,'danger');}
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// AI — generateReport (daily report)
+// ════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// AI
+// ══════════════════════════════════════════════════════════
+async function generateReport(){
+  const date=document.getElementById('report-date').value;const type=document.getElementById('report-type').value;
+  if(!date){toast('Select a date','warning');return;}
+  const el=document.getElementById('report-output');
+  el.innerHTML='<span class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Generating...</span>';
+  try{const r=await api('/api/ai/daily-report','POST',{date,report_type:type});el.innerHTML=`<div class="ai-msg ai">${marked.parse(r.report)}</div>`;}
+  catch(e){el.innerHTML=`<div class="alert alert-danger">${e.message}</div>`;}
+}
+// Factory Assistant (chat + transcript + addChat/rmChat helpers) moved to /static/js/portal_admin.js
+
+
+// ════════════════════════════════════════════════════════════
+// Consumable Requests (Dept Leader)
+// ════════════════════════════════════════════════════════════
+// Auth + session lifecycle moved to /static/js/auth.js
+
+// ══════════════════════════════════════════════════════════════
+// CONSUMABLE REQUESTS (Dept Leader)
+// ══════════════════════════════════════════════════════════════
+let _crMaterials=[], _crMyDepts=[];
+
+async function crLoad(){
+  const status=document.getElementById('cr-filter-status').value;
+  const reqs=await api(`/api/consumable-requests${status?'?status='+status:''}`).catch(()=>[]);
+  if(!reqs) return;
+  // Summary badges
+  const counts={PENDING:0,PARTIAL:0,FULFILLED:0,CANCELLED:0};
+  reqs.forEach(r=>{ if(counts[r.status]!==undefined) counts[r.status]++; });
+  document.getElementById('cr-summary-row').innerHTML=`
+    <div class="col-auto"><div class="card px-3 py-2 border-warning"><div class="small text-muted">Pending</div><div class="h5 mb-0 text-warning fw-bold">${counts.PENDING}</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2 border-primary"><div class="small text-muted">Partial</div><div class="h5 mb-0 text-primary fw-bold">${counts.PARTIAL}</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2 border-success"><div class="small text-muted">Fulfilled</div><div class="h5 mb-0 text-success fw-bold">${counts.FULFILLED}</div></div></div>
+  `;
+  const statusBadge={PENDING:'warning',PARTIAL:'primary',FULFILLED:'success',CANCELLED:'secondary'};
+  const tbody=document.getElementById('cr-tbody');
+  if(!reqs.length){tbody.innerHTML='<tr><td colspan="8" class="text-center text-muted py-3">No requests found.</td></tr>';return;}
+  tbody.innerHTML=reqs.map(r=>`<tr>
+    <td><code class="small">${r.request_id}</code></td>
+    <td>${r.material_name||'—'} <small class="text-muted">(${r.unit||''})</small></td>
+    <td><span class="badge bg-light text-dark border">${r.department}</span>${r.line_id?` <small>${r.line_id}</small>`:''}</td>
+    <td class="text-end">${r.qty_requested}</td>
+    <td class="text-end">${r.qty_fulfilled||0}</td>
+    <td><span class="badge bg-${statusBadge[r.status]||'secondary'}">${r.status}</span></td>
+    <td class="small text-muted">${(r.created_at||'').slice(0,10)}</td>
+    <td>${r.status==='PENDING'?`<button class="btn btn-xs btn-outline-danger py-0 px-1" onclick="crCancel('${r.request_id}')"><i class="bi bi-x"></i></button>`:''}</td>
+  </tr>`).join('');
+}
+
+async function crOpenNew(){
+  if(!_crMaterials.length){
+    _crMaterials=await api('/api/consumable-materials').catch(()=>[]);
+  }
+  const sel=document.getElementById('cr-material-id');
+  sel.innerHTML='<option value="">Select material...</option>'+
+    _crMaterials.map(m=>`<option value="${m.id}" data-unit="${m.unit}" data-cost="${m.unit_cost}" data-stock="${m.current_stock}">${m.name} (${m.unit}) — Stock: ${m.current_stock}</option>`).join('');
+  sel.onchange=()=>{
+    const opt=sel.options[sel.selectedIndex];
+    document.getElementById('cr-unit-label').textContent=opt.dataset.unit||'unit';
+    document.getElementById('cr-mat-stock').textContent=`Current stock: ${opt.dataset.stock||0} ${opt.dataset.unit||''}`;
+    crUpdateCostEst();
+  };
+  // Dept select from user's departments
+  _crMyDepts=getCurrentDepts();
+  const deptSel=document.getElementById('cr-department');
+  const deptSet=[...new Set(_crMyDepts.map(d=>d.department))];
+  deptSel.innerHTML=deptSet.length
+    ? deptSet.map(d=>`<option value="${d}">${STATION_LABEL[d]||d}</option>`).join('')
+    : '<option value="">— select —</option>';
+  document.getElementById('cr-mat-stock').textContent='';
+  document.getElementById('cr-cost-est').textContent='';
+}
+
+function crUpdateCostEst(){
+  const sel=document.getElementById('cr-material-id');
+  const opt=sel.options[sel.selectedIndex];
+  const qty=parseFloat(document.getElementById('cr-qty').value)||0;
+  const cost=parseFloat(opt?.dataset?.cost)||0;
+  if(qty>0&&cost>0)
+    document.getElementById('cr-cost-est').textContent=`Est. cost: ฿${(qty*cost).toFixed(2)}`;
+  else
+    document.getElementById('cr-cost-est').textContent='';
+}
+
+async function crSubmitNew(){
+  const mid=parseInt(document.getElementById('cr-material-id').value);
+  const dept=document.getElementById('cr-department').value;
+  const qty=parseFloat(document.getElementById('cr-qty').value)||0;
+  if(!mid||!dept||qty<=0){toast('Material, department, and quantity are required','danger');return;}
+  const body={
+    material_id:mid,department:dept,
+    line_id:document.getElementById('cr-line-id').value||null,
+    qty_requested:qty,
+    priority:parseInt(document.getElementById('cr-priority')?.value)||2,
+    needed_by:document.getElementById('cr-needed-by')?.value||null,
+    needed_time:document.getElementById('cr-needed-time')?.value||null,
+    notes:document.getElementById('cr-notes').value||null
+  };
+  try{
+    await api('/api/consumable-requests','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('newConsumableModal')).hide();
+    toast('Request submitted');
+    crLoad();
+  }catch(e){toast(e.message,'danger');}
+}
+
+async function crCancel(rid){
+  if(!confirm('Cancel this request?')) return;
+  try{await api(`/api/consumable-requests/${rid}/cancel`,'PATCH');toast('Cancelled');crLoad();}
+  catch(e){toast(e.message,'danger');}
+}
+
+// Warehouse Supply Queue moved to /static/js/portal_warehouse.js
+
+// Dept Cost Report moved to /static/js/portal_accounting.js
+
 // ── Page loader registry ────────────────────────────────────
 Object.assign(PAGE_LOADERS, {
   'vcmx':                vcmxLoad,
@@ -6964,4 +8814,5 @@ Object.assign(PAGE_LOADERS, {
   'prod-logs':           loadLogs,
   'prod-reports':        () => { prSetPeriod(30); loadProdReports(); },
   'forklift-report':     frptLoad,
+  'consumable-requests': crLoad,
 });
