@@ -23,3 +23,7 @@ venv/
 Thumbs.db
 .idea/
 .vscode/
+.claude/
+
+# Generated PDF documents (user uploads / supplier POs)
+docs_storage/*.pdf

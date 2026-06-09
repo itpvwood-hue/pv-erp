@@ -4,7 +4,7 @@ Run: python -m uvicorn execution.main:app --host 0.0.0.0 --port 8000 --reload
 """
 import os, sys, json, csv, io, hashlib, logging
 from logging.handlers import RotatingFileHandler
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, Any, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Request
 from fastapi.staticfiles import StaticFiles
@@ -45,10 +45,11 @@ for _ln in ('uvicorn', 'uvicorn.error', 'uvicorn.access', 'fastapi'):
 logging.getLogger('pvwood').info('Server bootstrapping; log path = %s', LOG_PATH)
 
 from database import (
-    init_db,
+    init_db, get_db, row_to_dict,
     # Production module
     get_employees, save_employee, delete_employee,
     get_manufacturing_lines, get_prod_machines,
+    get_departments, get_line_flow, get_all_line_flows, get_stations,
     get_mfg_orders, create_mfg_order,
     get_prod_batches, create_prod_batch, advance_prod_batch_status, get_prod_batch,
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
@@ -129,10 +130,9 @@ from database import (
     save_veneer_alloc_and_confirm, get_veneer_alloc,
     # Proper BOM module
     get_all_skus, get_sku, get_sku_bom, get_sku_cost,
-    get_all_compound_skus, get_compound_sku,
+    get_glue_recipes_summary, get_glue_recipe_detail,
     get_all_packing_skus, get_packing_sku,
-    get_compound_skus_with_lines, save_compound_sku, delete_compound_sku,
-    add_compound_line, delete_compound_line,
+    get_glue_recipes_with_ingredients,
     get_packing_skus_with_lines, save_packing_sku, delete_packing_sku,
     add_packing_line, delete_packing_line,
     update_material_price, get_material_usage,
@@ -165,6 +165,56 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend')
 def get_version():
     """Application version + recent changelog. Surface in the SPA footer."""
     return _ver_info()
+
+# Server boot time (process-local) — used by /api/health to report uptime.
+_PROC_START = datetime.now()
+
+@app.get("/api/health")
+def health_check():
+    """Liveness + readiness probe. Anonymous (no auth) so monitoring
+    tools — uptime checkers, load balancers, Task Scheduler heartbeats —
+    can hit it without provisioning credentials.
+
+    Returns:
+      ok            -- bool: True if the DB is reachable AND disk has
+                       headroom (>500 MB).
+      db_reachable  -- bool
+      version       -- string (matches /api/version)
+      uptime_s      -- int: seconds since this process started
+      disk_free_mb  -- float: free space on the DB's drive
+      now           -- string: ISO timestamp from the server clock
+    """
+    from database import get_db
+    out = {
+        "ok":            True,
+        "version":       _ver_info().get("version"),
+        "uptime_s":      int((datetime.now() - _PROC_START).total_seconds()),
+        "now":           datetime.now().isoformat(timespec="seconds"),
+        "db_reachable":  False,
+        "disk_free_mb":  None,
+    }
+    # DB ping
+    try:
+        conn = get_db()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        out["db_reachable"] = True
+    except Exception as e:
+        out["ok"] = False
+        out["db_error"] = str(e)[:200]
+    # Disk free on the DB's drive
+    try:
+        from config import DB_PATH
+        import shutil as _shutil
+        free_bytes = _shutil.disk_usage(os.path.dirname(DB_PATH)).free
+        out["disk_free_mb"] = round(free_bytes / (1024 * 1024), 1)
+        if free_bytes < 500 * 1024 * 1024:   # < 500 MB headroom
+            out["ok"] = False
+            out["disk_warning"] = "low disk space"
+    except Exception as e:
+        out["ok"] = False
+        out["disk_error"] = str(e)[:200]
+    return out
 
 @app.get("/api/admin/config")
 def get_config():
@@ -478,6 +528,42 @@ def edit_bom_entry(bid: int, body: BomUpdate): return update_bom_entry(bid, body
 @app.delete("/api/bom/{bid}")
 def remove_bom_entry(bid: int): delete_bom_entry(bid); return {"ok":True}
 
+# ── Production Lines / Departments / Line Flow ────────────────
+# Replaces the hardcoded ['P01','P02','P37','PUV','PVS','PSP'], DEPARTMENTS
+# list, and LINE_FLOW dict in the frontend. /api/catalog/lines+departments+flow
+# is what the frontend fetches once at startup; the others are convenience.
+@app.get("/api/catalog/lines")
+def catalog_lines(line_type: Optional[str] = None,
+                  include_inactive: bool = False):
+    return get_manufacturing_lines(active_only=not include_inactive,
+                                   line_type=line_type)
+
+@app.get("/api/catalog/departments")
+def catalog_departments(include_inactive: bool = False):
+    return get_departments(active_only=not include_inactive)
+
+@app.get("/api/catalog/line-flow")
+def catalog_line_flow():
+    """All line flows as { line_code: [dept_code, ...] }. One round trip."""
+    return get_all_line_flows()
+
+@app.get("/api/catalog/lines/{code}/flow")
+def catalog_line_flow_one(code: str):
+    flow = get_line_flow(code)
+    if not flow: return []
+    return flow
+
+@app.get("/api/catalog/stations")
+def catalog_stations(line_code: Optional[str] = None,
+                     department_code: Optional[str] = None,
+                     include_inactive: bool = False):
+    """Concrete (line, department) stations. line_code='' returns the
+    centralised stations (packing/fg_receiving/fg_warehouse) which have
+    line_code NULL in the DB."""
+    return get_stations(line_code=line_code,
+                        department_code=department_code,
+                        active_only=not include_inactive)
+
 # ── Machines ──────────────────────────────────────────────────
 @app.get("/api/machines")
 def list_machines(): return get_all_machines()
@@ -727,11 +813,10 @@ def edit_production_order(order_id: int, body: ProductionOrderUpdate): return up
 @app.patch("/api/production-orders/{order_id}/priority")
 def patch_production_order_priority(order_id: int, body: dict):
     """Quick priority-only update — used by batch cards."""
-    from database import get_db as _gdb
     new_pri = int(body.get('priority', 2))
     if new_pri not in (1, 2, 3):
         raise HTTPException(400, "Priority must be 1 (high), 2 (medium), or 3 (low)")
-    conn = _gdb()
+    conn = get_db()
     conn.execute("UPDATE production_orders SET priority=? WHERE id=?", (new_pri, order_id))
     conn.commit(); conn.close()
     return {"ok": True, "priority": new_pri}
@@ -739,11 +824,10 @@ def patch_production_order_priority(order_id: int, body: dict):
 @app.patch("/api/batches/{batch_id}/priority")
 def patch_batch_priority(batch_id: int, body: dict):
     """Update priority of the batch's production order via batch ID."""
-    from database import get_db as _gdb
     new_pri = int(body.get('priority', 2))
     if new_pri not in (1, 2, 3):
         raise HTTPException(400, "Priority must be 1 (high), 2 (medium), or 3 (low)")
-    conn = _gdb()
+    conn = get_db()
     row = conn.execute("SELECT prod_order_id FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not row:
         conn.close(); raise HTTPException(404, "Batch not found")
@@ -908,8 +992,7 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add"):
     blank_skipped = len(rows_csv) - len(real_rows)
 
     if mode == "replace":
-        from database import get_db as _gdb
-        conn = _gdb()
+        conn = get_db()
         codes = [r['code'] for _, r in real_rows if r.get('code')]
         if codes:
             ph = ','.join('?' for _ in codes)
@@ -944,8 +1027,7 @@ async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
         text = content.decode('latin-1')
     all_rows_raw = list(csv.DictReader(io.StringIO(text)))
     if mode == "replace":
-        from database import get_db as _gdb
-        conn = _gdb()
+        conn = get_db()
         skus_in_csv = [r.get('product_sku','').strip() for r in all_rows_raw if r.get('product_sku','').strip()]
         for sku_code in set(skus_in_csv):
             prod = conn.execute("SELECT id FROM products WHERE sku=?", (sku_code,)).fetchone()
@@ -1031,8 +1113,7 @@ def _esc_csv(v):
 @app.get("/api/export/materials/veneers")
 def export_veneers():
     """Export all veneer_sheet materials — matches the veneer upload template format."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1060,8 +1141,7 @@ def export_veneers():
 @app.get("/api/export/materials/boards")
 def export_boards():
     """Export all core_board materials — matches the board upload template format."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1088,8 +1168,7 @@ def export_consumables():
     """Export everything that isn't a Board, Veneer or VCMX substrate — i.e.
     Consumable (adhesive), Glue and Additives (glue_formula), Packing, and Others.
     Includes dimensions for packing materials and Thai names + accounting codes."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1114,8 +1193,7 @@ def export_consumables():
 @app.get("/api/export/materials")
 def export_materials():
     """Export every material (excluding VCMX produced substrates) as one flat CSV."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, COALESCE(acc_code,'') AS acc_code,
                name, COALESCE(name_th,'') AS name_th,
@@ -1137,7 +1215,6 @@ def export_materials():
 @app.get("/api/export/bom")
 def export_bom():
     """Export all BOM as flat CSV (one row per FG SKU)."""
-    from database import get_structured_bom
     skus = get_structured_bom()
     lines = ["product_sku,sku_name,pieces_per_unit,thickness_mm,width_mm,length_mm,"
              "base_board_code,base_board_qty,"
@@ -1449,16 +1526,6 @@ def bom_builder_update(sku_code: str, body: BomBuilderIn):
     data['sku_code'] = sku_code
     return save_bom_for_sku(data)
 
-# ── Glue Formulas ─────────────────────────────────────────────
-@app.get("/api/glue-formulas")
-def list_glue_formulas(): return get_all_compound_skus()
-
-@app.get("/api/glue-formulas/{code}")
-def glue_formula_detail(code: str):
-    g = get_compound_sku(code)
-    if not g: raise HTTPException(404, f"Glue formula '{code}' not found")
-    return g
-
 @app.get("/api/skus")
 def list_skus(search: Optional[str] = None):
     return get_all_skus(search)
@@ -1484,15 +1551,6 @@ def sku_cost(code: str):
     total = sum(r.get('section_total') or 0 for r in rows)
     return {"sku_code": code, "sections": rows, "total": round(total, 4)}
 
-@app.get("/api/glue")
-def list_glue(): return get_all_compound_skus()
-
-@app.get("/api/glue/{code}")
-def glue_detail(code: str):
-    g = get_compound_sku(code)
-    if not g: raise HTTPException(404, f"Glue formula '{code}' not found")
-    return g
-
 @app.get("/api/packing-skus")
 def list_packing(): return get_all_packing_skus()
 
@@ -1502,56 +1560,13 @@ def packing_detail(code: str):
     if not p: raise HTTPException(404, f"Packing SKU '{code}' not found")
     return p
 
-# ── Compound SKU CRUD (Glue + Bleaching formulas) ─────────────────────────────
-
-class CompoundSkuIn(BaseModel):
-    code: str
-    name: str = ""
-    batch_kg: Optional[float] = None
-    type: str = "glue"
-    notes: str = ""
-
-class CompoundLineIn(BaseModel):
-    material_code: str
-    ratio: Optional[float] = None
-    unit: str = "kg"
-    notes: str = ""
-
-@app.get("/api/compound-skus")
-def list_compound_skus(type: Optional[str] = None):
-    return get_compound_skus_with_lines(type_filter=type)
-
-@app.post("/api/compound-skus")
-def create_compound_sku(body: CompoundSkuIn):
-    return save_compound_sku(body.dict())
-
-@app.put("/api/compound-skus/{cid}")
-def update_compound_sku(cid: int, body: CompoundSkuIn):
-    from database import get_db as _gdb
-    conn = _gdb()
-    row = conn.execute("SELECT recipe_code FROM glue_recipes WHERE id=?", (cid,)).fetchone()
-    conn.close()
-    if not row: raise HTTPException(404, "Formula not found")
-    d = body.dict(); d['code'] = row['recipe_code']; d['id'] = cid
-    return save_compound_sku(d)
-
-@app.delete("/api/compound-skus/{cid}")
-def delete_compound_sku_ep(cid: int):
-    delete_compound_sku(cid)
-    return {"ok": True}
-
-@app.post("/api/compound-skus/{cid}/lines")
-def add_compound_line_ep(cid: int, body: CompoundLineIn):
-    try:
-        add_compound_line(cid, body.material_code, body.ratio, body.unit, body.notes)
-        return {"ok": True}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-@app.delete("/api/compound-lines/{lid}")
-def delete_compound_line_ep(lid: int):
-    delete_compound_line(lid)
-    return {"ok": True}
+# ── Glue Recipe — list-with-ingredients view ───────────────────────────
+# The bare /api/glue-recipes CRUD (raw rows, create/patch/delete) lives further
+# down in the file. This endpoint returns the same recipes but each row carries
+# its ingredient breakdown — used by the BOM → Glue Formulas editor.
+@app.get("/api/glue-recipes/with-ingredients")
+def list_glue_recipes_with_ingredients_ep():
+    return get_glue_recipes_with_ingredients()
 
 # ── Packing SKU CRUD ──────────────────────────────────────────────────────────
 
@@ -1578,8 +1593,7 @@ def create_packing_sku(body: PackingSkuIn):
 
 @app.put("/api/packing-skus/{pid}")
 def update_packing_sku_ep(pid: int, body: PackingSkuIn):
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     row = conn.execute("SELECT code FROM packing_skus WHERE id=?", (pid,)).fetchone()
     conn.close()
     if not row: raise HTTPException(404, "Packing spec not found")
@@ -1618,14 +1632,6 @@ def update_price(code: str, body: PriceUpdateIn):
 def material_usage(code: str):
     """Show every SKU and formula that uses this material."""
     return get_material_usage(code)
-
-@app.post("/api/price-sync")
-def price_sync():
-    """Re-derive cached glue placeholder prices from glue_recipes
-    (Phase B: glue_recipes is now the source of truth for cost)."""
-    from database import resync_glue_placeholder_prices
-    n = resync_glue_placeholder_prices()
-    return {"synced_glue_materials": n}
 
 # ══════════════════════════════════════════════════════════════
 # PRODUCTION MODULE ROUTES
@@ -1816,12 +1822,54 @@ def require_auth(x_auth_token: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     return user
 
+# ── Role identifiers ──────────────────────────────────────────
+# Single source of truth for the four roles. Use Role.X instead of bare
+# strings in require_role(...) and user['role'] comparisons — a typo in
+# 'MANGERIAL' would otherwise lock everyone out of an endpoint silently.
+class Role:
+    MANAGERIAL          = 'MANAGERIAL'
+    PRODUCTION_PLANNING = 'PRODUCTION_PLANNING'
+    DEPARTMENT_LEADER   = 'DEPARTMENT_LEADER'
+    WAREHOUSE           = 'WAREHOUSE'
+    ALL = (MANAGERIAL, PRODUCTION_PLANNING, DEPARTMENT_LEADER, WAREHOUSE)
+
 def require_role(*roles):
     def _dep(user: dict = Depends(require_auth)):
         if user['role'] not in roles:
             raise HTTPException(status_code=403, detail=f"Role '{user['role']}' not permitted")
         return user
     return _dep
+
+# ── Factory Assistant ─────────────────────────────────────────
+# General-purpose Claude chat surface with read-only DB + log access and
+# Excel export. Replaces the two niche AI placeholders (BOM Query, Capacity
+# Planner) that nobody wired into the nav.
+class FactoryAssistantBody(BaseModel):
+    messages: list           # chronological [{role, content}, ...]
+
+@app.post("/api/factory-assistant/chat")
+def factory_assistant_chat(body: FactoryAssistantBody,
+                           user: dict = Depends(require_role(Role.MANAGERIAL))):
+    from factory_assistant import chat as _fa_chat
+    return _fa_chat(body.messages or [])
+
+@app.get("/api/factory-assistant/export/{filename}")
+def factory_assistant_export(filename: str,
+                             user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """Download a previously-generated xlsx file. Filenames are timestamped +
+    uuid-suffixed by the tool, but we still validate against path traversal."""
+    import os as _os, re as _re
+    from factory_assistant import EXPORT_DIR
+    if not _re.match(r"^[A-Za-z0-9_\-]+\.xlsx$", filename):
+        raise HTTPException(400, "Invalid filename")
+    path = _os.path.join(EXPORT_DIR, filename)
+    if not _os.path.exists(path):
+        raise HTTPException(404, "Export not found")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
 
 # ── Glue Recipe CRUD ─────────────────────────────────────────
 @app.get("/api/glue-recipes")
@@ -1840,8 +1888,7 @@ def update_glue_recipe_ep(rid: int, body: dict):
 def delete_glue_recipe_ep(rid: int):
     """Delete a glue recipe. FG BOM lines referencing it lose their cost
     (the bom_lines.glue_recipe_id FK becomes a dangling reference)."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     try:
         # NULL out any references first to avoid FK errors
         conn.execute("UPDATE bom_lines SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
@@ -1937,8 +1984,7 @@ def touch_preset(pid: int):
 # ── Batch PATCH (edit) — requires auth ───────────────────────
 @app.patch("/api/batches/{batch_id}")
 def patch_batch(batch_id: int, body: dict):
-    from database import get_db as _gdb, row_to_dict
-    conn = _gdb()
+    conn = get_db()
     allowed = {'quantity', 'split_reason', 'notes', 'current_department'}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1953,8 +1999,7 @@ def patch_batch(batch_id: int, body: dict):
 
 @app.patch("/api/prod-batches/{batch_id}")
 def patch_prod_batch(batch_id: str, body: dict):
-    from database import get_db as _gdb, row_to_dict
-    conn = _gdb()
+    conn = get_db()
     allowed = {'qty_planned', 'notes', 'shift', 'production_date'}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1969,9 +2014,8 @@ def patch_prod_batch(batch_id: str, body: dict):
 
 @app.post("/api/fc/laminating-material-request", status_code=201)
 async def laminating_material_request(body: dict, user: dict = Depends(require_auth)):
-    from database import get_db as _gdb
     import uuid as _uuid
-    conn = _gdb()
+    conn = get_db()
     rid = "FCR-" + _uuid.uuid4().hex[:8].upper()
     conn.execute("""
         INSERT INTO fc_transfer_requests
@@ -2079,20 +2123,20 @@ def list_users(user: dict = Depends(require_auth)):
     return get_users()
 
 @app.post("/api/users", status_code=201)
-def create_user_route(body: UserIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def create_user_route(body: UserIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return create_user(body.dict())
 
 @app.patch("/api/users/{user_id}")
-def update_user_route(user_id: str, body: UserUpdateIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def update_user_route(user_id: str, body: UserUpdateIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return update_user(user_id, body.dict(exclude_none=True))
 
 @app.post("/api/users/{user_id}/departments")
-def set_user_depts(user_id: str, body: UserDeptsIn, user: dict = Depends(require_role('MANAGERIAL'))):
+def set_user_depts(user_id: str, body: UserDeptsIn, user: dict = Depends(require_role(Role.MANAGERIAL))):
     save_user_departments(user_id, body.departments)
     return get_user_departments(user_id)
 
 @app.get("/api/users/{user_id}/departments")
-def get_user_depts(user_id: str, user: dict = Depends(require_role('MANAGERIAL'))):
+def get_user_depts(user_id: str, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return get_user_departments(user_id)
 
 # ════════════════════════════════════════════════════════════════
@@ -2113,12 +2157,12 @@ def create_req(body: ConsumableRequestIn, user: dict = Depends(require_auth)):
 def list_reqs(status: Optional[str] = None, department: Optional[str] = None,
               user: dict = Depends(require_auth)):
     # Dept leaders only see their own requests
-    rb = user['user_id'] if user['role'] == 'DEPARTMENT_LEADER' else None
+    rb = user['user_id'] if user['role'] == Role.DEPARTMENT_LEADER else None
     return get_consumable_requests(status=status, department=department, requested_by=rb)
 
 @app.patch("/api/consumable-requests/{request_id}/fulfill")
 def fulfill_req(request_id: str, body: FulfillIn,
-                user: dict = Depends(require_role('WAREHOUSE'))):
+                user: dict = Depends(require_role(Role.WAREHOUSE))):
     return fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
 
 @app.patch("/api/consumable-requests/{request_id}/cancel")
@@ -2132,8 +2176,7 @@ def cancel_req(request_id: str):
 @app.get("/api/export/fc-stock")
 def export_fc_stock(user: dict = Depends(require_auth)):
     """Export all veneers & core boards with wh_stock and fc_stock as CSV."""
-    from database import get_db as _gdb
-    conn = _gdb()
+    conn = get_db()
     rows = conn.execute("""
         SELECT code, name, type, unit,
                COALESCE(current_stock,0) AS wh_stock,
@@ -2180,10 +2223,9 @@ async def upload_fc_stock(file: UploadFile = File(...), mode: str = "add",
     mode=adjust → add/subtract delta to existing fc_stock
     CSV columns required: code, fc_stock
     """
-    from database import get_db as _gdb
     content = (await file.read()).decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(content))
-    conn = _gdb()
+    conn = get_db()
     processed = 0
     errors = []
     for i, row in enumerate(reader, 2):
@@ -2369,7 +2411,6 @@ def warehouse_low_stock(category: Optional[str] = None,
     categories (adhesive / glue_formula / packing / other). When `category`
     is supplied it must be one of those four codes. Each row carries a
     suggested order qty = reorder_point*2 - current_stock (clamped >= 0)."""
-    from database import get_db
     if category and category in _WH_PR_CATEGORIES:
         types = (category,)
     else:
@@ -2401,7 +2442,6 @@ def warehouse_low_stock(category: Optional[str] = None,
 @app.get("/api/warehouse/dashboard")
 def warehouse_dashboard(user: dict = Depends(require_auth)):
     """One-shot KPI + this-week schedule payload for the warehouse portal."""
-    from database import get_db
     week_start, week_end = _wh_week_bounds()
     placeholders = ','.join('?' * len(_WH_PR_CATEGORIES))
     conn = get_db()
@@ -2490,7 +2530,6 @@ def warehouse_open_prs(category: Optional[str] = None,
     """Open PRs joined with their planned shipments, optionally filtered by
     material category. `category` accepts an internal type code (adhesive,
     glue_formula, packing, other, core_board, veneer_sheet)."""
-    from database import get_db
     conn = get_db()
     base = """
         SELECT pr.id, pr.request_number, pr.request_type, pr.material_id,
@@ -3333,7 +3372,7 @@ def create_fc_return(body: FcTransferRequestIn, user: dict = Depends(require_aut
 
 @app.patch("/api/fc/transfer-requests/{request_id}/fulfill")
 def fulfill_fc_transfer(request_id: str, body: FulfillIn,
-                        user: dict = Depends(require_role('WAREHOUSE'))):
+                        user: dict = Depends(require_role(Role.WAREHOUSE))):
     try:
         return fulfill_fc_transfer_request(request_id, body.qty_fulfilled, user['user_id'])
     except ValueError as e:
@@ -3391,7 +3430,7 @@ def dept_costs_detail(month_year: Optional[str] = None, department: Optional[str
 
 # ── Admin endpoints ────────────────────────────────────────────
 @app.get("/api/admin/login-log")
-def get_login_log_route(limit: int = 200, user: dict = Depends(require_role('MANAGERIAL'))):
+def get_login_log_route(limit: int = 200, user: dict = Depends(require_role(Role.MANAGERIAL))):
     return get_login_log(limit)
 
 # ── Static / SPA ──────────────────────────────────────────────

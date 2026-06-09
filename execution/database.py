@@ -733,6 +733,18 @@ def init_db():
         # can batch deliveries (morning / afternoon).
         "ALTER TABLE consumable_request    ADD COLUMN needed_time TEXT",
         "ALTER TABLE fc_transfer_requests  ADD COLUMN needed_time TEXT",
+        # 2.10.0 — lines/stations promotion. Extend manufacturing_line so it
+        # can express aux lines (PUV/PVS/PSP) and sort order alongside main
+        # lines (P01/P02/P37). is_active mirrors the existing `active` column
+        # but uses the project's standard column name.
+        "ALTER TABLE manufacturing_line    ADD COLUMN line_type   TEXT NOT NULL DEFAULT 'main'",
+        "ALTER TABLE manufacturing_line    ADD COLUMN sort_order  INTEGER NOT NULL DEFAULT 0",
+        # 2.11.x — line scope on per-station data so analytics can JOIN to a
+        # concrete (line, dept) station row. dept_activities + station_presets
+        # are the two that lacked it; station_stock + station_stock_movements
+        # already carry line_id.
+        "ALTER TABLE dept_activities       ADD COLUMN line_id  TEXT DEFAULT ''",
+        "ALTER TABLE station_presets       ADD COLUMN line_id  TEXT DEFAULT ''",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -781,6 +793,64 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vcmx_log_batch ON vcmx_laminating_log(batch_id)")
+
+    # ── Departments registry ────────────────────────────────────
+    # Replaces the hardcoded DEPARTMENTS list in database.py and the
+    # parallel DEPTS / DLBL / DICO dicts in the frontend. is_centralised=1
+    # means there is exactly one station regardless of how many lines feed
+    # in (currently: packing, fg_warehouse, fg_receiving).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS departments (
+            code           TEXT PRIMARY KEY,
+            label          TEXT NOT NULL,
+            icon           TEXT,
+            is_centralised INTEGER NOT NULL DEFAULT 0,
+            sort_order     INTEGER NOT NULL DEFAULT 0,
+            is_active      INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+
+    # ── Line flow ──────────────────────────────────────────────
+    # Replaces the hardcoded LINE_FLOW = { P01: [...], P02: [...], P37: [...] }
+    # dict in the frontend. One row per (line, sequence position, department).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS line_flow (
+            line_code        TEXT NOT NULL,
+            seq              INTEGER NOT NULL,
+            department_code  TEXT NOT NULL,
+            PRIMARY KEY (line_code, seq),
+            FOREIGN KEY (line_code)       REFERENCES manufacturing_line(line_id),
+            FOREIGN KEY (department_code) REFERENCES departments(code)
+        )
+    """)
+
+    # ── Stations ───────────────────────────────────────────────
+    # A concrete (line, department) pair. Per-line departments (fc, laminating,
+    # cold_press, hot_press, bleach, repair, sanding, grading) get one row per
+    # main line. Centralised departments (packing, fg_receiving, fg_warehouse)
+    # get exactly one row with line_code = NULL — the UI renders these as
+    # "ALL LINES". This is the row to FK against from per-station analytics:
+    # dept_activities, station_stock(_movements), station_presets.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stations (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            line_code           TEXT,
+            department_code     TEXT NOT NULL,
+            label               TEXT,
+            capacity_per_shift  INTEGER,
+            is_active           INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (line_code)       REFERENCES manufacturing_line(line_id),
+            FOREIGN KEY (department_code) REFERENCES departments(code)
+        )
+    """)
+    # SQLite treats NULL as distinct in UNIQUE — fine for the centralised case
+    # where exactly one (NULL, dept_code) row should exist. Index to enforce
+    # the per-line case (no duplicate (line_code, dept) pairs).
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stations_line_dept
+            ON stations(line_code, department_code)
+    """)
+
     # Seed a default 11:00 refuel window if the table is empty
     if conn.execute("SELECT COUNT(*) FROM refuel_windows").fetchone()[0] == 0:
         conn.execute("""INSERT INTO refuel_windows
@@ -797,6 +867,8 @@ def init_db():
 
     # ── Seed actual PV Wood glue recipes (idempotent: keyed by recipe_code) ──
     _seed_real_glue_recipes(conn)
+    # ── Seed lines, departments, line flow (idempotent) ─────────────
+    _seed_lines_and_departments(conn)
     # Phase B cleanup removed glue_formula placeholders from materials entirely;
     # _normalize_glue_materials is no longer needed.
 
@@ -846,6 +918,117 @@ def _seed_real_glue_recipes(conn):
     conn.commit()
 
 
+# ── Lines + Departments + Line Flow seed ─────────────────────
+# Single source of truth: edit these tuples to add/rename a line or dept.
+# All inserts are upserts keyed by primary key so re-running init_db is safe.
+
+# (code, label, line_type, sort_order)
+_DEFAULT_LINES = [
+    ('P01', 'Production Line 01', 'main', 1),
+    ('P02', 'Production Line 02', 'main', 2),
+    ('P37', 'Production Line 37', 'main', 3),
+    ('PUV', 'UV Line',             'aux',  10),
+    ('PVS', 'Veneer Slicing',      'aux',  11),
+    ('PSP', 'Veneer Splicing',     'aux',  12),
+]
+
+# (code, label, icon, is_centralised, sort_order)
+_DEFAULT_DEPARTMENTS = [
+    ('fc',            'FC / Cutting',  'bi-box-seam',    0,  1),
+    ('laminating',    'Laminating',    'bi-layers',      0,  2),
+    ('cold_press',    'Cold Press',    'bi-snow',        0,  3),
+    ('hot_press',     'Hot Press',     'bi-fire',        0,  4),
+    ('bleach',        'Bleach',        'bi-droplet',     0,  5),
+    ('repair',        'Repair',        'bi-tools',       0,  6),
+    ('sanding',       'Sanding',       'bi-circle-half', 0,  7),
+    ('grading',       'Grading',       'bi-stars',       0,  8),
+    ('packing',       'Packing',       'bi-box',         1,  9),  # centralised
+    ('fg_receiving',  'FG Receiving',  'bi-inbox',       1, 10),  # centralised
+    ('fg_warehouse',  'FG Warehouse',  'bi-building',    1, 11),  # centralised
+]
+
+# Production flow per line. Aux lines have no flow (they're request-only hubs).
+# Each list = department code sequence the line traverses.
+_DEFAULT_FLOW = {
+    'P01': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P02': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P37': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+}
+
+def _seed_lines_and_departments(conn):
+    """Upsert default lines, departments, and per-line flow. Idempotent:
+    existing rows keep their is_active state; only label/icon/sort_order
+    get refreshed from the canonical lists above. To remove a line/dept
+    cleanly, set is_active=0 in the DB (don't delete — rows in batches or
+    consumable_request may reference it)."""
+    for code, label, ltype, order in _DEFAULT_LINES:
+        existing = conn.execute(
+            "SELECT line_id FROM manufacturing_line WHERE line_id=?", (code,)).fetchone()
+        if existing:
+            conn.execute("""UPDATE manufacturing_line
+                            SET line_name=?, line_type=?, sort_order=?
+                            WHERE line_id=?""",
+                         (label, ltype, order, code))
+        else:
+            conn.execute("""INSERT INTO manufacturing_line
+                            (line_id, line_name, active, line_type, sort_order)
+                            VALUES (?,?,1,?,?)""",
+                         (code, label, ltype, order))
+
+    for code, label, icon, centralised, order in _DEFAULT_DEPARTMENTS:
+        existing = conn.execute(
+            "SELECT code FROM departments WHERE code=?", (code,)).fetchone()
+        if existing:
+            conn.execute("""UPDATE departments SET label=?, icon=?,
+                            is_centralised=?, sort_order=? WHERE code=?""",
+                         (label, icon, centralised, order, code))
+        else:
+            conn.execute("""INSERT INTO departments
+                            (code, label, icon, is_centralised, sort_order, is_active)
+                            VALUES (?,?,?,?,?,1)""",
+                         (code, label, icon, centralised, order))
+
+    # Replace line_flow rows for known lines (so renaming the flow is just
+    # editing _DEFAULT_FLOW). Untouched lines keep their custom flow if any.
+    for line_code, depts in _DEFAULT_FLOW.items():
+        conn.execute("DELETE FROM line_flow WHERE line_code=?", (line_code,))
+        for i, dept_code in enumerate(depts):
+            conn.execute("""INSERT INTO line_flow (line_code, seq, department_code)
+                            VALUES (?,?,?)""", (line_code, i, dept_code))
+
+    # Stations — one row per (line, per-line dept), plus one row per
+    # centralised dept with line_code=NULL. Idempotent: skip if the pair
+    # already exists. Labels reuse the dept's display label so renaming a
+    # department (in _DEFAULT_DEPARTMENTS) propagates here on next boot.
+    dept_label = {d[0]: d[1]      for d in _DEFAULT_DEPARTMENTS}
+    centralised = {d[0]           for d in _DEFAULT_DEPARTMENTS if d[3] == 1}
+    for line_code, depts in _DEFAULT_FLOW.items():
+        for dept in depts:
+            if dept in centralised: continue   # handled below
+            existing = conn.execute(
+                "SELECT id FROM stations WHERE line_code=? AND department_code=?",
+                (line_code, dept)).fetchone()
+            label = f"{line_code} · {dept_label.get(dept, dept)}"
+            if existing:
+                conn.execute("UPDATE stations SET label=? WHERE id=?", (label, existing[0]))
+                continue
+            conn.execute("""INSERT INTO stations
+                            (line_code, department_code, label, is_active)
+                            VALUES (?,?,?,1)""", (line_code, dept, label))
+    for dept_code in centralised:
+        existing = conn.execute(
+            "SELECT id FROM stations WHERE line_code IS NULL AND department_code=?",
+            (dept_code,)).fetchone()
+        label = f"{dept_label.get(dept_code, dept_code)} (all lines)"
+        if existing:
+            conn.execute("UPDATE stations SET label=? WHERE id=?", (label, existing[0]))
+            continue
+        conn.execute("""INSERT INTO stations
+                        (line_code, department_code, label, is_active)
+                        VALUES (NULL,?,?,1)""", (dept_code, label))
+    conn.commit()
+
+
 # `_normalize_glue_materials` was removed in Phase B. Glue placeholders no
 # longer exist in the materials table — recipes live in glue_recipes and
 # FG BOM lines link to them via bom_lines.glue_recipe_id.
@@ -854,6 +1037,24 @@ def _seed_real_glue_recipes(conn):
 # ═══════════════════════════════════════════════════════════════
 # MATERIALS
 # ═══════════════════════════════════════════════════════════════
+# Internal helpers — pass the open connection in. The repeated
+# `SELECT * FROM materials WHERE id=?` / `WHERE code=?` patterns used to
+# be inlined at 16+ call sites; centralising lets schema additions land
+# in one place. Helpers return the raw Row / scalar — callers wrap with
+# row_to_dict() when they need a dict.
+def _mat_by_id(conn, mid):
+    return _mat_by_id(conn, mid)
+
+def _mat_by_code(conn, code):
+    return _mat_by_code(conn, code)
+
+def _mat_id_by_code(conn, code):
+    """Return materials.id for a code, or None if not present."""
+    if not code: return None
+    row = conn.execute("SELECT id FROM materials WHERE code=?", (code,)).fetchone()
+    return row[0] if row else None
+
+
 def get_all_materials():
     conn = get_db()
     rows = conn.execute("SELECT * FROM materials ORDER BY type, name").fetchall()
@@ -861,7 +1062,7 @@ def get_all_materials():
 
 def get_material(mid):
     conn = get_db()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
+    row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
 def create_material(data):
@@ -878,7 +1079,7 @@ def create_material(data):
          data.get('auto_glue_code'))
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (cur.lastrowid,)).fetchone()
+    row = _mat_by_id(conn, cur.lastrowid)
     conn.close(); return row_to_dict(row)
 
 def update_material(mid, data):
@@ -900,7 +1101,7 @@ def update_material(mid, data):
          data.get('auto_glue_code'), mid)
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
+    row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
 def delete_material(mid):
@@ -924,7 +1125,7 @@ def bulk_upsert_material(data):
 
     ex = None
     if code:
-        ex = conn.execute("SELECT * FROM materials WHERE code=?", (code,)).fetchone()
+        ex = _mat_by_code(conn, code)
     if not ex:
         ex = conn.execute("SELECT * FROM materials WHERE name=?", (name,)).fetchone()
 
@@ -2719,10 +2920,9 @@ def _recipe_to_summary(conn, recipe_row, with_ingredients: bool = False):
     return out
 
 
-def get_all_compound_skus():
-    """Return all glue recipes in the legacy "compound_cost" shape.
-    Backed by glue_recipes (the new source of truth) instead of the old
-    compound_skus/compound_lines/compound_cost view."""
+def get_glue_recipes_summary():
+    """Return all active glue recipes as cost summaries (no ingredient
+    breakdown). Backed by `glue_recipes` since Phase B."""
     conn = get_db()
     try:
         rows = conn.execute(
@@ -2733,7 +2933,7 @@ def get_all_compound_skus():
         conn.close()
 
 
-def get_compound_sku(code):
+def get_glue_recipe_detail(code):
     """Return one glue recipe with ingredient breakdown, by recipe_code."""
     conn = get_db()
     try:
@@ -2761,9 +2961,8 @@ def get_packing_sku(code):
 
 # ── Compound SKU CRUD ────────────────────────────────────────────────────────
 
-def get_compound_skus_with_lines(type_filter=None):
-    """Recipe list with ingredient breakdown, backed by glue_recipes.
-    `type_filter` is ignored (legacy parameter) — only glue recipes exist now."""
+def get_glue_recipes_with_ingredients():
+    """Recipe list with ingredient breakdown, backed by glue_recipes."""
     conn = get_db()
     try:
         rows = conn.execute(
@@ -2773,31 +2972,6 @@ def get_compound_skus_with_lines(type_filter=None):
     finally:
         conn.close()
 
-
-# ── Legacy compound_skus writers — no-op (table dropped in Phase B) ────
-def save_compound_sku(data):
-    """Deprecated: use save_glue_recipe() instead. Returns the recipe shape
-    so any caller that POSTs a recipe-shaped body via the old endpoint still
-    gets a sensible reply."""
-    return save_glue_recipe(data)
-
-def delete_compound_sku(cid):
-    """Deprecated: use delete_glue_recipe(id) instead."""
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM glue_recipes WHERE id=?", (cid,))
-        conn.commit()
-    finally:
-        conn.close()
-
-def add_compound_line(compound_id, mat_code, ratio, unit='kg', notes=''):
-    """Deprecated: ingredient links live in glue_recipes.material_links now.
-    Kept as a no-op so legacy callers don't crash."""
-    return None
-
-def delete_compound_line(lid):
-    """Deprecated: see add_compound_line note."""
-    return None
 
 # ── Packing SKU CRUD ─────────────────────────────────────────────────────────
 
@@ -2893,13 +3067,6 @@ def _glue_recipe_cost_per_kg(conn, recipe_id: int) -> float | None:
     return (total_cost / total_kg) if total_kg > 0 else None
 
 
-def resync_glue_placeholder_prices(conn=None) -> int:
-    """No-op kept for API back-compat. After Phase B, glue cost is computed
-    on-the-fly from glue_recipes.material_links + ingredient prices; there is
-    no longer a cached price to sync to a placeholder row."""
-    return 0
-
-
 def update_material_price(mat_code, price):
     """Update a material's catalog price. Glue recipes that reference this
     material as an ingredient will pick up the new price on the next read
@@ -2981,13 +3148,19 @@ def get_structured_bom(sku_code=None):
         code = s['code']
         pallet_qty = s['pallet_qty'] or 1
 
-        # Core BOM lines for this SKU
+        # Core BOM lines for this SKU. Glue lines store glue_recipe_id (FK into
+        # glue_recipes) with material_id=NULL since Phase B, so we LEFT JOIN both
+        # tables and pick whichever resolves. An inner JOIN on materials would
+        # silently drop every glue row.
         lines = conn.execute("""
             SELECT bl.seq, bl.qty_override, bl.usage_g_per_face, bl.qty_unit,
+                   bl.glue_recipe_id,
                    m.code as mat_code, m.name as mat_name, m.name_th,
-                   m.type as mat_type, m.unit, m.price
+                   m.type as mat_type, m.unit, m.price,
+                   gr.recipe_code as glue_code, gr.name as glue_name
             FROM bom_lines bl
-            JOIN materials m ON m.id = bl.material_id
+            LEFT JOIN materials    m  ON m.id  = bl.material_id
+            LEFT JOIN glue_recipes gr ON gr.id = bl.glue_recipe_id
             WHERE bl.sku_id = ?
             ORDER BY bl.seq
         """, (sid,)).fetchall()
@@ -3012,9 +3185,46 @@ def get_structured_bom(sku_code=None):
         }
 
         for l in lines:
+            is_glue_row = l['glue_recipe_id'] is not None
             qty = l['qty_override'] if l['qty_override'] else pallet_qty
+
+            if is_glue_row:
+                # Resolve glue cost live from glue_recipes.material_links via
+                # _recipe_to_summary so price changes on ingredient materials
+                # propagate to the FG cost without a separate sync step.
+                recipe_row = conn.execute(
+                    "SELECT * FROM glue_recipes WHERE id=?", (l['glue_recipe_id'],)
+                ).fetchone()
+                if recipe_row:
+                    summary = _recipe_to_summary(conn, recipe_row)
+                    price_per_kg = summary.get('cost_per_kg_mixed') or 0
+                else:
+                    price_per_kg = 0
+                if l['usage_g_per_face'] is not None:
+                    line_cost = round(price_per_kg * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
+                else:
+                    line_cost = 0
+                item = {
+                    'code':   l['glue_code'] or '',
+                    'name':   l['glue_name'] or '',
+                    'name_th': None,
+                    'qty':    qty,
+                    'unit':   'kg',
+                    'price':  price_per_kg,
+                    'usage_g_per_face': l['usage_g_per_face'],
+                    'cost':   line_cost,
+                    'glue_recipe_id': l['glue_recipe_id'],
+                }
+                if l['seq'] == 4:
+                    entry['face_glue'] = item
+                elif l['seq'] == 5:
+                    entry['back_glue'] = item
+                entry['core_cost'] = round(entry['core_cost'] + line_cost, 4)
+                continue
+
+            # Non-glue row — backed by materials
             if l['usage_g_per_face'] is not None:
-                line_cost = round(l['price'] * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
+                line_cost = round((l['price'] or 0) * (l['usage_g_per_face'] / 1000.0) * pallet_qty, 4)
             else:
                 line_cost = round((l['price'] or 0) * qty, 4)
 
@@ -3037,6 +3247,8 @@ def get_structured_bom(sku_code=None):
                 entry['face_veneer'] = item
             elif mt == 'veneer_sheet' and seq == 3:
                 entry['back_veneer'] = item
+            # Legacy: glue used to be stored as a materials row (type=glue_formula).
+            # Keep this branch so any pre-Phase-B rows still display.
             elif mt == 'glue_formula' and seq == 4:
                 entry['face_glue'] = item
             elif mt == 'glue_formula' and seq == 5:
@@ -3125,31 +3337,49 @@ def save_bom_for_sku(data):
         row = conn.execute("SELECT id FROM materials WHERE code=?", (mat_code,)).fetchone()
         return row[0] if row else None
 
-    spec = [
-        # (seq, code_key, qty_key,           usage_key)
-        (1, 'base_board_code',   'base_board_qty',   None),
-        (2, 'face_veneer_code',  'face_veneer_qty',  None),
-        (3, 'back_veneer_code',  'back_veneer_qty',  None),
-        (4, 'face_glue_code',    None,               'face_glue_usage_g'),
-        (5, 'back_glue_code',    None,               'back_glue_usage_g'),
-    ]
-    for seq, code_key, qty_key, usage_key in spec:
+    def glue_recipe_id(recipe_code):
+        if not recipe_code: return None
+        row = conn.execute(
+            "SELECT id FROM glue_recipes WHERE recipe_code=?", (recipe_code,)).fetchone()
+        return row[0] if row else None
+
+    # Non-glue lines (seq 1-3) — resolve against materials.code
+    for seq, code_key, qty_key in [
+        (1, 'base_board_code',  'base_board_qty'),
+        (2, 'face_veneer_code', 'face_veneer_qty'),
+        (3, 'back_veneer_code', 'back_veneer_qty'),
+    ]:
         mat_code = data.get(code_key)
-        if not mat_code:
-            continue
+        if not mat_code: continue
         mid = mat_id(mat_code)
-        if not mid:
+        if not mid: continue
+        qty = float(data.get(qty_key) or pallet_qty)
+        conn.execute(
+            "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override) VALUES (?,?,?,?,?)",
+            (sku_id, mid, grp_id, seq, qty))
+
+    # Glue lines (seq 4-5) — resolve against glue_recipes.recipe_code first,
+    # fall back to materials.code only if the user picked a legacy glue_formula
+    # placeholder material. After Phase B the front-end picker uses recipes.
+    for seq, code_key, usage_key in [
+        (4, 'face_glue_code', 'face_glue_usage_g'),
+        (5, 'back_glue_code', 'back_glue_usage_g'),
+    ]:
+        picked = data.get(code_key)
+        if not picked: continue
+        usage_g = float(data.get(usage_key) or 45)
+        rid = glue_recipe_id(picked)
+        if rid:
+            conn.execute(
+                "INSERT INTO bom_lines (sku_id,glue_recipe_id,group_id,seq,usage_g_per_face) VALUES (?,?,?,?,?)",
+                (sku_id, rid, grp_id, seq, usage_g))
             continue
-        if usage_key:
-            usage_g = float(data.get(usage_key) or 45)
+        # legacy fallback: glue stored as a materials row
+        mid = mat_id(picked)
+        if mid:
             conn.execute(
                 "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,usage_g_per_face) VALUES (?,?,?,?,?)",
                 (sku_id, mid, grp_id, seq, usage_g))
-        else:
-            qty = float(data.get(qty_key) or pallet_qty)
-            conn.execute(
-                "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override) VALUES (?,?,?,?,?)",
-                (sku_id, mid, grp_id, seq, qty))
 
     conn.commit()
 
@@ -3202,9 +3432,20 @@ def delete_employee(emp_id):
     conn.execute("UPDATE employee SET active=0 WHERE emp_id=?", (emp_id,))
     conn.commit(); conn.close()
 
-def get_manufacturing_lines():
+def get_manufacturing_lines(active_only=True, line_type=None):
+    """Return all production lines, ordered by sort_order then code.
+    line_type can be 'main' or 'aux' to filter; None returns both."""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM manufacturing_line ORDER BY line_id").fetchall()
+    q = """SELECT line_id AS code, line_name AS label,
+                  COALESCE(line_type,'main') AS line_type,
+                  COALESCE(sort_order,0)     AS sort_order,
+                  active                     AS is_active
+             FROM manufacturing_line WHERE 1=1"""
+    params = []
+    if active_only:    q += " AND active = 1"
+    if line_type:      q += " AND COALESCE(line_type,'main') = ?"; params.append(line_type)
+    q += " ORDER BY sort_order ASC, line_id ASC"
+    rows = conn.execute(q, params).fetchall()
     conn.close(); return rows_to_list(rows)
 
 def get_prod_machines(machine_type=None):
@@ -3212,6 +3453,72 @@ def get_prod_machines(machine_type=None):
     q = "SELECT * FROM prod_machine WHERE active=1"
     if machine_type: q += " AND machine_type=?"; params.append(machine_type)
     rows = conn.execute(q + " ORDER BY machine_id", params).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+def get_departments(active_only=True):
+    """Return all departments, ordered by sort_order."""
+    conn = get_db()
+    q = "SELECT * FROM departments"
+    if active_only: q += " WHERE is_active = 1"
+    q += " ORDER BY sort_order ASC, code ASC"
+    rows = conn.execute(q).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+def get_line_flow(line_code):
+    """Return the ordered department sequence for one line.
+    Aux lines (PUV/PVS/PSP) return [] — they're request-only hubs."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT lf.seq, lf.department_code AS code,
+               d.label, d.icon, d.is_centralised
+          FROM line_flow lf
+          LEFT JOIN departments d ON d.code = lf.department_code
+         WHERE lf.line_code = ?
+         ORDER BY lf.seq ASC
+    """, (line_code,)).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+def get_all_line_flows():
+    """Return all line flows as { line_code: [dept_code, ...] }. Used by the
+    frontend to populate LINE_FLOW in one fetch instead of N+1."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT line_code, seq, department_code
+          FROM line_flow ORDER BY line_code, seq
+    """).fetchall()
+    conn.close()
+    flow = {}
+    for r in rows:
+        flow.setdefault(r['line_code'], []).append(r['department_code'])
+    return flow
+
+def get_stations(line_code=None, department_code=None, active_only=True):
+    """Return concrete (line, department) stations with display labels
+    joined in. Filter by line_code (None for centralised) or department_code.
+    Centralised stations carry line_code = NULL; the call-site decides whether
+    to show 'ALL LINES' or hide the column."""
+    conn = get_db()
+    q = """
+        SELECT s.id, s.line_code, s.department_code,
+               s.label, s.capacity_per_shift, s.is_active,
+               d.label AS department_label, d.icon AS department_icon,
+               d.is_centralised, d.sort_order AS dept_sort,
+               l.line_name AS line_label, l.line_type, l.sort_order AS line_sort
+          FROM stations s
+          LEFT JOIN departments        d ON d.code   = s.department_code
+          LEFT JOIN manufacturing_line l ON l.line_id = s.line_code
+         WHERE 1=1
+    """
+    params = []
+    if active_only:                          q += " AND s.is_active = 1"
+    if department_code is not None:          q += " AND s.department_code = ?"; params.append(department_code)
+    if line_code is not None:
+        if line_code == '':
+            q += " AND s.line_code IS NULL"
+        else:
+            q += " AND s.line_code = ?"; params.append(line_code)
+    q += " ORDER BY l.sort_order IS NULL, l.sort_order, s.line_code, d.sort_order, s.department_code"
+    rows = conn.execute(q, params).fetchall()
     conn.close(); return rows_to_list(rows)
 
 # ═══════════════════════════════════════════════════════════════
@@ -3595,12 +3902,8 @@ def save_glue_recipe(data: dict) -> dict:
                      tuple(flds.values()))
         rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.commit()
-    # Phase B: editing the recipe (kg amounts or material_links) immediately
-    # re-derives the cached cost on the matching glue_formula placeholder.
-    try:
-        resync_glue_placeholder_prices(conn)
-    except Exception:
-        pass
+    # Phase B: glue cost is now computed live from glue_recipes.material_links
+    # whenever the cost is read, so there is nothing to re-sync after a write.
     row = row_to_dict(conn.execute("SELECT * FROM glue_recipes WHERE id=?", (rid,)).fetchone())
     conn.close(); return row
 
@@ -4045,12 +4348,10 @@ def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
                                    estimated_arrival: str = '') -> dict:
     # NEW              = Request raised by Planning/Warehouse
     # APPROVED         = Purchasing has reviewed and approved
-    # PO_ISSUED        = Purchase order sent to supplier (use 'ORDERED' alias for compat)
+    # PO_ISSUED        = Purchase order sent to supplier
     # AWAITING_ARRIVAL = Supplier confirmed; materials in transit, ETA known
     # RECEIVED         = Materials physically received
     # CANCELLED        = Request cancelled
-    aliases = {'ORDERED': 'PO_ISSUED'}  # legacy synonym
-    status = aliases.get(status, status)
     valid = ('NEW','APPROVED','PO_ISSUED','AWAITING_ARRIVAL','RECEIVED','OVER_RECEIVED','CANCELLED')
     if status not in valid:
         raise ValueError(f"invalid status (must be one of {valid})")
@@ -4073,9 +4374,6 @@ def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
             sets.append("supplier_po_ref = ?"); params.append(supplier_po_ref)
         if estimated_arrival:
             sets.append("estimated_arrival = ?"); params.append(estimated_arrival)
-        # Also stamp the legacy ordered_at when PO_ISSUED so old reports keep working
-        if status == 'PO_ISSUED':
-            sets.append("ordered_at = COALESCE(ordered_at, datetime('now'))")
         params.append(pr_id)
         conn.execute(f"UPDATE purchase_requests SET {', '.join(sets)} WHERE id = ?", params)
         conn.commit()
