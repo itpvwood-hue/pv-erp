@@ -46,6 +46,34 @@ def _get_list(key: str, default: List[str]) -> List[str]:
 # ── External secrets ─────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
+
+def make_anthropic_client():
+    """Build an Anthropic SDK client pinned to the public API with x-api-key
+    auth, or return None if no usable key is configured.
+
+    Why not just `anthropic.Anthropic(api_key=...)`? The SDK auto-reads
+    ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / ANTHROPIC_CUSTOM_HEADERS from
+    the process environment. Some host environments (agent runners, proxy
+    harnesses, CI) inject those — and an EMPTY ANTHROPIC_AUTH_TOKEN makes the
+    SDK emit 'Authorization: Bearer ' which httpcore rejects as an illegal
+    header (surfacing confusingly as APIConnectionError), while a stray
+    ANTHROPIC_BASE_URL silently redirects calls off the real API. The ERP only
+    ever authenticates with ANTHROPIC_API_KEY against the standard endpoint, so
+    we strip the bogus empties and pin base_url. A normal production server has
+    none of these vars set, so this is a harmless no-op there.
+    """
+    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        return None
+    for _k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"):
+        if os.environ.get(_k, None) == "":
+            os.environ.pop(_k, None)
+    try:
+        import anthropic
+    except Exception:
+        return None
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY,
+                               base_url="https://api.anthropic.com")
+
 # ── File paths (all overridable for non-standard deployments) ────
 DB_PATH   = os.getenv("DB_PATH",
                       os.path.join(PROJECT_ROOT, 'erp.db'))

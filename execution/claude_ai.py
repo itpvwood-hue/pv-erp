@@ -12,17 +12,23 @@ import base64
 
 # All env-loading happens in execution/config.py — single source of truth.
 try:
-    from config import ANTHROPIC_API_KEY
+    from config import ANTHROPIC_API_KEY, make_anthropic_client
 except ImportError:
     # Fallback for the rare case this module is imported before config is
     # importable (e.g. unit tests outside the package).
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=False)
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    make_anthropic_client = None
 
+# make_anthropic_client() pins the public endpoint + x-api-key auth and strips
+# host-injected ANTHROPIC_AUTH_TOKEN/BASE_URL/CUSTOM_HEADERS (see config.py).
 try:
-    import anthropic
-    _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "your_anthropic_api_key_here" else None
+    if make_anthropic_client:
+        _client = make_anthropic_client()
+    else:
+        import anthropic
+        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "your_anthropic_api_key_here" else None
 except Exception:
     _client = None
 

@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.18.0"
+VERSION    = "2.18.1"
 BUILD_DATE = "2026-06-09"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.18.1", "2026-06-09", "Fix Factory Assistant 'internal server error' (anthropic.APIConnectionError). Root cause was host-injected ANTHROPIC_AUTH_TOKEN/BASE_URL/CUSTOM_HEADERS env vars hijacking the SDK — an EMPTY AUTH_TOKEN made it emit 'Authorization: Bearer ' which httpcore rejects. New config.make_anthropic_client() strips the bogus empties and pins base_url to the public endpoint with x-api-key auth; factory_assistant.py + claude_ai.py now build their clients through it. No-op on a normal server (those vars aren't set there)."),
     ("2.18.0", "2026-06-09", "Station consumable-request overhaul. (1) Production line is now hard-set from the Station Hub line selector — per-line departments must have a line; centralised depts (packing/fg_receiving/fg_warehouse) request line-less. (2) Request-from-Warehouse modal rebuilt: consumable type filter, multiple material lines, needed-by date+time (required). (3) Two-step receive — warehouse fulfils, station confirms receipt via 'View my open requests' → deposits into station_stock (fixes 'fulfilled stock never showed at the department'). (4) 'View my open requests' now opens a station-scoped list (was wrongly sending dept leaders to the warehouse queue page). (5) Standalone 'Receive' button removed from station stock (receipt flows from the open request); Issue/Use + Adjust kept"),
     ("2.17.3", "2026-06-09", "Stock guard added to consumable-request fulfillment — the one issue path that was missing it. fulfill_consumable_request now raises 'Insufficient WH stock: only N available' instead of silently clamping current_stock to 0 with MAX(0, ...), matching fulfill_fc_transfer_request and the glue-mix/VCMX paths. The /api/consumable-requests/{id}/fulfill endpoint wraps the ValueError as HTTP 400 so the warehouse UI shows the real message. Prevents over-issuing a consumable below available stock"),
     ("2.17.2", "2026-06-09", "Fix (real one): the 'Promise Error: loadDashboard is not defined' came from index.html's INIT IIFE — `(async()=>{await preload();loadDashboard();})()` — which fired at parse time, BEFORE any portal script loaded. Dropped the loadDashboard() call from the IIFE (preload() still runs); navigation to dashboard now happens via applySession after the portal is dynamically loaded. Also removed a leftover 'dashboard': loadDashboard registration in portal_admin.js's Object.assign that my last script missed because of unusual whitespace."),

@@ -22,15 +22,15 @@ import os, re, json, sqlite3, datetime, uuid
 from typing import Any
 
 try:
-    from config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH
+    from config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH, make_anthropic_client
 except ImportError:
-    from execution.config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH
+    from execution.config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH, make_anthropic_client
 
+# make_anthropic_client() pins the public endpoint + x-api-key auth and
+# strips host-injected ANTHROPIC_AUTH_TOKEN/BASE_URL/CUSTOM_HEADERS that
+# otherwise hijack the SDK (see config.py for the full rationale).
 try:
-    import anthropic
-    _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if (
-        ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "your_anthropic_api_key_here"
-    ) else None
+    _client = make_anthropic_client()
 except Exception:
     _client = None
 
