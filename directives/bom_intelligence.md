@@ -1,5 +1,11 @@
 # BOM Intelligence Layer — Directive
 
+> **SUPERSEDED (v2.11.0).** The standalone BOM Query page was replaced by
+> the **Factory Assistant** (`directives/factory_assistant.md`), which
+> answers these questions against the live DB. The `claude_ai.py` →
+> `query_bom()` function and `POST /api/ai/bom-query` endpoint still exist
+> but have no UI. Kept for historical reference.
+
 ## Goal
 Allow factory managers and production planners to query Bill of Materials data in plain language via Claude, replacing manual spreadsheet lookups.
 

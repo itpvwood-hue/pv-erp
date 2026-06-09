@@ -1,5 +1,11 @@
 # Production Capacity Planning Assistant — Directive
 
+> **SUPERSEDED (v2.11.0).** The standalone Capacity Planner page was
+> replaced by the **Factory Assistant** (`directives/factory_assistant.md`).
+> The `claude_ai.py` → `check_capacity()` function and
+> `POST /api/ai/capacity-check` endpoint still exist but have no UI. Kept
+> for historical reference.
+
 ## Goal
 Answer natural language capacity questions so managers can proactively plan instead of reactively firefight. Replace mental math and spreadsheet calculations with instant, reasoned answers.
 
