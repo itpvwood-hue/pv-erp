@@ -5781,18 +5781,15 @@ const NAV_SEC_ROLES = {
 // User Management (Managerial only) moved to /static/js/portal_admin.js
 </script>
 
-<!-- Portal modules — each self-registers its pages into PAGE_LOADERS.
-     Loaded BEFORE auth.js so any pages they own are already in the
-     registry when initAuth's IIFE calls navigateTo for the landing page. -->
-<script src="/static/js/portal_warehouse.js"></script>
-<script src="/static/js/portal_planning.js"></script>
-<script src="/static/js/portal_accounting.js"></script>
-<script src="/static/js/portal_admin.js"></script>
-
 <!-- Auth + session lifecycle. Must load AFTER the main inline script so
      the constants it reads (_PORTAL_MODE, ROLE_PAGES, NAV_SEC_ROLES) exist
-     in the global lexical environment. Must also load AFTER portal modules
-     so the page-loader registry is fully populated before initAuth runs. -->
+     in the global lexical environment.
+
+     Portal modules (portal_warehouse / portal_planning / portal_accounting
+     / portal_admin) are NO LONGER loaded eagerly here. auth.js's
+     applySession dynamically loadPortalScript(name) calls fetch only the
+     bundles the signed-in role actually needs. A warehouse user no longer
+     downloads the 486 kB planning bundle. -->
 <script src="/static/js/auth.js"></script>
 
 <!-- Employee Modal -->

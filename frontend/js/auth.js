@@ -106,7 +106,7 @@ async function doLogin(){
     // visit /warehouse intentionally (e.g. admin inspecting it) so we don't
     // bounce them back to / from there.
     if(_wantsWh && _PORTAL_MODE !== 'warehouse'){ window.location.href = '/warehouse'; return; }
-    applySession(data.user, data.departments||[]);
+    await applySession(data.user, data.departments||[]);
     document.getElementById('login-overlay').style.display='none';
   }catch(e){
     if(e instanceof TypeError && e.message.includes('fetch')){
@@ -149,7 +149,43 @@ const WAREHOUSE_PORTAL_PAGES = new Set([
   'dept-fg_warehouse',  // FG Warehouse
 ]);
 
-function applySession(user, depts){
+// ── Dynamic portal loader ────────────────────────────────────
+// Each role only downloads the portal modules it actually needs. The map
+// is conservative — when a role can navigate to a page hosted in a
+// portal, that portal is loaded. Cross-role visibility (e.g. Managerial
+// inspecting a warehouse page) is preserved.
+const PORTAL_FOR_ROLE = {
+  WAREHOUSE:           ['warehouse'],
+  DEPARTMENT_LEADER:   ['planning', 'warehouse'],          // SLH + supply queue
+  PRODUCTION_PLANNING: ['planning', 'warehouse', 'accounting'],
+  MANAGERIAL:          ['planning', 'warehouse', 'accounting', 'admin'],
+};
+const _portalLoadCache = {};   // name -> Promise
+
+function loadPortalScript(name){
+  if(_portalLoadCache[name]) return _portalLoadCache[name];
+  _portalLoadCache[name] = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = '/static/js/portal_' + name + '.js';
+    s.onload  = () => resolve(name);
+    s.onerror = () => reject(new Error('Failed to load portal_' + name + '.js'));
+    document.head.appendChild(s);
+  });
+  return _portalLoadCache[name];
+}
+
+async function loadPortalsForRole(role){
+  const list = PORTAL_FOR_ROLE[role] || ['warehouse'];
+  // Parallel — they don't depend on each other.
+  return Promise.all(list.map(loadPortalScript));
+}
+
+async function applySession(user, depts){
+  // Load this role's portal bundles BEFORE rendering the sidebar +
+  // navigating, so PAGE_LOADERS has all the pages registered when the
+  // first navigateTo() fires.
+  try { await loadPortalsForRole(user.role); }
+  catch(e){ console.warn('portal load failed:', e); }
   // Update user pill
   document.getElementById('nav-user-name').textContent = user.display_name;
   document.getElementById('nav-user-role').textContent  = ROLE_LABEL[user.role]||user.role;
@@ -283,12 +319,12 @@ function userCanActOnBatch(batch){
     // Portal routing on refresh / revisit
     const _wantsWh = data.role === ROLE.WAREHOUSE;
     if(_wantsWh && _PORTAL_MODE !== 'warehouse'){ window.location.href = '/warehouse'; return; }
-    applySession(data, data.departments||[]);
+    await applySession(data, data.departments||[]);
     document.getElementById('login-overlay').style.display='none';
   }catch(e){
     // Server unreachable — still hide overlay so user can see connection error
     document.getElementById('login-overlay').style.display='none';
     const u=JSON.parse(userStr);
-    applySession(u, getCurrentDepts());
+    await applySession(u, getCurrentDepts());
   }
 })();
