@@ -172,9 +172,10 @@ Likely candidates that turn up during the split:
 | 8 | `portal_planning.js` chunks 1–5 | ✅ done | VCMX, Material Shortfalls + FC Hub, BOM cluster + Packing Spec, SLH cluster (Station Leader Hub + Glue Mix + WH Consumable Request + Station Presets + Station Tools), order-intake + line-board + kanban + prod-logs + prod-reports + forklift-report — 14 page loaders, 6,855 lines |
 | 9 | `portal_accounting.js` | ✅ done | accounting hub, `dc*` (dept costs) — 2 page loaders, 193 lines |
 | 10 | `portal_admin.js` | ✅ done | Factory Assistant chat, Employees, User Management — 2 page loaders, 353 lines |
-| 11 | Extend `core.js` | TODO | `prioBadge` family, `escapeHtml`, `matRow` renderers used by 2+ portals. STATION_LABEL/ICON/COLOR currently still in main inline script (read by portal_accounting + employees) — promote to core.js |
-| 12 | Trim `index.html` | TODO | target: ~500 lines (HTML shell + login + script tags). Current: ~525k chars (started at 1.2 MB, now ~44%) |
-| 13 | Dynamic portal loader | TODO | replace per-role `<script src>` tags with `loadPortalScript(role)` |
+| 11 | Extend `core.js` | ✅ done | Hoisted `prioBadge`/`prioDot`/`PRIO_LABEL`/`prioSelect`/`setPriority`/`statusBadge`/`lineBadge`/`populateSel`/`STATION_*`/`DEPT_*`/`slStatusBadge`/`slDeptBadge`/`escapeHtml`. core.js now 152 lines |
+| 12 | Trim `index.html` JS | ✅ mostly done | Moved Dashboard, Machines, Sales Orders, Finished Goods, Materials, Lots & Documents, Purchasing Hub, Traceability into their portal files. PAGE_LOADERS dict now wholly portal-owned. index.html down to **5,854 lines** (started ~18,500 — 68% smaller). What remains: PORTAL MODE, BULK UPLOAD CSV, DATA TOOLS, INIT IIFE, AUTH MODULE (ROLE_PAGES + NAV_SEC_ROLES dicts), and all the HTML page divs |
+| 13 | Dynamic portal loader | TODO | replace per-role `<script src>` tags with `loadPortalScript(role)` after login; a warehouse user wouldn't download the 486k planning bundle |
+| 14 | (optional) Move HTML page divs into per-portal files | TODO | each portal could ship its own HTML template strings appended to the DOM on load. Bigger architectural change — defer to a future pass |
 
 Test each chunk by hard-refreshing in the browser, signing in as the
 relevant role, and clicking every sidebar entry. The audit (37/37 today)
