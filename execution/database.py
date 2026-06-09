@@ -2,7 +2,7 @@
 Database layer for Veneer Overlay Factory ERP.
 SQLite with raw SQL. All tables created via init_db().
 """
-import sqlite3, json, os, uuid
+import sqlite3, json, os, uuid, re
 from datetime import date as datemod
 
 try:
@@ -857,6 +857,39 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_stations_line_dept
             ON stations(line_code, department_code)
     """)
+
+    # ── Factory Assistant memory (2.19.0) ──────────────────────
+    # fa_conversations: every chat turn, keyed by browser session_id, so the
+    # assistant can recall the current conversation across requests.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fa_conversations (
+            id          TEXT PRIMARY KEY,        -- UUID
+            session_id  TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            role        TEXT NOT NULL,           -- 'user' | 'assistant'
+            content     TEXT NOT NULL,
+            tool_calls  TEXT,                    -- JSON, nullable
+            created_at  TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_fa_conv_session ON fa_conversations(session_id)")
+
+    # fa_knowledge: durable operational insights — either observed by the
+    # assistant from data, or injected by a manager. Surfaced into future
+    # answers via keyword match.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fa_knowledge (
+            id                 TEXT PRIMARY KEY,  -- UUID
+            category           TEXT NOT NULL,     -- line_behaviour|supplier|seasonal|ncg_pattern|material|general
+            title              TEXT NOT NULL,
+            content            TEXT NOT NULL,
+            source             TEXT NOT NULL,     -- assistant_observed|manager_input
+            confidence         TEXT DEFAULT 'medium',  -- low|medium|high
+            created_at         TEXT DEFAULT (datetime('now')),
+            last_referenced_at TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_fa_knowledge_category ON fa_knowledge(category)")
 
     # Seed a default 11:00 refuel window if the table is empty
     if conn.execute("SELECT COUNT(*) FROM refuel_windows").fetchone()[0] == 0:
@@ -7231,6 +7264,119 @@ def cancel_consumable_request(request_id: str) -> dict:
     conn.commit()
     row = conn.execute("SELECT * FROM consumable_request WHERE request_id=?", (request_id,)).fetchone()
     conn.close(); return row_to_dict(row)
+
+
+# ═══════════════════════════════════════════════════════════════
+# FACTORY ASSISTANT MEMORY  (conversation history + operational knowledge)
+# ═══════════════════════════════════════════════════════════════
+
+def fa_save_message(session_id: str, user_id: str, role: str,
+                    content: str, tool_calls=None) -> None:
+    """Persist one chat turn. tool_calls may be a list/dict (stored as JSON)
+    or None."""
+    conn = get_db()
+    tc = _json.dumps(tool_calls) if tool_calls else None
+    conn.execute(
+        """INSERT INTO fa_conversations (id, session_id, user_id, role, content, tool_calls)
+           VALUES (?,?,?,?,?,?)""",
+        (uuid.uuid4().hex, session_id, user_id, role, content, tc))
+    conn.commit(); conn.close()
+
+
+def fa_get_recent_messages(session_id: str, limit: int = 20) -> list:
+    """Return the last `limit` messages for a session, in chronological order."""
+    if not session_id:
+        return []
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT role, content, created_at FROM fa_conversations
+           WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+        (session_id, int(limit))).fetchall()
+    conn.close()
+    return list(reversed(rows_to_list(rows)))   # oldest -> newest
+
+
+# Words too generic to be useful for knowledge keyword-matching.
+_FA_STOPWORDS = {
+    'the','a','an','and','or','of','to','in','on','for','is','are','was','were',
+    'how','what','which','why','when','where','show','give','me','my','our',
+    'this','that','these','those','with','from','by','at','it','do','does','did',
+    'i','you','we','they','can','should','would','could','please','about','many',
+}
+
+def fa_search_knowledge(query_text: str, limit: int = 10,
+                        touch: bool = True) -> list:
+    """Return up to `limit` knowledge entries relevant to query_text by simple
+    keyword match against title+content. When `touch`, bumps last_referenced_at
+    on the rows returned (so the viewer surfaces recently-used facts)."""
+    conn = get_db()
+    words = [w for w in re.findall(r"[a-zA-Z0-9]+", (query_text or "").lower())
+             if len(w) > 2 and w not in _FA_STOPWORDS]
+    if words:
+        # Score = number of distinct query words found in title+content.
+        rows = conn.execute(
+            "SELECT id, category, title, content, source, confidence, "
+            "       created_at, last_referenced_at FROM fa_knowledge").fetchall()
+        scored = []
+        for r in rows:
+            hay = (str(r['title']) + ' ' + str(r['content'])).lower()
+            score = sum(1 for w in set(words) if w in hay)
+            if score > 0:
+                scored.append((score, r))
+        scored.sort(key=lambda x: (-x[0],
+                                   x[1]['last_referenced_at'] or ''), reverse=False)
+        picked = [r for _, r in scored[:limit]]
+    else:
+        # No usable keywords — fall back to most-recently-referenced.
+        picked = conn.execute(
+            "SELECT id, category, title, content, source, confidence, "
+            "       created_at, last_referenced_at FROM fa_knowledge "
+            "ORDER BY last_referenced_at DESC NULLS LAST, created_at DESC "
+            f"LIMIT {int(limit)}").fetchall()
+    result = rows_to_list(picked)
+    if touch and result:
+        ids = [r['id'] for r in result]
+        ph = ','.join('?' * len(ids))
+        conn.execute(
+            f"UPDATE fa_knowledge SET last_referenced_at=datetime('now') WHERE id IN ({ph})",
+            ids)
+        conn.commit()
+    conn.close()
+    return result
+
+
+def fa_add_knowledge(category: str, title: str, content: str,
+                     source: str, confidence: str = 'medium') -> dict:
+    """Insert a knowledge entry. source is 'assistant_observed' or
+    'manager_input'. Returns {id}."""
+    valid_cat = {'line_behaviour','supplier','seasonal','ncg_pattern','material','general'}
+    category = (category or 'general').strip().lower()
+    if category not in valid_cat:
+        category = 'general'
+    confidence = (confidence or 'medium').strip().lower()
+    if confidence not in {'low','medium','high'}:
+        confidence = 'medium'
+    if source not in {'assistant_observed','manager_input'}:
+        source = 'manager_input'
+    if not (title or '').strip() or not (content or '').strip():
+        raise ValueError("title and content are required")
+    kid = uuid.uuid4().hex
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO fa_knowledge (id, category, title, content, source, confidence)
+           VALUES (?,?,?,?,?,?)""",
+        (kid, category, title.strip(), content.strip(), source, confidence))
+    conn.commit(); conn.close()
+    return {"saved": True, "id": kid}
+
+
+def fa_list_knowledge() -> list:
+    """All knowledge entries, most-recently-referenced first (then newest)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM fa_knowledge "
+        "ORDER BY last_referenced_at DESC NULLS LAST, created_at DESC").fetchall()
+    conn.close(); return rows_to_list(rows)
 
 
 # ═══════════════════════════════════════════════════════════════

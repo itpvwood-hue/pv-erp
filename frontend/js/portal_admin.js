@@ -2,8 +2,9 @@
    Carved out of index.html. Self-registers its pages.
 
    Globals declared:
-       _faHistory, faInit, faReset, faSamplePrompt, _faAppendMessage,
-       escapeHtml, faSend       (Factory Assistant)
+       _faHistory, _faSessionId, faInit, faReset, faSamplePrompt,
+       _faAppendMessage, faSend, faLoadKnowledge, faAddKnowledge
+                                (Factory Assistant + Knowledge Base)
        _allEmployees... loadEmployees and related modal handlers
        _umUsers, umLoad, umOpenNew, umEdit, umSave, umDelete, ...
                                 (User Management)
@@ -20,16 +21,30 @@
 // the niche BOM Intelligence + Capacity Planning chat boxes — same idea,
 // real tools, single canonical page.
 let _faHistory = [];   // [{role: 'user'|'assistant', content: string}]
+// Conversation session id — persisted for the life of this browser session so
+// the assistant's memory (fa_conversations) ties turns together server-side.
+let _faSessionId = (function(){
+  let s = sessionStorage.getItem('fa_session_id');
+  if(!s){
+    s = (crypto.randomUUID ? crypto.randomUUID() : 'fa-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+    sessionStorage.setItem('fa_session_id', s);
+  }
+  return s;
+})();
 
 function faInit(){
   if(_faHistory.length === 0){
     document.getElementById('fa-chat').innerHTML =
       '<div class="text-muted small fst-italic">Ask anything about production, inventory, costs, or forecasts. The assistant can run SELECT queries, read server logs, and produce Excel reports.</div>';
   }
+  faLoadKnowledge();   // refresh the Knowledge Base panel when the page opens
 }
 
 function faReset(){
   _faHistory = [];
+  // New conversation = new session id (so memory starts a fresh thread).
+  _faSessionId = (crypto.randomUUID ? crypto.randomUUID() : 'fa-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+  sessionStorage.setItem('fa_session_id', _faSessionId);
   document.getElementById('fa-chat').innerHTML = '';
   document.getElementById('fa-exports-tray').innerHTML = '';
   faInit();
@@ -73,10 +88,14 @@ async function faSend(){
     true);
 
   try {
-    const r = await api('/api/factory-assistant/chat', 'POST', {messages: _faHistory});
+    const r = await api('/api/factory-assistant/chat', 'POST',
+                        {messages: _faHistory, session_id: _faSessionId});
     loadingDiv.remove();
     const replyDiv = _faAppendMessage('assistant', r.reply || '(no reply)', true);
     _faHistory.push({role: 'assistant', content: r.reply || ''});
+    // The assistant may have recorded a new insight via save_knowledge —
+    // refresh the panel so the manager sees it.
+    faLoadKnowledge();
     if(r.tool_calls){
       const meta = document.createElement('div');
       meta.className = 'small text-muted mt-1';
@@ -112,6 +131,62 @@ function addChat(cid,msg,cls,md=false){
   d.innerHTML=md?marked.parse(msg):msg;c.appendChild(d);c.scrollTop=c.scrollHeight;return id;
 }
 function rmChat(id){const e=document.getElementById(id);if(e)e.remove();}
+
+// ── Factory Assistant — Knowledge Base ───────────────────────
+const FA_KB_CATEGORIES = ['line_behaviour','supplier','seasonal','ncg_pattern','material','general'];
+const _FA_KB_BADGE = {
+  line_behaviour:'bg-primary-subtle text-primary',
+  supplier:'bg-warning-subtle text-warning',
+  seasonal:'bg-info-subtle text-info',
+  ncg_pattern:'bg-danger-subtle text-danger',
+  material:'bg-success-subtle text-success',
+  general:'bg-secondary-subtle text-secondary',
+};
+const _FA_CONF_BADGE = { high:'bg-success', medium:'bg-secondary', low:'bg-light text-dark border' };
+
+async function faLoadKnowledge(){
+  const tbody = document.getElementById('fa-kb-tbody');
+  if(!tbody) return;   // panel not on the page (non-managerial) — skip
+  let rows = await api('/api/factory-assistant/knowledge').catch(()=>[]);
+  if(!Array.isArray(rows)) rows = [];
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-2 small">No knowledge recorded yet. Add a fact below, or the assistant will record insights it finds.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(k => {
+    const catCls = _FA_KB_BADGE[k.category] || _FA_KB_BADGE.general;
+    const confCls = _FA_CONF_BADGE[k.confidence] || _FA_CONF_BADGE.medium;
+    const src = k.source === 'assistant_observed'
+      ? '<span class="badge bg-info-subtle text-info" title="Observed by the assistant from data">AI</span>'
+      : '<span class="badge bg-primary-subtle text-primary" title="Entered by a manager">Manager</span>';
+    const ref = k.last_referenced_at ? String(k.last_referenced_at).slice(0,16).replace('T',' ') : '—';
+    return `<tr>
+      <td><span class="badge ${catCls}" style="font-size:.62rem">${k.category}</span></td>
+      <td><b class="small">${escapeHtml(k.title||'')}</b><div class="small text-muted">${escapeHtml(k.content||'')}</div></td>
+      <td class="text-center">${src}</td>
+      <td class="text-center"><span class="badge ${confCls}" style="font-size:.62rem">${k.confidence||'medium'}</span></td>
+      <td class="small text-muted">${ref}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function faAddKnowledge(){
+  const category   = document.getElementById('fa-kb-category').value;
+  const title      = document.getElementById('fa-kb-title').value.trim();
+  const content    = document.getElementById('fa-kb-content').value.trim();
+  const confidence = document.getElementById('fa-kb-confidence').value;
+  if(!title || !content){ toast('Title and detail are both required','warning'); return; }
+  const btn = document.getElementById('fa-kb-add-btn');
+  btn.disabled = true;
+  try{
+    await api('/api/factory-assistant/knowledge','POST',{category,title,content,confidence});
+    toast('Knowledge added — the assistant will use it from now on','success');
+    document.getElementById('fa-kb-title').value = '';
+    document.getElementById('fa-kb-content').value = '';
+    faLoadKnowledge();
+  }catch(e){ toast(e.message||'Failed to add knowledge','danger'); }
+  finally{ btn.disabled = false; }
+}
 
 
 // ════════════════════════════════════════════════════════════

@@ -1914,6 +1914,74 @@
       <button class="btn btn-sm btn-outline-secondary" onclick="faSamplePrompt('Show me materials at or near the reorder point with their suppliers and outstanding open PRs.')">Reorder pressure</button>
     </div>
   </div>
+
+  <!-- ── Knowledge Base ──────────────────────────────────── -->
+  <div class="card mt-4">
+    <div class="card-header py-2 d-flex align-items-center" style="cursor:pointer"
+         data-bs-toggle="collapse" data-bs-target="#fa-kb-body">
+      <i class="bi bi-journal-bookmark me-2 text-success"></i>
+      <b>Knowledge Base</b>
+      <small class="text-muted ms-2">operational facts the assistant remembers &amp; applies</small>
+      <i class="bi bi-chevron-down ms-auto"></i>
+    </div>
+    <div class="collapse show" id="fa-kb-body">
+      <div class="card-body">
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+            <thead class="table-light">
+              <tr>
+                <th style="width:110px">Category</th>
+                <th>Title &amp; detail</th>
+                <th class="text-center" style="width:80px">Source</th>
+                <th class="text-center" style="width:90px">Confidence</th>
+                <th style="width:130px">Last used</th>
+              </tr>
+            </thead>
+            <tbody id="fa-kb-tbody">
+              <tr><td colspan="5" class="text-center text-muted py-2 small">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Add a fact -->
+        <div class="border-top pt-3">
+          <div class="small fw-semibold mb-2"><i class="bi bi-plus-circle me-1"></i>Add operational knowledge</div>
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label small mb-0">Category</label>
+              <select class="form-select form-select-sm" id="fa-kb-category">
+                <option value="line_behaviour">Line behaviour</option>
+                <option value="supplier">Supplier</option>
+                <option value="seasonal">Seasonal</option>
+                <option value="ncg_pattern">NCG pattern</option>
+                <option value="material">Material</option>
+                <option value="general" selected>General</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small mb-0">Title</label>
+              <input class="form-control form-control-sm" id="fa-kb-title" placeholder="e.g. Supplier X short moisture in rainy season">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">Confidence</label>
+              <select class="form-select form-select-sm" id="fa-kb-confidence">
+                <option value="high">High</option>
+                <option value="medium" selected>Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <label class="form-label small mb-0">Detail</label>
+              <textarea class="form-control form-control-sm" id="fa-kb-content" rows="2" placeholder="The fact plus any context — the assistant will reference this in future answers."></textarea>
+            </div>
+            <div class="col-12 text-end">
+              <button class="btn btn-sm btn-success" id="fa-kb-add-btn" onclick="faAddKnowledge()"><i class="bi bi-save me-1"></i>Add knowledge</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ══ EMPLOYEES ════════════════════════════════════════════ -->

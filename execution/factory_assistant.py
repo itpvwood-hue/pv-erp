@@ -26,6 +26,14 @@ try:
 except ImportError:
     from execution.config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH, make_anthropic_client
 
+# Memory layer (conversation history + operational knowledge).
+try:
+    from database import (fa_save_message, fa_get_recent_messages,
+                          fa_search_knowledge, fa_add_knowledge)
+except ImportError:
+    from execution.database import (fa_save_message, fa_get_recent_messages,
+                          fa_search_knowledge, fa_add_knowledge)
+
 # make_anthropic_client() pins the public endpoint + x-api-key auth and
 # strips host-injected ANTHROPIC_AUTH_TOKEN/BASE_URL/CUSTOM_HEADERS that
 # otherwise hijack the SDK (see config.py for the full rationale).
@@ -144,32 +152,107 @@ TOOLS = [
             "required": ["rows"],
         },
     },
+    {
+        "name": "save_knowledge",
+        "description": (
+            "Record a DURABLE operational insight you derived from data so "
+            "future conversations can use it — not a one-off number, but a "
+            "reusable fact: a recurring NCG pattern on a line, a supplier's "
+            "seasonal quality quirk, a material's behaviour, a line tendency. "
+            "Use sparingly and only when you have evidence. Do NOT use it to "
+            "answer the current question. The insight is stored with "
+            "source='assistant_observed'. category MUST be one of: "
+            "line_behaviour, supplier, seasonal, ncg_pattern, material, general."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "One of: line_behaviour | supplier | seasonal | ncg_pattern | material | general.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short, specific title for the insight.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The insight plus the evidence that supports it (e.g. the numbers you observed).",
+                },
+                "confidence": {
+                    "type": "string",
+                    "description": "low | medium | high — how strongly the data supports this. Defaults to medium.",
+                },
+            },
+            "required": ["category", "title", "content"],
+        },
+    },
 ]
 
 
-SYSTEM_PROMPT = """You are the Factory Assistant for PVWood ERP, a veneer
-overlaying factory. You help managers analyse production data, spot
-issues, and produce shareable Excel reports.
+SYSTEM_PROMPT = """You are the Factory Assistant for PVWood ERP — but think
+of yourself as a seasoned production manager, not a chatbot. You have 30+
+years on wood-based panel lines: veneer slicing, plywood pressing, MDF, and
+door-skin production. You came up through Southeast Asian and Chinese
+joint-venture factories and you know the floor cold.
 
-Behaviour:
-- Reason from data. Always check the DB before answering — never guess
-  a number.
-- Prefer concrete queries over wide table scans. Use LIMIT when sampling.
-- When the user asks for an analysis, plan it: (1) understand the
-  question, (2) run small probing queries to confirm the schema, (3)
-  run the final aggregation, (4) summarise findings + export to Excel
-  if it's worth keeping.
-- Currency is THB (฿). Use Thai-style number formatting in your prose.
-- Be concise. Tables in markdown for comparisons. Surface caveats: 'this
-  excludes WIP', 'only batches with a logged completion timestamp'.
+WHAT YOU KNOW IN YOUR BONES
+- Glue mixing ratios, open/closed assembly times, press cycles (cold + hot),
+  and moisture-content tolerances — and how each one shows up as a defect
+  when it drifts.
+- NCG (non-conforming goods) root-cause analysis. When you see NCG, your mind
+  immediately runs the usual suspects: glue starvation, core gap / overlap,
+  excess moisture, press temperature or dwell off-spec, veneer telegraphing,
+  bleed-through. You name the likely cause, not just the count.
+- Veneer grading: face vs back, species-specific defect tolerance (oak,
+  birch, okoume, sapele, teak, etc.) and what a grade-mix shift means for
+  yield and cost.
+- Throughput Accounting and Theory of Constraints applied to panel lines.
+  You think in terms of the constraint, not local efficiencies. You ask
+  "where is the bottleneck and is this batch feeding or starving it?"
+- Lean for batch manufacturing: WIP control, changeover loss, scrap as a
+  symptom, flow over utilisation.
+- Raw-material supplier management: logs, resins/hardeners, paper/overlay.
+  You know suppliers slip on spec — short moisture, off-colour, late.
+- Thai factory operating context: shift structures, labour patterns, and
+  seasonal log supply (rainy-season moisture, dry-season availability).
 
-What you CANNOT do:
-- Write/modify the database. SELECT only.
-- Promise actions ("I'll order it") — only managers can do that. Suggest
-  the action instead and tell them which screen to use.
-- Fabricate filenames. If you export, use the URL returned by the tool.
+HOW YOU WORK
+- Data first, always. You never state a number you have not pulled from the
+  database this turn. If you don't have it, you query for it before speaking.
+- Plan an analysis: understand the question -> probe the schema with small
+  queries -> run the real aggregation -> state the finding. Use LIMIT when
+  sampling; don't scan blindly.
+- Constructive by default. Every problem you flag comes with the next action
+  and which ERP screen to do it on (e.g. "raise this on Material Shortfalls",
+  "log it at the Glue Mixing station", "check the BOM -> Glue Formulas tab").
+- Opinionated. If something looks wrong you say so, even unasked — "P02's NCG
+  rate is double P01 this month, that's a warning sign, here's what I'd check
+  first." You recognise patterns that match known panel-production failure
+  modes and call them early.
+- Efficiency-minded. You naturally frame answers around throughput, scrap /
+  waste, and removing the constraint — not vanity metrics.
+- You have a memory. When CONVERSATION HISTORY or OPERATIONAL KNOWLEDGE is
+  provided below, use it — refer back to earlier findings, build on what
+  you've already established, and apply recorded operational facts (supplier
+  quirks, line behaviours, seasonal effects). When you derive a durable,
+  reusable insight from data (not a one-off number), record it with the
+  save_knowledge tool so future sessions benefit.
 
-Tone: factory-floor managerial. No emojis. No fluff."""
+OUTPUT
+- Currency is THB (฿), Thai-style number formatting in prose.
+- Concise. Markdown tables for comparisons. State caveats honestly ("excludes
+  WIP", "only batches with a logged completion timestamp").
+- Tone: a respected senior colleague on the floor. Direct, clear, no
+  hand-holding, no emojis, no filler.
+
+WHAT YOU CANNOT DO
+- Write or modify the database. You are read-only (SELECT only). The single
+  exception is save_knowledge, which records an operational insight — it does
+  not touch production data.
+- Promise or perform actions ("I'll order it", "I'll reschedule that"). Only
+  the manager can act. You recommend the action and name the screen.
+- Fabricate filenames. If you export, use the URL the tool returns."""
 
 
 def _run_tool(name: str, params: dict[str, Any]) -> Any:
@@ -188,7 +271,27 @@ def _run_tool(name: str, params: dict[str, Any]) -> Any:
             sheet_name=params.get("sheet_name") or "Report",
             filename=params.get("filename") or "fa_report",
         )
+    if name == "save_knowledge":
+        return _tool_save_knowledge(
+            category=params.get("category") or "general",
+            title=params.get("title") or "",
+            content=params.get("content") or "",
+            confidence=params.get("confidence") or "medium",
+        )
     return {"error": f"Unknown tool: {name}"}
+
+
+def _tool_save_knowledge(*, category: str, title: str, content: str,
+                         confidence: str) -> dict:
+    """Persist an assistant-observed operational insight. source is forced to
+    'assistant_observed' — the agent can never masquerade as manager input."""
+    try:
+        return fa_add_knowledge(category=category, title=title, content=content,
+                                source="assistant_observed", confidence=confidence)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"Could not save knowledge: {e}"}
 
 
 def _open_conn() -> sqlite3.Connection:
@@ -314,53 +417,104 @@ def _tool_export(*, rows: list, sheet_name: str, filename: str) -> dict:
     }
 
 
-def chat(messages: list[dict]) -> dict:
-    """Run one conversation turn through Claude with tools.
+def _last_user_text(messages: list[dict]) -> str:
+    """The most recent plain-string user message — i.e. the question being
+    asked this turn (tool_result entries are lists, so they're skipped)."""
+    for m in reversed(messages):
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            return m["content"]
+    return ""
 
-    `messages` is a full chronological list of {"role","content"} entries
-    from the client. The role can be 'user' or 'assistant' (we never
-    persist tool_use/tool_result entries server-side — they're re-derived
-    each turn from the user's question and the live DB state, so the
-    client only sees clean prose). Returns:
-        {
-          "reply":  "<final text response>",
-          "exports": [{ "filename": "...", "download_url": "..." }],
-          "tool_calls": int,         # for debug / cost tracking
-        }
+
+def _build_memory_context(session_id: str, question: str) -> str:
+    """Compose the [CONVERSATION HISTORY] + [OPERATIONAL KNOWLEDGE] block that
+    gets appended to the system prompt. Pulls the last 20 messages for this
+    session and up to 10 knowledge entries relevant to the question (which
+    also bumps their last_referenced_at). Returns '' if there's nothing."""
+    parts = []
+
+    try:
+        history = fa_get_recent_messages(session_id, 20) if session_id else []
+    except Exception:
+        history = []
+    if history:
+        lines = []
+        for m in history:
+            who = "User" if m.get("role") == "user" else "Assistant"
+            lines.append(f"{who}: {m.get('content','')}")
+        parts.append("[CONVERSATION HISTORY]\n" + "\n".join(lines))
+
+    try:
+        knowledge = fa_search_knowledge(question, 10, touch=True) if question else []
+    except Exception:
+        knowledge = []
+    if knowledge:
+        lines = []
+        for k in knowledge:
+            lines.append(f"{k.get('category','general')} | {k.get('title','')}: {k.get('content','')}")
+        parts.append(
+            "[OPERATIONAL KNOWLEDGE] (recorded facts — apply where relevant)\n"
+            + "\n".join(lines))
+
+    return ("\n\n" + "\n\n".join(parts)) if parts else ""
+
+
+def chat(messages: list[dict], session_id: str = None, user_id: str = None) -> dict:
+    """Run one conversation turn through Claude with tools + memory.
+
+    `messages` is the chronological list of {"role","content"} entries the
+    client has accumulated this browser session. `session_id` ties the turn
+    to a persisted conversation (fa_conversations); `user_id` is the
+    authenticated user. Returns:
+        { "reply": str, "exports": [...], "tool_calls": int, "session_id": str }
     """
     if not _client:
         return {
             "reply": ("Factory Assistant is unavailable — set ANTHROPIC_API_KEY "
                       "in .env to enable. (Anthropic SDK not configured.)"),
-            "exports": [], "tool_calls": 0,
+            "exports": [], "tool_calls": 0, "session_id": session_id,
         }
+
+    session_id = session_id or uuid.uuid4().hex
+    question = _last_user_text(messages)
+
+    # Persist the user's question, then enrich the system prompt with memory.
+    if user_id:
+        try: fa_save_message(session_id, user_id, "user", question)
+        except Exception: pass
+    system = SYSTEM_PROMPT + _build_memory_context(session_id, question)
 
     convo = list(messages)
     exports: list[dict] = []
     tool_calls = 0
 
+    def _finalise(reply: str) -> dict:
+        # Save the assistant's reply (with the tools it used) before returning.
+        if user_id:
+            try:
+                fa_save_message(session_id, user_id, "assistant", reply,
+                                tool_calls=tool_calls or None)
+            except Exception:
+                pass
+        return {"reply": reply, "exports": exports,
+                "tool_calls": tool_calls, "session_id": session_id}
+
     for _ in range(MAX_TOOL_LOOPS):
         resp = _client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=MAX_OUTPUT_TKNS,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=TOOLS,
             messages=convo,
         )
 
-        # If the model is done (text-only stop), return its prose.
         if resp.stop_reason == "end_turn":
             text = ""
             for block in resp.content:
                 if getattr(block, "type", None) == "text":
                     text += block.text
-            return {
-                "reply": text or "(no reply)",
-                "exports": exports,
-                "tool_calls": tool_calls,
-            }
+            return _finalise(text or "(no reply)")
 
-        # Otherwise it asked for tools. Run each one and feed results back.
         if resp.stop_reason == "tool_use":
             convo.append({"role": "assistant", "content": resp.content})
             tool_results = []
@@ -382,15 +536,6 @@ def chat(messages: list[dict]) -> dict:
             convo.append({"role": "user", "content": tool_results})
             continue
 
-        # Stop reason was something unexpected (max_tokens, stop_sequence, …).
-        return {
-            "reply": f"(stopped early: {resp.stop_reason})",
-            "exports": exports,
-            "tool_calls": tool_calls,
-        }
+        return _finalise(f"(stopped early: {resp.stop_reason})")
 
-    return {
-        "reply": "(too many tool iterations — bailing out before exhausting the budget)",
-        "exports": exports,
-        "tool_calls": tool_calls,
-    }
+    return _finalise("(too many tool iterations — bailing out before exhausting the budget)")

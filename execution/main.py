@@ -1846,13 +1846,41 @@ def require_role(*roles):
 # Excel export. Replaces the two niche AI placeholders (BOM Query, Capacity
 # Planner) that nobody wired into the nav.
 class FactoryAssistantBody(BaseModel):
-    messages: list           # chronological [{role, content}, ...]
+    messages: list                       # chronological [{role, content}, ...]
+    session_id: Optional[str] = None     # persists the conversation across turns
 
 @app.post("/api/factory-assistant/chat")
 def factory_assistant_chat(body: FactoryAssistantBody,
                            user: dict = Depends(require_role(Role.MANAGERIAL))):
     from factory_assistant import chat as _fa_chat
-    return _fa_chat(body.messages or [])
+    return _fa_chat(body.messages or [], session_id=body.session_id,
+                    user_id=user.get('user_id'))
+
+class FAKnowledgeIn(BaseModel):
+    category: str
+    title: str
+    content: str
+    confidence: Optional[str] = 'medium'
+
+@app.post("/api/factory-assistant/knowledge", status_code=201)
+def factory_assistant_add_knowledge(body: FAKnowledgeIn,
+                                    user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """Manager injects an operational fact the assistant will reference in
+    future answers. source is forced to 'manager_input'."""
+    from database import fa_add_knowledge
+    try:
+        return fa_add_knowledge(category=body.category, title=body.title,
+                                content=body.content, source='manager_input',
+                                confidence=body.confidence or 'medium')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/factory-assistant/knowledge")
+def factory_assistant_list_knowledge(user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """All knowledge entries, most-recently-referenced first. Powers the
+    Knowledge Base table in the Factory Assistant panel."""
+    from database import fa_list_knowledge
+    return fa_list_knowledge()
 
 @app.get("/api/factory-assistant/export/{filename}")
 def factory_assistant_export(filename: str,
