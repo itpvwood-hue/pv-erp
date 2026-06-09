@@ -1838,6 +1838,9 @@ async function bbLoadFg(code){
       bbPick(comp, obj.code);
       const qi = document.getElementById('bb-qty-'+comp);
       if(qi) qi.value = obj[qKey]||'';
+      // Pre-fill Waste % (factor → %) for board/veneer lines
+      const wi = document.getElementById('bb-waste-'+comp);
+      if(wi && obj.waste_factor != null) wi.value = +(obj.waste_factor*100).toFixed(2);
     });
     toast('Loaded BOM for '+code);
   }catch(e){ toast('Could not load BOM: '+e.message,'warning'); }
@@ -1856,6 +1859,10 @@ function resetBomBuilder(){
     const qi=document.getElementById('bb-qty-'+c); if(qi) qi.value='';
     bbRenderOptions(c, _bbMats[c]||[]);
   });
+  // Reset waste % to defaults (boards 0, veneers 5)
+  const wb=document.getElementById('bb-waste-base');  if(wb) wb.value='0';
+  const wf=document.getElementById('bb-waste-faceV'); if(wf) wf.value='5';
+  const wbk=document.getElementById('bb-waste-backV'); if(wbk) wbk.value='5';
   // Reset extras
   document.getElementById('bb-dims-base')?.classList.add('d-none');
   const lf=document.getElementById('bb-unit-label-faceV'); if(lf) lf.textContent='Qty (sheets/pallet)';
@@ -1870,13 +1877,15 @@ async function saveBomBuilder(){
   if(!name){ toast('Name is required','danger'); return; }
   if(!pq)  { toast('Pcs/Pallet is required','danger'); return; }
   const gn = k => parseFloat(document.getElementById(k)?.value)||null;
+  // Waste % input → factor (e.g. 5 → 0.05). Empty/invalid → 0.
+  const gw = k => { const v=parseFloat(document.getElementById(k)?.value); return (isNaN(v)||v<0)?0:v/100; };
   const body = {
     sku_code: code, sku_name: name,
     thickness_mm: gn('bb-thick'), width_mm: gn('bb-width'), length_mm: gn('bb-length'),
     pallet_qty: pq,
-    base_board_code:   _bbPicked.base  ? _bbPicked.base.code  : null, base_board_qty:   gn('bb-qty-base'),
-    face_veneer_code:  _bbPicked.faceV ? _bbPicked.faceV.code : null, face_veneer_qty:  gn('bb-qty-faceV'),
-    back_veneer_code:  _bbPicked.backV ? _bbPicked.backV.code : null, back_veneer_qty:  gn('bb-qty-backV'),
+    base_board_code:   _bbPicked.base  ? _bbPicked.base.code  : null, base_board_qty:   gn('bb-qty-base'),  base_board_waste:  gw('bb-waste-base'),
+    face_veneer_code:  _bbPicked.faceV ? _bbPicked.faceV.code : null, face_veneer_qty:  gn('bb-qty-faceV'), face_veneer_waste: gw('bb-waste-faceV'),
+    back_veneer_code:  _bbPicked.backV ? _bbPicked.backV.code : null, back_veneer_qty:  gn('bb-qty-backV'), back_veneer_waste: gw('bb-waste-backV'),
     face_glue_code:    _bbPicked.faceG ? _bbPicked.faceG.code : null, face_glue_usage_g:gn('bb-qty-faceG'),
     back_glue_code:    _bbPicked.backG ? _bbPicked.backG.code : null, back_glue_usage_g:gn('bb-qty-backG'),
   };

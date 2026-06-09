@@ -755,6 +755,12 @@ def init_db():
         # 2.19.1 — when a station issued/used (or counted) a consumable, as
         # stated by the operator. Distinct from created_at (when it was logged).
         "ALTER TABLE station_stock_movements ADD COLUMN occurred_at TEXT",
+        # 2.20.0 — per-BOM-line waste factor for the structured BOM. The FC
+        # requirement calc used to hardcode 5% for every bom_lines material;
+        # now waste is per line (boards 0, veneers vary, set in the BOM
+        # Builder). NULL on existing rows so the one-time seed below can tell
+        # "never set" from "deliberately 0".
+        "ALTER TABLE bom_lines ADD COLUMN waste_factor REAL",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -907,6 +913,20 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # column already exists
+
+    # ── One-time seed of bom_lines.waste_factor (idempotent: only NULLs) ──
+    # Preserve the historical 5% on existing veneer lines (seq 2/3) and fix
+    # boards (seq 1) + everything else to 0%. New rows get an explicit value
+    # from save_bom_for_sku, so this never re-fires.
+    try:
+        conn.execute("""
+            UPDATE bom_lines
+               SET waste_factor = CASE WHEN seq IN (2,3) THEN 0.05 ELSE 0 END
+             WHERE waste_factor IS NULL
+        """)
+        conn.commit()
+    except Exception:
+        pass
 
     # ── Seed actual PV Wood glue recipes (idempotent: keyed by recipe_code) ──
     _seed_real_glue_recipes(conn)
@@ -2436,6 +2456,7 @@ def get_fc_material_requirements(prod_order_id):
             pallet_qty = float(sku_row.get('pallet_qty') or 1) or 1
             bl_rows = rows_to_list(conn.execute("""
                 SELECT bl.seq, bl.qty_override, bl.usage_g_per_face, bl.notes as bom_notes,
+                       bl.waste_factor,
                        m.id as material_id, m.code as material_code,
                        m.name as material_name, m.type as material_type,
                        m.unit, m.current_stock, m.fc_stock,
@@ -2448,7 +2469,6 @@ def get_fc_material_requirements(prod_order_id):
 
             # seq→veneer_role mapping: 2=face, 3=back, others=None
             SEQ_ROLE = {2: 'face', 3: 'back'}
-            DEFAULT_WASTE = 0.05
 
             for bl in bl_rows:
                 seq = bl.get('seq') or 0
@@ -2466,8 +2486,10 @@ def get_fc_material_requirements(prod_order_id):
                 else:
                     # Default: one sheet/pc per pallet position
                     qty_per_pallet = float(pallet_qty)
-                # Total required = pallets ordered × pcs per pallet × waste factor
-                required = round(qty * qty_per_pallet * (1 + DEFAULT_WASTE), 2)
+                # Per-line waste (boards 0, veneers vary). NULL falls back to 0.
+                wf = float(bl.get('waste_factor') or 0)
+                # Total required = pallets ordered × pcs per pallet × (1 + waste)
+                required = round(qty * qty_per_pallet * (1 + wf), 2)
 
                 veneer_role = SEQ_ROLE.get(seq)
                 use_fc = mat_type in FC_STOCK_TYPES
@@ -2485,7 +2507,7 @@ def get_fc_material_requirements(prod_order_id):
                     **bl,
                     'veneer_role': veneer_role,
                     'quantity_per_unit': round(float(qty_override or 0) / pallet_qty, 4) if qty_override is not None else None,
-                    'waste_factor': DEFAULT_WASTE if mat_type != 'glue_formula' else 0,
+                    'waste_factor': wf,
                     'required_qty': required,
                     'available_qty': stock,
                     'stock_location': 'fc_station' if use_fc else 'main_warehouse',
@@ -3197,7 +3219,7 @@ def get_structured_bom(sku_code=None):
         # silently drop every glue row.
         lines = conn.execute("""
             SELECT bl.seq, bl.qty_override, bl.usage_g_per_face, bl.qty_unit,
-                   bl.glue_recipe_id,
+                   bl.glue_recipe_id, bl.waste_factor,
                    m.code as mat_code, m.name as mat_name, m.name_th,
                    m.type as mat_type, m.unit, m.price,
                    gr.recipe_code as glue_code, gr.name as glue_name
@@ -3279,6 +3301,7 @@ def get_structured_bom(sku_code=None):
                 'unit':   l['unit'],
                 'price':  l['price'],
                 'usage_g_per_face': l['usage_g_per_face'],
+                'waste_factor': float(l['waste_factor']) if l['waste_factor'] is not None else 0,
                 'cost':   line_cost,
             }
 
@@ -3386,20 +3409,32 @@ def save_bom_for_sku(data):
             "SELECT id FROM glue_recipes WHERE recipe_code=?", (recipe_code,)).fetchone()
         return row[0] if row else None
 
-    # Non-glue lines (seq 1-3) — resolve against materials.code
-    for seq, code_key, qty_key in [
-        (1, 'base_board_code',  'base_board_qty'),
-        (2, 'face_veneer_code', 'face_veneer_qty'),
-        (3, 'back_veneer_code', 'back_veneer_qty'),
+    # Non-glue lines (seq 1-3) — resolve against materials.code. Each carries
+    # a per-line waste factor (boards default 0, veneers default 0.05). The
+    # FC requirement calc multiplies required qty by (1 + waste_factor).
+    def _waste(key, default):
+        v = data.get(key)
+        if v is None or v == '':
+            return default
+        try:
+            return max(0.0, float(v))
+        except (TypeError, ValueError):
+            return default
+
+    for seq, code_key, qty_key, waste_key, waste_default in [
+        (1, 'base_board_code',  'base_board_qty',  'base_board_waste',  0.0),
+        (2, 'face_veneer_code', 'face_veneer_qty', 'face_veneer_waste', 0.05),
+        (3, 'back_veneer_code', 'back_veneer_qty', 'back_veneer_waste', 0.05),
     ]:
         mat_code = data.get(code_key)
         if not mat_code: continue
         mid = mat_id(mat_code)
         if not mid: continue
         qty = float(data.get(qty_key) or pallet_qty)
+        wf = _waste(waste_key, waste_default)
         conn.execute(
-            "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override) VALUES (?,?,?,?,?)",
-            (sku_id, mid, grp_id, seq, qty))
+            "INSERT INTO bom_lines (sku_id,material_id,group_id,seq,qty_override,waste_factor) VALUES (?,?,?,?,?,?)",
+            (sku_id, mid, grp_id, seq, qty, wf))
 
     # Glue lines (seq 4-5) — resolve against glue_recipes.recipe_code first,
     # fall back to materials.code only if the user picked a legacy glue_formula

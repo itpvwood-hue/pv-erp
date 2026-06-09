@@ -407,8 +407,11 @@ class BomBuilderIn(BaseModel):
     length_mm: Optional[float] = None
     pallet_qty: int = 1
     base_board_code: Optional[str] = None; base_board_qty: Optional[float] = None
+    base_board_waste: Optional[float] = None
     face_veneer_code: Optional[str] = None; face_veneer_qty: Optional[float] = None
+    face_veneer_waste: Optional[float] = None
     back_veneer_code: Optional[str] = None; back_veneer_qty: Optional[float] = None
+    back_veneer_waste: Optional[float] = None
     face_glue_code: Optional[str] = None; face_glue_usage_g: Optional[float] = None
     back_glue_code: Optional[str] = None; back_glue_usage_g: Optional[float] = None
     packing_sku_code: Optional[str] = None
