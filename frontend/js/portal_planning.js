@@ -2743,7 +2743,7 @@ function _slhEmbedStockAndMovements(){
           <button class="btn btn-sm btn-primary" onclick="stOpenWHRequest()">
             <i class="bi bi-cart-plus me-1"></i>Request from Warehouse
           </button>
-          <button class="btn btn-sm btn-outline-secondary" onclick="loadPage('warehouse-queue')">
+          <button class="btn btn-sm btn-outline-secondary" onclick="stOpenMyRequests()">
             <i class="bi bi-clock-history me-1"></i>View my open requests
           </button>
         </div>
@@ -4763,53 +4763,236 @@ async function gmSaveRecipe(){
 // ══════════════════════════════════════════════════════════
 // WH CONSUMABLE REQUEST (shared by all station logs)
 // ══════════════════════════════════════════════════════════
-let _whrMats=[], _whrDept='';
+// Multi-line request: type filter, N material lines, needed-by date+time
+// (required), production line hard-set from the Station Hub line selector.
+// Per-line departments must have a line selected; centralised departments
+// (packing / fg_receiving / fg_warehouse) request line-less.
+let _whrMats=[], _whrDept='', _whrLine='', _whrLineSeq=0;
+
+const _WHR_CENTRALISED = new Set(['packing','fg_receiving','fg_warehouse']);
+function _whrDeptIsCentralised(dept){
+  const d = (typeof catalogDeptCode === 'function') ? catalogDeptCode(dept) : null;
+  if(d && typeof d.is_centralised !== 'undefined') return !!d.is_centralised;
+  return _WHR_CENTRALISED.has(dept);
+}
+
+function _whrMatOptions(){
+  const t = document.getElementById('whr-type-filter')?.value || '';
+  const mats = t ? _whrMats.filter(m => m.type === t) : _whrMats;
+  return mats.map(m =>
+    `<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-stock="${m.current_stock||0}">`
+    + `${m.name}${m.type?' ['+m.type+']':''} — WH: ${fmt(m.current_stock||0)} ${m.unit||'pcs'}</option>`
+  ).join('');
+}
 
 async function openWHRequest(dept){
-  _whrDept=dept||_slActiveBatch?.current_department||'production';
-  document.getElementById('whr-dept-label').textContent=DEPT_LABEL[_whrDept]||_whrDept;
-  if(!_whrMats.length) _whrMats=await api('/api/consumable-materials').catch(()=>[]);
-  document.getElementById('whr-search').value='';
-  document.getElementById('whr-material-id').innerHTML='<option value="">— Select material —</option>'+
-    _whrMats.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-stock="${m.current_stock||0}">${m.name}${m.type?' ['+m.type+']':''} — Stock: ${fmt(m.current_stock||0)} ${m.unit||'pcs'}</option>`).join('');
-  document.getElementById('whr-stock-info').textContent='';
-  document.getElementById('whr-qty').value='';
-  document.getElementById('whr-unit').textContent='pcs';
-  document.getElementById('whr-notes').value=_slActiveBatch?`Batch: ${_slActiveBatch.batch_number||''}`:'';
+  _whrDept = dept || _slActiveBatch?.current_department || 'production';
+  // Line is hard-set from the Station Hub line selector (read-only here).
+  _whrLine = document.getElementById('sl-line')?.value
+          || document.getElementById('st-line')?.value || '';
+  const centralised = _whrDeptIsCentralised(_whrDept);
+
+  document.getElementById('whr-dept-label').textContent = DEPT_LABEL[_whrDept] || _whrDept;
+  document.getElementById('whr-line-label').textContent =
+    centralised ? 'All lines (centralised)' : (_whrLine || '— none —');
+
+  // Per-line dept with no line selected: warn + block submit.
+  const warn = document.getElementById('whr-line-warning');
+  const submitBtn = document.getElementById('whr-submit-btn');
+  if(!centralised && !_whrLine){ warn.style.display=''; submitBtn.disabled=true; }
+  else                         { warn.style.display='none'; submitBtn.disabled=false; }
+
+  // Reset form
+  document.getElementById('whr-type-filter').value = '';
+  document.getElementById('whr-needed-date').value = '';
+  document.getElementById('whr-needed-time').value = '';
+  document.getElementById('whr-notes').value = _slActiveBatch ? `Batch: ${_slActiveBatch.batch_number||''}` : '';
+
+  if(!_whrMats.length) _whrMats = await api('/api/consumable-materials').catch(()=>[]);
+
+  // Start with one empty material line.
+  _whrLineSeq = 0;
+  document.getElementById('whr-lines').innerHTML = '';
+  whrAddLine();
+
   bootstrap.Modal.getOrCreateInstance(document.getElementById('whRequestModal')).show();
 }
 
-function whrFilter(q){
-  const term=(q||'').trim().toLowerCase();
-  const mats=term?_whrMats.filter(m=>(m.name||'').toLowerCase().includes(term)||(m.type||'').toLowerCase().includes(term)):_whrMats;
-  document.getElementById('whr-material-id').innerHTML='<option value="">— Select material —</option>'+
-    mats.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-stock="${m.current_stock||0}">${m.name}${m.type?' ['+m.type+']':''} — Stock: ${fmt(m.current_stock||0)} ${m.unit||'pcs'}</option>`).join('');
+function whrAddLine(){
+  const idx = _whrLineSeq++;
+  document.getElementById('whr-lines').insertAdjacentHTML('beforeend', `
+  <div class="card mb-2 whr-line" data-idx="${idx}">
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label small mb-1">Material</label>
+          <input type="text" class="form-control form-control-sm mb-1 whr-l-search" placeholder="Search…" oninput="whrLineSearch(${idx}, this.value)">
+          <select class="form-select form-select-sm whr-l-mat" onchange="whrLineSel(${idx})">
+            <option value="">— Select material —</option>${_whrMatOptions()}
+          </select>
+          <div class="small text-muted mt-1 whr-l-stock"></div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-1">Quantity</label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control whr-l-qty" min="0.1" step="0.1" placeholder="0">
+            <span class="input-group-text whr-l-unit">pcs</span>
+          </div>
+        </div>
+        <div class="col-md-2 text-end">
+          <button class="btn btn-sm btn-outline-danger" title="Remove" onclick="whrRemoveLine(${idx})"><i class="bi bi-x-lg"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>`);
 }
 
-function whrOnSelect(){
-  const opt=document.getElementById('whr-material-id').selectedOptions[0];
-  if(opt&&opt.value){
-    const unit=opt.dataset.unit||'pcs';
-    document.getElementById('whr-unit').textContent=unit;
-    document.getElementById('whr-stock-info').textContent=`WH Current Stock: ${fmt(parseFloat(opt.dataset.stock)||0)} ${unit}`;
-  }else{document.getElementById('whr-stock-info').textContent='';}
+function whrRemoveLine(idx){
+  if(document.querySelectorAll('.whr-line').length <= 1){ toast('At least one material required','warning'); return; }
+  document.querySelector(`.whr-line[data-idx="${idx}"]`)?.remove();
+}
+
+function whrRerenderLines(){
+  // Type filter changed — refresh each line's material options, keeping the
+  // current pick if it survives the filter.
+  document.querySelectorAll('.whr-line').forEach(line => {
+    const sel = line.querySelector('.whr-l-mat');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— Select material —</option>' + _whrMatOptions();
+    if([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  });
+}
+
+function whrLineSearch(idx, q){
+  const line = document.querySelector(`.whr-line[data-idx="${idx}"]`);
+  if(!line) return;
+  const term = (q||'').trim().toLowerCase();
+  const t = document.getElementById('whr-type-filter')?.value || '';
+  let mats = t ? _whrMats.filter(m => m.type === t) : _whrMats;
+  if(term) mats = mats.filter(m => (m.name||'').toLowerCase().includes(term) || (m.type||'').toLowerCase().includes(term));
+  line.querySelector('.whr-l-mat').innerHTML = '<option value="">— Select material —</option>' +
+    mats.map(m=>`<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-stock="${m.current_stock||0}">${m.name}${m.type?' ['+m.type+']':''} — WH: ${fmt(m.current_stock||0)} ${m.unit||'pcs'}</option>`).join('');
+}
+
+function whrLineSel(idx){
+  const line = document.querySelector(`.whr-line[data-idx="${idx}"]`);
+  if(!line) return;
+  const opt = line.querySelector('.whr-l-mat').selectedOptions[0];
+  if(opt && opt.value){
+    line.querySelector('.whr-l-unit').textContent = opt.dataset.unit || 'pcs';
+    line.querySelector('.whr-l-stock').textContent = `WH stock: ${fmt(parseFloat(opt.dataset.stock)||0)} ${opt.dataset.unit||'pcs'}`;
+  } else {
+    line.querySelector('.whr-l-stock').textContent = '';
+  }
 }
 
 async function whrSubmit(){
-  const matId=parseInt(document.getElementById('whr-material-id').value)||0;
-  const qty=parseFloat(document.getElementById('whr-qty').value)||0;
-  const notes=document.getElementById('whr-notes').value.trim();
-  const line=document.getElementById('whr-line').value||null;
-  if(!matId||qty<=0){toast('Select a material and enter quantity','warning');return;}
-  if(!notes){toast('Please add notes / reason for request','warning');return;}
-  try{
-    await api('/api/consumable-requests','POST',{
-      material_id:matId, qty_requested:qty, department:_whrDept, line_id:line, notes
-    });
+  const centralised = _whrDeptIsCentralised(_whrDept);
+  if(!centralised && !_whrLine){ toast('Select a production line in the Station Hub first','warning'); return; }
+  const neededDate = document.getElementById('whr-needed-date').value;
+  const neededTime = document.getElementById('whr-needed-time').value;
+  if(!neededDate){ toast('Needed-by date is required','warning'); return; }
+  if(!neededTime){ toast('Needed time is required','warning'); return; }
+  const notes = document.getElementById('whr-notes').value.trim();
+
+  // Collect material lines (skip fully-blank rows).
+  const lines = [];
+  let bad = '';
+  document.querySelectorAll('.whr-line').forEach(el => {
+    const matId = parseInt(el.querySelector('.whr-l-mat').value) || 0;
+    const qty = parseFloat(el.querySelector('.whr-l-qty').value) || 0;
+    if(!matId && !qty) return;
+    if(!matId){ bad = 'Pick a material for every line'; return; }
+    if(qty <= 0){ bad = 'Enter a positive quantity for every line'; return; }
+    lines.push({ material_id: matId, qty_requested: qty });
+  });
+  if(bad){ toast(bad, 'warning'); return; }
+  if(!lines.length){ toast('Add at least one material', 'warning'); return; }
+
+  const btn = document.getElementById('whr-submit-btn');
+  btn.disabled = true;
+  let ok=0, fail=0, firstErr='';
+  for(const ln of lines){
+    try{
+      await api('/api/consumable-requests','POST',{
+        material_id: ln.material_id, qty_requested: ln.qty_requested,
+        department: _whrDept, line_id: centralised ? '' : _whrLine,
+        needed_by: neededDate, needed_time: neededTime, notes,
+      });
+      ok++;
+    }catch(e){ fail++; if(!firstErr) firstErr = e.message||String(e); }
+  }
+  btn.disabled = false;
+  if(fail===0){
     bootstrap.Modal.getInstance(document.getElementById('whRequestModal')).hide();
-    toast('Request submitted to warehouse','success');
-    _whrMats=[];
-  }catch(e){toast(e.message,'danger');}
+    toast(`${ok} request${ok===1?'':'s'} submitted to warehouse`,'success');
+  } else {
+    toast(`${ok} submitted, ${fail} failed (${firstErr})`, fail===lines.length?'danger':'warning');
+  }
+}
+
+// ── My Open Requests (station-scoped) ────────────────────────
+// Shows this station's (department + line) requests that aren't fully
+// received. FULFILLED-but-unreceived rows get a 'Confirm Receipt' button
+// that deposits the fulfilled qty into station stock.
+async function stOpenMyRequests(){
+  const dept = document.getElementById('sl-dept-scope')?.value
+            || document.getElementById('st-dept')?.value || '';
+  const line = document.getElementById('sl-line')?.value
+            || document.getElementById('st-line')?.value || '';
+  const centralised = _whrDeptIsCentralised(dept);
+  document.getElementById('myreq-scope').innerHTML =
+    `Department: <b>${DEPT_LABEL[dept]||dept||'—'}</b>` +
+    (centralised ? ' <span class="badge bg-secondary">centralised</span>'
+                 : ` · Line: <b>${line||'—'}</b>`);
+
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('myRequestsModal')).show();
+  const tbody = document.getElementById('myreq-tbody');
+  tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Loading…</td></tr>';
+
+  const params = ['open_only=true'];
+  if(dept) params.push('department=' + encodeURIComponent(dept));
+  if(!centralised && line) params.push('line_id=' + encodeURIComponent(line));
+  let rows = await api('/api/consumable-requests?' + params.join('&')).catch(()=>[]);
+  if(!Array.isArray(rows)) rows = [];
+
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No open requests for this station.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const fulfilled = Number(r.qty_fulfilled||0);
+    const received  = Number(r.qty_received||0);
+    const canReceive = fulfilled - received > 0.0001;
+    const stCls = { PENDING:'bg-secondary', PARTIAL:'bg-info', FULFILLED:'bg-primary', CANCELLED:'bg-dark' }[r.status] || 'bg-secondary';
+    const stLbl = canReceive ? 'READY TO RECEIVE' : r.status;
+    const stColor = canReceive ? 'bg-success' : stCls;
+    const need = (r.needed_by||'').slice(0,10) + (r.needed_time ? ' · '+r.needed_time : '');
+    return `<tr>
+      <td><code class="small">${r.request_id}</code><div class="small text-muted">${(r.created_at||'').slice(0,10)}</div></td>
+      <td><b>${r.material_name||''}</b>${r.material_type?` <span class="badge bg-light text-dark border small">${r.material_type}</span>`:''}</td>
+      <td class="text-end">${fmt(r.qty_requested)} ${r.unit||''}</td>
+      <td class="text-end">${fmt(fulfilled)}</td>
+      <td class="text-end">${fmt(received)}</td>
+      <td class="small">${need||'—'}</td>
+      <td><span class="badge ${stColor}" style="font-size:.62rem">${stLbl}</span></td>
+      <td class="text-end">
+        ${canReceive
+          ? `<button class="btn btn-xs btn-success py-0 px-2" style="font-size:.72rem" onclick="whrReceive('${r.request_id}')"><i class="bi bi-box-arrow-in-down me-1"></i>Confirm Receipt</button>`
+          : '<span class="text-muted small">awaiting WH</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function whrReceive(requestId){
+  try{
+    await api(`/api/consumable-requests/${requestId}/receive`, 'PATCH');
+    toast('Received into station stock','success');
+    stOpenMyRequests();                       // refresh the list
+    if(typeof stLoadStock === 'function') stLoadStock();   // refresh stock table
+    if(typeof stLoadMovements === 'function') stLoadMovements();
+  }catch(e){ toast(e.message||'Receive failed','danger'); }
 }
 
 

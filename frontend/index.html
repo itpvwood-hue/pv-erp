@@ -2726,7 +2726,9 @@
       <div class="card-header py-2 d-flex justify-content-between align-items-center">
         <span class="fw-bold small"><i class="bi bi-box-seam me-1"></i>Current Stock at this Station</span>
         <div class="d-flex gap-2">
-          <button class="btn btn-outline-success btn-sm" onclick="stOpenStockMove('RECEIVE')"><i class="bi bi-plus-circle me-1"></i>Receive</button>
+          <!-- 'Receive' removed: stock now arrives by confirming receipt on an
+               open warehouse request (Station Stock header → View my open
+               requests). Issue/Use (consume) + Adjust (correct a count) stay. -->
           <button class="btn btn-outline-warning btn-sm" onclick="stOpenStockMove('ISSUE')"><i class="bi bi-dash-circle me-1"></i>Issue / Use</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="stOpenStockMove('ADJUST')"><i class="bi bi-pencil-square me-1"></i>Adjust</button>
         </div>
@@ -2943,46 +2945,100 @@
 
 <!-- ══ WH CONSUMABLE REQUEST MODAL (shared for all stations) ══ -->
 <div class="modal fade" id="whRequestModal" tabindex="-1">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title"><i class="bi bi-cart-plus me-2 text-primary"></i>Request Consumables from Warehouse</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <div class="mb-2 small text-muted">Department: <span id="whr-dept-label" class="fw-semibold text-primary"></span></div>
-        <div class="mb-3">
-          <label class="form-label small fw-semibold">Material <span class="text-danger">*</span></label>
-          <input type="text" class="form-control form-control-sm mb-1" id="whr-search" placeholder="Search material…" oninput="whrFilter(this.value)" autocomplete="off">
-          <select class="form-select form-select-sm" id="whr-material-id" onchange="whrOnSelect()">
-            <option value="">— Select material —</option>
-          </select>
-          <div class="small text-muted mt-1" id="whr-stock-info"></div>
+        <!-- Context: department + line are hard-set from the Station Hub
+             scope selectors at the top of the page (read-only here). -->
+        <div class="alert alert-light border py-2 px-3 mb-3 d-flex flex-wrap gap-3 align-items-center">
+          <span class="small">Department: <span id="whr-dept-label" class="fw-semibold text-primary"></span></span>
+          <span class="small">Production line: <span id="whr-line-label" class="fw-semibold text-primary"></span></span>
+          <span class="badge bg-secondary ms-auto" id="whr-line-hint" style="display:none"></span>
         </div>
+        <!-- Per-line departments must have a line selected before requesting. -->
+        <div class="alert alert-warning py-2 px-3 mb-3" id="whr-line-warning" style="display:none">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          Select a <b>production line</b> in the Station Hub line selector (top-right) before requesting — this department's stock is tracked per line.
+        </div>
+
         <div class="row g-2 mb-3">
-          <div class="col-6">
-            <label class="form-label small fw-semibold">Quantity <span class="text-danger">*</span></label>
-            <div class="input-group input-group-sm">
-              <input type="number" class="form-control" id="whr-qty" min="1" step="0.1" placeholder="0">
-              <span class="input-group-text" id="whr-unit">pcs</span>
-            </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold">Filter by type</label>
+            <select class="form-select form-select-sm" id="whr-type-filter" onchange="whrRerenderLines()">
+              <option value="">All types</option>
+              <option value="adhesive">Consumable</option>
+              <option value="glue_formula">Glue &amp; Additives</option>
+              <option value="packing">Packing</option>
+              <option value="other">Others</option>
+            </select>
           </div>
-          <div class="col-6">
-            <label class="form-label small fw-semibold">Production Line</label>
-            <select class="form-select form-select-sm" id="whr-line">
-              <option value="">— All —</option>
-              <option>P01</option><option>P02</option><option>P37</option><option>PUV</option><option>PVS</option><option>PSP</option>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold">Needed by (date) <span class="text-danger">*</span></label>
+            <input type="date" class="form-control form-control-sm" id="whr-needed-date">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold">Needed (time) <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="whr-needed-time">
+              <option value="">— Select —</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
             </select>
           </div>
         </div>
-        <div class="mb-2">
-          <label class="form-label small fw-semibold">Notes / Reason <span class="text-danger">*</span></label>
-          <textarea class="form-control form-control-sm" id="whr-notes" rows="2" placeholder="Purpose of request, batch ref if relevant…"></textarea>
+
+        <label class="form-label small fw-semibold mb-1">Materials <span class="text-danger">*</span></label>
+        <div id="whr-lines"></div>
+        <button class="btn btn-sm btn-outline-primary mt-1" onclick="whrAddLine()">
+          <i class="bi bi-plus-lg me-1"></i>Add another material
+        </button>
+
+        <div class="mt-3">
+          <label class="form-label small fw-semibold">Notes / reason (optional)</label>
+          <textarea class="form-control form-control-sm" id="whr-notes" rows="2" placeholder="Purpose, batch ref if relevant…"></textarea>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary btn-sm" onclick="whrSubmit()"><i class="bi bi-send me-1"></i>Submit to Warehouse</button>
+        <button class="btn btn-primary btn-sm" id="whr-submit-btn" onclick="whrSubmit()"><i class="bi bi-send me-1"></i>Submit to Warehouse</button>
         <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MY OPEN REQUESTS (station-scoped) ════════════════════ -->
+<div class="modal fade" id="myRequestsModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-clock-history me-2 text-primary"></i>My Open Requests</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="small text-muted mb-2" id="myreq-scope"></div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+            <thead class="table-light">
+              <tr>
+                <th>Request</th><th>Material</th>
+                <th class="text-end">Requested</th>
+                <th class="text-end">Fulfilled</th>
+                <th class="text-end">Received</th>
+                <th>Needed by</th><th>Status</th><th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody id="myreq-tbody">
+              <tr><td colspan="8" class="text-center text-muted py-3">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm btn-outline-secondary" onclick="stOpenMyRequests()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+        <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
