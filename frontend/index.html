@@ -5607,7 +5607,7 @@ async function preload(){
   }
 }
 
-// Dashboard (loadDashboard) moved to /static/js/portal_admin.js
+// Dashboard (loadDashboard) moved to /static/js/portal_planning.js
 // Materials moved to /static/js/portal_warehouse.js
 // Finished Goods moved to /static/js/portal_planning.js
 // ══════════════════════════════════════════════════════════
@@ -5646,7 +5646,14 @@ async function _doUploadCsv(type,file){
 // ══════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════
-(async()=>{await preload();loadDashboard();})();
+// preload() warms the products + materials + lines/depts catalogs that
+// every portal uses. loadDashboard() used to fire here too, back when
+// every portal was bundled together — it's gone now because the
+// dashboard page lives in portal_planning.js, which is only loaded
+// dynamically after login (see auth.js's loadPortalsForRole). The
+// applySession landing-page navigation triggers loadDashboard at the
+// right time, with the portal already in scope.
+(async()=>{ await preload(); })();
 
 
 // BOM Builder + Glue/Bleaching formula editor + Packing Spec Management moved to /static/js/portal_planning.js

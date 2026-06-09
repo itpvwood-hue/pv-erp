@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.17.1"
+VERSION    = "2.17.2"
 BUILD_DATE = "2026-06-09"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.17.2", "2026-06-09", "Fix (real one): the 'Promise Error: loadDashboard is not defined' came from index.html's INIT IIFE — `(async()=>{await preload();loadDashboard();})()` — which fired at parse time, BEFORE any portal script loaded. Dropped the loadDashboard() call from the IIFE (preload() still runs); navigation to dashboard now happens via applySession after the portal is dynamically loaded. Also removed a leftover 'dashboard': loadDashboard registration in portal_admin.js's Object.assign that my last script missed because of unusual whitespace."),
     ("2.17.1", "2026-06-09", "Fix: Dashboard (loadDashboard) moved from portal_admin.js to portal_planning.js so PRODUCTION_PLANNING and DEPARTMENT_LEADER users don't hit a ReferenceError on landing — they download planning but not admin, and 'dashboard' was their default page. Now every non-warehouse role has loadDashboard available because every non-warehouse role loads portal_planning.js"),
     ("2.17.0", "2026-06-09", "Deployment hardening: scripts/install_service.ps1 (NSSM-based PVWoodERP Windows service — auto-start, restart on crash, log rotation), scripts/uninstall_service.ps1, scripts/backup_db.py (live online-backup of SQLite — service does NOT need stopping), scripts/install_backup_task.ps1 (daily 02:00 Task Scheduler job, runs as SYSTEM, keeps 30 snapshots), GET /api/health (anonymous liveness probe: ok/db_reachable/disk_free_mb/uptime_s/version), and new DEPLOY.md (replaces stale MIGRATION.md) covering prereqs, first-time install, update procedure, rollback, common issues, and a directory map"),
     ("2.16.0", "2026-06-09", "Portal split step 13 DONE: dynamic per-role portal loader. The four static <script src=portal_*.js> tags are gone; auth.js's applySession is now async and loadPortalsForRole(role) injects only the modules the signed-in role needs. WAREHOUSE users download 132 kB instead of 665 kB on first paint; managerial users still load all four. SPLIT_PLAN.md updated — 13 of 14 steps complete (step 14 = optional HTML-page-divs move into portal files, deferred)"),

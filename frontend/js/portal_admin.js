@@ -457,6 +457,7 @@ async function deleteMachine(id){
 Object.assign(PAGE_LOADERS, {
   'factory-assistant':  faInit,
   'employees':          loadEmployees,
-  'machines'               : loadMachines,
-  'dashboard'              : loadDashboard,
+  'machines':           loadMachines,
+  // 'dashboard' is registered by portal_planning.js — every non-warehouse
+  // role loads planning, so loadDashboard is always defined there.
 });
