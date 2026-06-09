@@ -7097,6 +7097,20 @@ def fulfill_consumable_request(request_id: str, qty_to_fulfill: float, fulfilled
     req = dict(req)
     mat = dict(conn.execute("SELECT * FROM materials WHERE id=?", (req['material_id'],)).fetchone())
 
+    # Stock guard — reject rather than silently clamp when warehouse stock
+    # can't cover the issue. Matches fulfill_fc_transfer_request and the
+    # glue-mix / VCMX paths, which all raise 'Insufficient ... stock' rather
+    # than over-issuing. Without this the old MAX(0, ...) deduction let two
+    # simultaneous fulfillments over-issue the same material below zero.
+    available = float(mat.get('current_stock') or 0)
+    if qty_to_fulfill > available:
+        conn.close()
+        raise ValueError(
+            f"Insufficient WH stock for {mat.get('name','this material')}: "
+            f"only {available:g} {mat.get('unit','')} available, "
+            f"requested {qty_to_fulfill:g}"
+        )
+
     new_fulfilled = req['qty_fulfilled'] + qty_to_fulfill
     new_status = 'FULFILLED' if new_fulfilled >= req['qty_requested'] else 'PARTIAL'
 
@@ -7106,7 +7120,8 @@ def fulfill_consumable_request(request_id: str, qty_to_fulfill: float, fulfilled
            WHERE request_id=?""",
         (new_fulfilled, new_status, fulfilled_by, request_id)
     )
-    # Deduct from warehouse stock
+    # Deduct from warehouse stock. The guard above ensures current_stock >=
+    # qty_to_fulfill at read time; MAX(0, ...) stays as a defensive floor.
     conn.execute(
         "UPDATE materials SET current_stock=MAX(0,current_stock-?) WHERE id=?",
         (qty_to_fulfill, req['material_id'])

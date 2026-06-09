@@ -2163,7 +2163,12 @@ def list_reqs(status: Optional[str] = None, department: Optional[str] = None,
 @app.patch("/api/consumable-requests/{request_id}/fulfill")
 def fulfill_req(request_id: str, body: FulfillIn,
                 user: dict = Depends(require_role(Role.WAREHOUSE))):
-    return fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
+    try:
+        return fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
+    except ValueError as e:
+        # Insufficient-stock guard (and 'request not found') surface as a
+        # 400 with the human message instead of a generic 500.
+        raise HTTPException(400, str(e))
 
 @app.patch("/api/consumable-requests/{request_id}/cancel")
 def cancel_req(request_id: str):
