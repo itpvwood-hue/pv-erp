@@ -375,8 +375,146 @@ async function umToggleActive(uid,active){
 
 
 
+
+
+// ════════════════════════════════════════════════════════════
+// Machines
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// MACHINES
+// ══════════════════════════════════════════════════════════
+let _allMachines=[];
+async function loadMachines(){
+  try{
+    const rows=await api('/api/machines').catch(()=>[]);
+    _allMachines=rows;
+    const grid=document.getElementById('machines-grid');
+    if(!grid) return;
+    if(!rows.length){grid.innerHTML='<div class="col-12"><p class="text-muted">No machines added yet.</p></div>';return;}
+    grid.innerHTML=rows.map(m=>`
+      <div class="col-md-4 col-lg-3">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between align-items-start mb-1">
+            <span class="fw-bold">${m.name||'Machine #'+m.id}</span>
+            ${statusBadge(m.status||'active')}
+          </div>
+          <small class="text-muted">${m.type||''}</small>
+          ${m.capacity_per_shift?`<div class="text-muted small mt-1">Cap: <b>${fmt(m.capacity_per_shift)}</b>/shift</div>`:''}
+          <div class="d-flex gap-1 mt-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="editMachine(${m.id},'${(m.name||'').replace(/'/g,"\'")}','${m.status||'active'}','${m.type||''}',${m.capacity_per_shift||0})">Edit</button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteMachine(${m.id})">Delete</button>
+          </div>
+        </div>
+      </div>`).join('');
+  }catch(e){const g=document.getElementById('machines-grid');if(g)g.innerHTML=`<div class="col-12"><div class="alert alert-danger">${e.message}</div></div>`;}
+}
+function openMachineModal(){
+  document.getElementById('mach-id').value='';
+  ['mach-name','mach-type','mach-cap'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+  const s=document.getElementById('mach-status');if(s)s.value='active';
+  document.querySelector('#machineModal .modal-title').textContent='Add Machine';
+}
+function editMachine(id,name,status,type,cap){
+  document.getElementById('mach-id').value=id;
+  document.getElementById('mach-name').value=name;
+  document.getElementById('mach-status').value=status;
+  document.getElementById('mach-type').value=type;
+  document.getElementById('mach-cap').value=cap||'';
+  document.querySelector('#machineModal .modal-title').textContent='Edit Machine';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('machineModal')).show();
+}
+async function saveMachine(){
+  const id=document.getElementById('mach-id').value;
+  const body={
+    name:document.getElementById('mach-name').value.trim(),
+    status:document.getElementById('mach-status').value,
+    type:document.getElementById('mach-type').value.trim(),
+    capacity_per_shift:parseFloat(document.getElementById('mach-cap').value)||null,
+  };
+  if(!body.name){toast('Machine name is required','danger');return;}
+  try{
+    if(id) await api(`/api/machines/${id}`,'PUT',body);
+    else await api('/api/machines','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('machineModal')).hide();
+    toast('Machine saved');
+    loadMachines();
+  }catch(e){toast(e.message,'danger');}
+}
+async function deleteMachine(id){
+  if(!confirm('Delete this machine?')) return;
+  try{await api(`/api/machines/${id}`,'DELETE');toast('Deleted');loadMachines();}catch(e){toast(e.message,'danger');}
+}
+
+// Production Logs moved to /static/js/portal_planning.js
+
+
+// ════════════════════════════════════════════════════════════
+// Dashboard (loadDashboard)
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════
+async function loadDashboard(){
+  try{
+    const [stats,flow,matrix,porders]=await Promise.all([
+      api('/api/dashboard/stats'),
+      api('/api/planning/flow').catch(()=>({})),
+      api('/api/planning/po-matrix').catch(()=>({orders:[]})),
+      api('/api/production-orders').catch(()=>[])
+    ]);
+    // Stat cards
+    document.getElementById('dash-stats').innerHTML=[
+      {val:stats.total_products,lbl:'Products',ico:'bi-grid',c:'primary'},
+      {val:stats.total_materials,lbl:'Materials',ico:'bi-stack',c:'success'},
+      {val:stats.total_orders,lbl:'Sales Orders',ico:'bi-receipt',c:'info'},
+      {val:stats.active_machines,lbl:'Active Machines',ico:'bi-gear',c:'warning'},
+    ].map(s=>`<div class="col-6 col-md-3"><div class="stat-card d-flex justify-content-between align-items-start">
+      <div><div class="val text-${s.c}">${fmt(s.val)}</div><div class="lbl">${s.lbl}</div></div>
+      <i class="bi ${s.ico} ico text-${s.c}"></i></div></div>`).join('');
+    // WIP
+    let total=0;const chips=DEPTS.map(d=>{const c=(flow[d]||[]).length;total+=c;return `<span class="badge bg-secondary">${DLBL[d]}: ${c}</span>`;}).join('');
+    document.getElementById('dash-wip-row').innerHTML=`<div class="col-12"><div class="card p-3"><div class="d-flex flex-wrap gap-2 align-items-center"><span class="fw-bold text-muted small text-uppercase">WIP</span>${chips}<span class="ms-auto badge bg-primary">Total ${total} batches</span></div></div></div>`;
+    // PO Matrix
+    const orders=matrix.orders||[];
+    if(orders.length){
+      document.getElementById('po-matrix').innerHTML=`<table class="table table-sm table-bordered" style="font-size:.78rem;white-space:nowrap">
+        <thead class="table-light"><tr><th>Order</th><th>PO</th><th>SKU</th><th>Qty</th>${DEPTS.map(d=>`<th class="text-center">${DLBL[d]}</th>`).join('')}<th>Status</th></tr></thead>
+        <tbody>${orders.map(o=>`<tr>
+          <td><b>${o.order_number||'#'+o.id}</b></td><td>${o.po_number||'-'}</td>
+          <td>${o.product_name||'-'}</td><td>${fmt(o.total_quantity)}</td>
+          ${DEPTS.map(d=>{const q=(o.dept_dist||{})[d]||0;return `<td class="text-center">${q?`<span style="background:#2d6e2d;color:#fff;border-radius:10px;padding:1px 6px;font-size:.7rem">${fmt(q)}</span>`:''}</td>`;}).join('')}
+          <td>${statusBadge(o.status)}</td></tr>`).join('')}</tbody></table>`;
+    } else {
+      document.getElementById('po-matrix').innerHTML='<p class="text-muted small">No active production orders.</p>';
+    }
+    // Active prod orders
+    const active=(porders||[]).filter(o=>['in_progress','planned'].includes(o.status));
+    document.getElementById('dash-po-list').innerHTML=active.length?active.map(o=>`
+      <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+        <div><small class="fw-bold">${o.order_number||'#'+o.id}</small><small class="text-muted ms-2">${o.product_name||''}</small></div>
+        <div class="d-flex gap-2">${statusBadge(o.status)}</div>
+      </div>`).join(''):'<p class="text-muted small">No active orders.</p>';
+    // Chart
+    const logs=await api('/api/production-logs?limit=100').catch(()=>[]);
+    const byD={};logs.forEach(l=>{if(!byD[l.log_date])byD[l.log_date]={p:0,a:0};byD[l.log_date].p+=l.planned_qty||0;byD[l.log_date].a+=l.actual_qty||0;});
+    const lbls=Object.keys(byD).sort().slice(-7);
+    const ctx=document.getElementById('dashChart').getContext('2d');
+    if(dashChart) dashChart.destroy();
+    dashChart=new Chart(ctx,{type:'bar',data:{labels:lbls,datasets:[
+      {label:'Planned',data:lbls.map(d=>byD[d].p),backgroundColor:'rgba(59,130,246,.3)',borderColor:'#2d6e2d',borderWidth:1},
+      {label:'Actual',data:lbls.map(d=>byD[d].a),backgroundColor:'rgba(16,185,129,.3)',borderColor:'#10b981',borderWidth:1}
+    ]},options:{responsive:true,plugins:{legend:{position:'top'}},scales:{y:{beginAtZero:true}}}});
+  }catch(e){console.error(e);}
+}
+
+// Order Intake + PDF PO Upload moved to /static/js/portal_planning.js
+// Line Board (TrainingPeaks-style) moved to /static/js/portal_planning.js
+// FC Material Check moved to /static/js/portal_planning.js
+// FG Warehouse moved to /static/js/portal_warehouse.js
 // ── Page loader registry ────────────────────────────────────
 Object.assign(PAGE_LOADERS, {
   'factory-assistant':  faInit,
   'employees':          loadEmployees,
+  'machines'               : loadMachines,
+  'dashboard'              : loadDashboard,
 });

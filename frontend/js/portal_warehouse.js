@@ -1985,6 +1985,450 @@ async function loadDeptPage(dept){
 }
 // Dept Batch Detail offcanvas moved to /static/js/portal_planning.js
 
+
+
+// ════════════════════════════════════════════════════════════
+// Lots & Documents
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// LOTS & DOCUMENTS
+// ══════════════════════════════════════════════════════════════
+async function lotsPrimeMatSelect(){
+  await prPrimeMaterialSelects();
+  // Also populate PR dropdown in lot modal
+  try{
+    const prs = await api('/api/purchase-requests?status=APPROVED');
+    const sel=document.getElementById('lot-new-pr');
+    sel.innerHTML='<option value="">— none —</option>'+prs.map(p=>
+      `<option value="${p.id}">${p.request_number} — ${p.material_name} (${p.qty_requested} ${p.uom||''})</option>`).join('');
+  }catch{}
+}
+async function lotsLoad(){
+  const matId=document.getElementById('lot-mat-filter').value;
+  const url='/api/material-lots'+(matId?('?material_id='+matId):'');
+  try{
+    _allLots = await api(url);
+    lotsRender(_allLots);
+    // Also refresh the doc upload modal's lot dropdown when material picked
+    const dml=document.getElementById('doc-mat'); if(dml){ dml.onchange=()=>docRefreshLotSelect(dml.value); }
+    docsLoad();
+  }catch(e){
+    document.getElementById('lots-tbody').innerHTML=`<tr><td colspan="9" class="text-danger small p-3">${e.message||e}</td></tr>`;
+  }
+}
+function lotsRender(rows){
+  if(!Array.isArray(rows)) rows=[];
+  const tb=document.getElementById('lots-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="9" class="text-center text-muted py-3">No lots</td></tr>';return;}
+  tb.innerHTML=rows.map(l=>{
+    const consumed = Number(l.received_qty||0) - Number(l.remaining_qty||0);
+    const pct = l.received_qty>0 ? Math.round(consumed/l.received_qty*100) : 0;
+    return `<tr>
+      <td class="small fw-semibold">${l.lot_code}</td>
+      <td><span class="badge bg-light text-dark me-1">${(l.material_type||'').toUpperCase()}</span>${l.material_name}</td>
+      <td class="small">${l.supplier||'—'}${l.supplier_lot_ref?'<br><span class="text-muted">'+l.supplier_lot_ref+'</span>':''}</td>
+      <td class="text-end">${_accFmtN(l.received_qty)}</td>
+      <td class="text-end ${l.remaining_qty<=0?'text-muted':''}">${_accFmtN(l.remaining_qty)} <span class="small text-muted">(${pct}% used)</span></td>
+      <td class="small text-muted">${l.uom||''}</td>
+      <td class="small">${(l.received_at||'').slice(0,10)}</td>
+      <td class="small">${l.expiry_date||'—'}</td>
+      <td>${l.doc_count?`<span class="badge bg-danger"><i class="bi bi-file-earmark-pdf me-1"></i>${l.doc_count}</span>`:'<span class="text-muted small">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+async function lotSubmit(){
+  const body={
+    material_id: Number(document.getElementById('lot-new-material').value),
+    lot_code:    document.getElementById('lot-new-code').value.trim(),
+    received_qty:Number(document.getElementById('lot-new-qty').value||0),
+    supplier:    document.getElementById('lot-new-supplier').value,
+    supplier_lot_ref: document.getElementById('lot-new-supref').value,
+    uom:         document.getElementById('lot-new-uom').value,
+    unit_cost:   Number(document.getElementById('lot-new-cost').value||0),
+    expiry_date: document.getElementById('lot-new-expiry').value||null,
+    purchase_request_id: Number(document.getElementById('lot-new-pr').value)||null,
+    notes:       document.getElementById('lot-new-notes').value,
+  };
+  if(!body.material_id||!body.lot_code||body.received_qty<=0){ alert('Material, lot code and positive quantity are required.'); return; }
+  try{
+    await api('/api/material-lots', 'POST', body);
+    bootstrap.Modal.getInstance(document.getElementById('newLotModal'))?.hide();
+    ['lot-new-code','lot-new-supplier','lot-new-supref','lot-new-qty','lot-new-uom','lot-new-cost','lot-new-expiry','lot-new-notes'].forEach(id=>document.getElementById(id).value='');
+    lotsLoad();
+  }catch(e){ alert('Save lot failed: '+(e.message||e)); }
+}
+async function docsLoad(){
+  try{
+    _allDocs = await api('/api/material-documents');
+    const tb=document.getElementById('docs-tbody');
+    if(!_allDocs.length){tb.innerHTML='<tr><td colspan="6" class="text-center text-muted py-3">No documents</td></tr>';return;}
+    tb.innerHTML=_allDocs.map(d=>`<tr>
+      <td><span class="badge bg-danger">${d.doc_type}</span></td>
+      <td class="small">${d.material_name}</td>
+      <td class="small">${d.lot_code||'—'}</td>
+      <td class="small"><a href="/api/material-documents/${d.id}/download" target="_blank">${d.filename}</a></td>
+      <td class="small text-muted">${(d.uploaded_at||'').slice(0,16).replace('T',' ')}</td>
+      <td class="text-end"><button class="btn btn-xs btn-outline-danger" onclick="docDelete(${d.id})"><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  }catch(e){
+    document.getElementById('docs-tbody').innerHTML=`<tr><td colspan="6" class="text-danger small p-3">${e.message||e}</td></tr>`;
+  }
+}
+function docRefreshLotSelect(matId){
+  const lotSel=document.getElementById('doc-lot');
+  const lots=_allLots.filter(l=>String(l.material_id)===String(matId));
+  lotSel.innerHTML='<option value="">— material-level —</option>'+lots.map(l=>
+    `<option value="${l.id}">${l.lot_code} (${_accFmtN(l.remaining_qty)} ${l.uom||''} left)</option>`).join('');
+}
+async function docUpload(){
+  const matId=document.getElementById('doc-mat').value;
+  const lotId=document.getElementById('doc-lot').value;
+  const type=document.getElementById('doc-type').value;
+  const file=document.getElementById('doc-file').files[0];
+  const notes=document.getElementById('doc-notes').value;
+  if(!matId){ alert('Pick a material'); return; }
+  if(!file){ alert('Pick a PDF file'); return; }
+  const fd=new FormData(); fd.append('file', file);
+  const tok=localStorage.getItem('erp_token')||'';
+  const url=`/api/material-documents/upload?material_id=${matId}&doc_type=${encodeURIComponent(type)}${lotId?('&lot_id='+lotId):''}${notes?('&notes='+encodeURIComponent(notes)):''}`;
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'X-Auth-Token':tok},body:fd});
+    if(!r.ok){ throw new Error((await r.json()).detail||('HTTP '+r.status)); }
+    bootstrap.Modal.getInstance(document.getElementById('uploadDocModal'))?.hide();
+    document.getElementById('doc-file').value='';
+    document.getElementById('doc-notes').value='';
+    docsLoad(); lotsLoad();
+  }catch(e){ alert('Upload failed: '+(e.message||e)); }
+}
+async function docDelete(id){
+  if(!confirm('Delete this document?')) return;
+  try{ await api('/api/material-documents/'+id, 'DELETE'); docsLoad(); lotsLoad(); }
+  catch(e){ alert('Delete failed: '+(e.message||e)); }
+}
+
+
+
+
+// ════════════════════════════════════════════════════════════
+// Materials
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// MATERIALS
+// ══════════════════════════════════════════════════════════
+let _allMaterials=[], _allConsumables=[], _matFilter='', _matSearch='';
+let _matPage=1, _matPageSize=50, _matFilteredRows=[];
+const matTypeLabel={'core_board':'Boards','veneer_sheet':'Veneers','adhesive':'Consumable','packing':'Packing','glue_formula':'Glue and Additives','other':'Others'};
+const matTypeBadge={'core_board':'bg-secondary','veneer_sheet':'bg-success','adhesive':'bg-warning text-dark','packing':'bg-info text-dark','glue_formula':'bg-danger','other':'bg-light text-dark border'};
+// Phase B re-org: the `glue_formula` type slot is now used for real glue
+// ingredients (urea resin, latex, flour, pigments, etc.) — i.e. the 8 chemicals
+// used by glue recipes. The old "glue placeholder" rows were deleted in Phase B.
+const RAW_TYPES=new Set(['core_board','veneer_sheet','adhesive','glue_formula','packing','other']);
+
+async function loadMaterials(){
+  let rows;
+  try {
+    // include_formulas=true so glue_formula rows are visible in the Glue tab
+    rows = await api('/api/materials?include_formulas=true');
+  } catch(e) {
+    toast('Failed to load materials: '+e.message,'danger');
+    console.error('loadMaterials API error:', e);
+    return;
+  }
+  if(!Array.isArray(rows)){
+    toast('Materials API returned unexpected data','danger');
+    console.error('loadMaterials: rows is not an array', rows);
+    return;
+  }
+  console.log('loadMaterials: got', rows.length, 'rows. Sample types:', rows.slice(0,5).map(r=>r.type));
+  materials=rows;
+  _allMaterials=rows.filter(m=>RAW_TYPES.has(m.type));
+  // Legacy: some pages still call into _allConsumables expecting packing rows
+  // (e.g. veneer dropdown population). Keep that subset alive.
+  _allConsumables=rows.filter(m=>m.type==='packing');
+  console.log('loadMaterials: _allMaterials.length=', _allMaterials.length, '_allConsumables.length=', _allConsumables.length);
+  // Render with try/catch so one failure doesn't block others
+  try { renderMaterials(_allMaterials); } catch(e) { console.error('renderMaterials error:', e); }
+  try { renderConsumables(_allConsumables); } catch(e) { console.error('renderConsumables error:', e); }
+  try { updateMatFilterCounts(); } catch(e) { console.error('updateMatFilterCounts error:', e); }
+  try { populateVeneerDropdowns(); } catch(e) { console.error('populateVeneerDropdowns error:', e); }
+}
+function openMatById(id){
+  const m=[..._allMaterials,..._allConsumables].find(x=>x.id===id);
+  if(m) openMaterialModal(m);
+}
+const _editBtn = id=>`<button class="btn btn-xs btn-outline-secondary py-0 px-1" data-bs-toggle="modal" data-bs-target="#materialModal" onclick="openMatById(${id})"><i class="bi bi-pencil"></i></button>`;
+const _stockCell = m=>{
+  const low=(m.current_stock||0)<(m.reorder_point||0);
+  return `<td class="${low?'text-danger fw-bold':''}">${fmt(m.current_stock)}${low?' <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:.7rem"></i>':''}</td>`;
+};
+const _fscBadge = f=>f&&f!=='-'?`<span class="badge bg-success-subtle text-success border border-success" style="font-size:.65rem">${f}</span>`:'<span class="text-muted">—</span>';
+
+// ── Board row ──────────────────────────────────────────────────
+function boardRow(m){
+  const dims = (m.width_mm&&m.length_mm)?`${m.width_mm}×${m.length_mm}`:'—';
+  return `<tr>
+    <td><code class="text-primary fw-semibold">${m.code||''}</code></td>
+    <td>${m.board_type||'—'}</td>
+    <td>${m.glue_type||'—'}</td>
+    <td class="text-center">${m.thickness_mm||'—'}</td>
+    <td class="text-center">${dims}</td>
+    <td>${_fscBadge(m.fsc)}</td>
+    <td>${m.unit||''}</td>
+    ${_stockCell(m)}
+    <td>${fmt(m.reorder_point)}</td>
+    <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
+    <td>${_editBtn(m.id)}</td>
+  </tr>`;
+}
+
+// ── Veneer row ─────────────────────────────────────────────────
+function veneerRow(m){
+  const dims = (m.width_mm&&m.length_mm)?`${m.width_mm}×${m.length_mm}`:'—';
+  const gradeMatch=[m.grade, m.matching].filter(Boolean).join(' / ')||'—';
+  return `<tr>
+    <td><code class="text-primary fw-semibold">${m.code||''}</code></td>
+    <td>${m.species||'—'}</td>
+    <td>${m.cut_type||'—'}</td>
+    <td class="text-center">${m.thickness_mm||'—'}</td>
+    <td class="text-center">${dims}</td>
+    <td>${gradeMatch}</td>
+    <td>${_fscBadge(m.fsc)}</td>
+    <td>${m.unit||''}</td>
+    ${_stockCell(m)}
+    <td>${fmt(m.reorder_point)}</td>
+    <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
+    <td>${_editBtn(m.id)}</td>
+  </tr>`;
+}
+
+// ── Generic row (adhesive / other / all) ──────────────────────
+function matRow(m, showType=true){
+  const typeCell=showType?`<td><span class="badge ${matTypeBadge[m.type]||'bg-secondary'}" style="font-size:.65rem">${matTypeLabel[m.type]||m.type||''}</span></td>`:'';
+  return `<tr>
+    <td><code class="text-primary">${m.code||''}</code></td>
+    <td>${matDisplayName(m)}</td>
+    ${typeCell}
+    <td>${m.unit||''}</td>
+    ${_stockCell(m)}
+    <td>${fmt(m.reorder_point)}</td>
+    <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
+    <td>${_editBtn(m.id)}</td>
+  </tr>`;
+}
+
+function renderConsumables(rows){
+  // Legacy table removed — packing rows now appear only when the user
+  // toggles the Packing tab (or All) in the main materials table.
+  const el = document.querySelector('#consumables-table tbody');
+  if(el) el.innerHTML = rows.map(m=>matRow(m,false)).join('');
+}
+
+// Localised description for material rows. When the UI language is Thai
+// and the material has a name_th value, prefer that; otherwise fall back
+// to the canonical name/code.
+function matDisplayName(m){
+  if(_LANG === 'th' && m && m.name_th && String(m.name_th).trim()) return m.name_th;
+  return m.name || m.code || '';
+}
+
+const MAT_HEADS = {
+  core_board: `<tr><th>Code</th><th>Board Type</th><th>Glue</th><th class="text-center">Thick(mm)</th><th class="text-center">W×L (mm)</th><th>FSC</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
+  veneer_sheet: `<tr><th>Code</th><th>Species</th><th>Cut</th><th class="text-center">V-Thick</th><th class="text-center">W×L (mm)</th><th>Grade / Match</th><th>FSC</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
+  _generic: `<tr><th>Code</th><th>Description</th><th>Type</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
+};
+
+function renderMaterials(rows, resetPage=true){
+  _matFilteredRows = rows;
+  if(resetPage) _matPage = 1;
+
+  const total = rows.length;
+  const pageSize = _matPageSize === 0 ? total : _matPageSize; // 0 = All
+  const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+  if(_matPage > totalPages) _matPage = totalPages;
+
+  const start = (_matPage - 1) * pageSize;
+  const pageRows = pageSize > 0 ? rows.slice(start, start + pageSize) : rows;
+
+  const thead = document.getElementById('mat-thead');
+  if(thead) thead.innerHTML = MAT_HEADS[_matFilter] || MAT_HEADS._generic;
+
+  const html = total === 0
+    ? `<tr><td colspan="12" class="text-center text-muted py-4">No materials found</td></tr>`
+    : pageRows.map(m=>{
+        if(_matFilter==='core_board') return boardRow(m);
+        if(_matFilter==='veneer_sheet') return veneerRow(m);
+        return matRow(m, true);
+      }).join('');
+  document.querySelector('#materials-table tbody').innerHTML = html;
+
+  // Update count label
+  const cnt = document.getElementById('mat-shown-count');
+  if(cnt){
+    if(total === 0) cnt.textContent = '0 shown';
+    else if(_matPageSize === 0) cnt.textContent = `${total} shown`;
+    else cnt.textContent = `${start+1}–${Math.min(start+pageSize, total)} of ${total}`;
+  }
+
+  // Render pagination controls
+  _renderMatPagination(total, pageSize, totalPages);
+}
+
+function _renderMatPagination(total, pageSize, totalPages){
+  const el = document.getElementById('mat-pagination');
+  if(!el) return;
+  if(total === 0 || totalPages <= 1){ el.innerHTML=''; return; }
+
+  const mkBtn = (label, page, disabled=false, active=false) =>
+    `<li class="page-item${disabled?' disabled':''}${active?' active':''}">
+      <a class="page-link" href="#" onclick="event.preventDefault();${disabled||active?'':`matGoPage(${page})`}">${label}</a>
+    </li>`;
+
+  // Show window of pages around current
+  const pages = [];
+  const wing = 2;
+  for(let p=1; p<=totalPages; p++){
+    if(p===1 || p===totalPages || (p>=_matPage-wing && p<=_matPage+wing)) pages.push(p);
+    else if(pages[pages.length-1] !== '…') pages.push('…');
+  }
+
+  let html = `<ul class="pagination pagination-sm mb-0">`;
+  html += mkBtn('‹ Prev', _matPage-1, _matPage===1);
+  pages.forEach(p=>{
+    if(p==='…') html += `<li class="page-item disabled"><a class="page-link">…</a></li>`;
+    else html += mkBtn(p, p, false, p===_matPage);
+  });
+  html += mkBtn('Next ›', _matPage+1, _matPage===totalPages);
+  html += `</ul>`;
+  el.innerHTML = html;
+}
+
+function matGoPage(page){
+  _matPage = page;
+  renderMaterials(_matFilteredRows, false);
+}
+
+function matSetPageSize(n){
+  _matPageSize = n;
+  _matPage = 1;
+  renderMaterials(_matFilteredRows, false);
+}
+
+function filterMaterials(type, searchOverride){
+  _matFilter = type;
+  if(searchOverride !== undefined) _matSearch = searchOverride;
+  // Update button states
+  document.querySelectorAll('#mat-type-filter button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.matType===type);
+  });
+  // Toggle veneer sub-filters
+  const vsf = document.getElementById('veneer-subfilters');
+  if(vsf) vsf.classList.toggle('d-none', type!=='veneer_sheet');
+  if(type==='veneer_sheet') applyVeneerFilters(); else _renderMatFiltered();
+}
+
+function _renderMatFiltered(){
+  let rows = _matFilter ? _allMaterials.filter(m=>m.type===_matFilter) : _allMaterials;
+  const q = (_matSearch||'').toLowerCase().trim();
+  if(q) rows = rows.filter(m=>(m.code||'').toLowerCase().includes(q)||(m.name||'').toLowerCase().includes(q)||(m.species||'').toLowerCase().includes(q)||(m.board_type||'').toLowerCase().includes(q));
+  renderMaterials(rows, true);
+}
+
+function populateVeneerDropdowns(){
+  const veneers = _allMaterials.filter(m=>m.type==='veneer_sheet');
+  const fill = (id, vals)=>{
+    const el=document.getElementById(id); if(!el) return;
+    const cur=el.value;
+    el.innerHTML='<option value="">'+el.options[0].text+'</option>'+
+      [...new Set(vals.filter(Boolean).map(v=>v.trim()))].sort().map(v=>`<option value="${v}">${v}</option>`).join('');
+    if(cur) el.value=cur;
+  };
+  fill('vf-species', veneers.map(m=>m.species));
+  fill('vf-cut',     veneers.map(m=>m.cut_type));
+  fill('vf-match',   veneers.map(m=>m.matching));
+  fill('vf-thick',   veneers.map(m=>m.thickness_mm!=null?String(m.thickness_mm):''));
+}
+
+function applyVeneerFilters(){
+  const sp   = document.getElementById('vf-species')?.value||'';
+  const cut  = document.getElementById('vf-cut')?.value||'';
+  const match= document.getElementById('vf-match')?.value||'';
+  const thick= document.getElementById('vf-thick')?.value||'';
+  const q    = (_matSearch||'').toLowerCase().trim();
+  let rows = _allMaterials.filter(m=>m.type==='veneer_sheet');
+  if(sp)    rows = rows.filter(m=>m.species===sp);
+  if(cut)   rows = rows.filter(m=>m.cut_type===cut);
+  if(match) rows = rows.filter(m=>m.matching===match);
+  if(thick) rows = rows.filter(m=>String(m.thickness_mm)===thick);
+  if(q)     rows = rows.filter(m=>(m.code||'').toLowerCase().includes(q)||(m.name||'').toLowerCase().includes(q)||(m.species||'').toLowerCase().includes(q));
+  renderMaterials(rows, true);
+}
+
+function resetVeneerFilters(){
+  ['vf-species','vf-cut','vf-match','vf-thick'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  const s=document.getElementById('mat-search'); if(s) s.value=''; _matSearch='';
+  applyVeneerFilters();
+}
+
+function updateMatFilterCounts(){
+  const counts={'':_allMaterials.length};
+  ['core_board','veneer_sheet','adhesive','glue_formula','packing','other'].forEach(t=>{counts[t]=_allMaterials.filter(m=>m.type===t).length;});
+  const labels={'':'All','core_board':'Boards','veneer_sheet':'Veneers','adhesive':'Consumable','glue_formula':'Glue and Additives','packing':'Packing','other':'Others'};
+  document.querySelectorAll('#mat-type-filter button').forEach(b=>{
+    const t=b.dataset.matType||'';
+    const base=labels[t]||t;
+    b.textContent=`${base} (${counts[t]||0})`;
+  });
+}
+function matTypeChanged(){
+  const t=document.getElementById('mat-cat').value;
+  document.getElementById('mat-dims-section').classList.toggle('d-none', t!=='core_board');
+  document.getElementById('mat-glue-section').classList.toggle('d-none', t!=='veneer_sheet');
+}
+function openMaterialModal(m){
+  const isEdit=m && m.id;
+  document.getElementById('mat-modal-title').textContent=isEdit?'Edit Material':'Add Material';
+  document.getElementById('mat-id').value=isEdit?m.id:'';
+  document.getElementById('mat-code').value=isEdit?m.code||'':'';
+  document.getElementById('mat-name').value=isEdit?m.name||'':'';
+  document.getElementById('mat-cat').value=isEdit?m.type||'':'';
+  document.getElementById('mat-unit').value=isEdit?m.unit||'sheet':'sheet';
+  document.getElementById('mat-stock').value=isEdit?m.current_stock||m.stock||'':'';
+  document.getElementById('mat-min').value=isEdit?m.reorder_point||'':'';
+  document.getElementById('mat-cost').value=isEdit?m.unit_cost||m.price||'':'';
+  document.getElementById('mat-thick').value=isEdit?m.thickness_mm||'':'';
+  document.getElementById('mat-width').value=isEdit?m.width_mm||'':'';
+  document.getElementById('mat-length').value=isEdit?m.length_mm||'':'';
+  document.getElementById('mat-auto-glue').value=isEdit?m.auto_glue_code||'':'';
+  matTypeChanged();
+}
+async function saveMaterial(){
+  const id=document.getElementById('mat-id').value;
+  const gn=k=>{ const v=parseFloat(document.getElementById(k).value); return isNaN(v)?null:v; };
+  const body={
+    code:document.getElementById('mat-code').value,
+    name:document.getElementById('mat-name').value,
+    type:document.getElementById('mat-cat').value,
+    unit:document.getElementById('mat-unit').value,
+    current_stock:gn('mat-stock')||0,
+    reorder_point:gn('mat-min')||0,
+    unit_cost:gn('mat-cost')||0,
+    thickness_mm:gn('mat-thick'),
+    width_mm:gn('mat-width'),
+    length_mm:gn('mat-length'),
+    auto_glue_code:document.getElementById('mat-auto-glue').value.trim()||null,
+  };
+  try{
+    if(id) await api(`/api/materials/${id}`,'PUT',body);
+    else await api('/api/materials','POST',body);
+    bootstrap.Modal.getInstance(document.getElementById('materialModal')).hide();
+    toast('Saved');
+    loadMaterials();
+    if(_bbLoaded){ _bbLoaded=false; loadBomBuilder(); } // refresh BOM builder material data
+  }catch(e){toast(e.message,'danger');}
+}
+
 // ── Page loader registry ────────────────────────────────────
 // Self-register the three pages this module owns. Replaces the
 // equivalent entries in the main inline script's Object.assign call.
@@ -1998,4 +2442,6 @@ Object.assign(PAGE_LOADERS, {
   'scrap-bin':       scrapLoad,
   'warehouse-queue': wqLoad,
   'dept-fg_warehouse': loadFgWarehouse,
+  'lots-docs'              : () => { lotsPrimeMatSelect(); lotsLoad(); docsLoad(); },
+  'materials'              : loadMaterials,
 });

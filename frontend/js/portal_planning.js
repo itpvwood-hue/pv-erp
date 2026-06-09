@@ -8798,6 +8798,89 @@ async function crCancel(rid){
 
 // Dept Cost Report moved to /static/js/portal_accounting.js
 
+
+
+// ════════════════════════════════════════════════════════════
+// Sales Orders
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// SALES ORDERS
+// ══════════════════════════════════════════════════════════
+let _allOrders=[];
+async function loadOrders(){
+  try{
+    const rows=await api('/api/purchase-orders');
+    _allOrders=rows;
+    const tbody=document.querySelector('#orders-table tbody');
+    if(!tbody) return;
+    if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="text-center text-muted py-4">No sales orders yet. <a href="#" onclick="event.preventDefault();document.getElementById(\'btn-new-po\')&&document.getElementById(\'btn-new-po\').click()">Create one in Order Intake.</a></td></tr>';return;}
+    tbody.innerHTML=rows.map(o=>`<tr>
+      <td><b>${o.po_number||'#'+o.id}</b></td>
+      <td>${o.product_name||'—'}</td>
+      <td>${fmt(o.total_qty||o.quantity||0)}</td>
+      <td>${fmt(o.produced_qty||0)}</td>
+      <td>${fmtD(o.delivery_date||o.required_date)}</td>
+      <td>${prioBadge(o.priority||2)}</td>
+      <td>${statusBadge(o.status||'open')}</td>
+    </tr>`).join('');
+  }catch(e){const tb=document.querySelector('#orders-table tbody');if(tb)tb.innerHTML=`<tr><td colspan="7" class="text-danger text-center py-3">${e.message}</td></tr>`;}
+}
+function openOrderModal(){}
+
+
+
+// ════════════════════════════════════════════════════════════
+// Finished Goods
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// FINISHED GOODS
+// ══════════════════════════════════════════════════════════
+let _allFg=[];
+async function loadFg(){
+  const rows=await api('/api/fg');
+  _allFg=rows; products=rows; // keep products in sync for other pages that use it
+  renderFg(rows);
+}
+function renderFg(rows){
+  document.getElementById('fg-count').textContent=rows.length;
+  if(!rows.length){
+    document.querySelector('#fg-table tbody').innerHTML=`<tr><td colspan="6" class="text-center py-5">
+      <i class="bi bi-grid text-muted" style="font-size:2rem"></i>
+      <div class="text-muted mt-2">No finished goods yet.</div>
+      <button class="btn btn-primary btn-sm mt-3" onclick="navigateTo('bom');setTimeout(()=>document.querySelector('#bom-main-tabs .nav-link')?.click(),100)">
+        <i class="bi bi-plus-lg me-1"></i>Create via BOM Builder →
+      </button>
+    </td></tr>`;
+    return;
+  }
+  document.querySelector('#fg-table tbody').innerHTML=rows.map(s=>`<tr>
+    <td><code class="text-primary fw-bold">${s.code}</code></td>
+    <td>${s.name||''}</td>
+    <td>${s.thickness_mm||'-'} mm</td>
+    <td>${s.width_mm||'-'} × ${s.length_mm||'-'}</td>
+    <td class="text-center">${s.pallet_qty||'-'}</td>
+    <td><button class="btn btn-xs btn-outline-primary py-0 px-2" onclick="showFgBom('${s.code}')">BOM</button></td>
+  </tr>`).join('');
+}
+function filterFg(q){
+  const s=q.toLowerCase();
+  renderFg(s?_allFg.filter(r=>r.code.toLowerCase().includes(s)||r.name.toLowerCase().includes(s)):_allFg);
+}
+async function showFgBom(code){
+  const b=await api(`/api/fg/${code}/bom`);
+  // Jump to BOM page with this SKU highlighted
+  showPage('bom');
+  document.getElementById('bom-search').value=code;
+  searchBom(code);
+}
+// Keep legacy loadProducts working for other parts of the app
+async function loadProducts(){await loadFg();}
+function openProductModal(){}
+async function saveProduct(){}
+
+// BOM structured view (list + matPill/gluePill/packPill) moved to /static/js/portal_planning.js
+// AI — generateReport (daily report) moved to /static/js/portal_planning.js
+
 // ── Page loader registry ────────────────────────────────────
 Object.assign(PAGE_LOADERS, {
   'vcmx':                vcmxLoad,
@@ -8815,4 +8898,7 @@ Object.assign(PAGE_LOADERS, {
   'prod-reports':        () => { prSetPeriod(30); loadProdReports(); },
   'forklift-report':     frptLoad,
   'consumable-requests': crLoad,
+  'orders'                 : loadOrders,
+  'fg'                     : loadFg,
+  'products'               : loadFg,
 });
