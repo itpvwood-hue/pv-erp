@@ -8881,8 +8881,71 @@ async function saveProduct(){}
 // BOM structured view (list + matPill/gluePill/packPill) moved to /static/js/portal_planning.js
 // AI — generateReport (daily report) moved to /static/js/portal_planning.js
 
+
+
+// ════════════════════════════════════════════════════════════
+// Dashboard (loadDashboard)
+// ════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════
+async function loadDashboard(){
+  try{
+    const [stats,flow,matrix,porders]=await Promise.all([
+      api('/api/dashboard/stats'),
+      api('/api/planning/flow').catch(()=>({})),
+      api('/api/planning/po-matrix').catch(()=>({orders:[]})),
+      api('/api/production-orders').catch(()=>[])
+    ]);
+    // Stat cards
+    document.getElementById('dash-stats').innerHTML=[
+      {val:stats.total_products,lbl:'Products',ico:'bi-grid',c:'primary'},
+      {val:stats.total_materials,lbl:'Materials',ico:'bi-stack',c:'success'},
+      {val:stats.total_orders,lbl:'Sales Orders',ico:'bi-receipt',c:'info'},
+      {val:stats.active_machines,lbl:'Active Machines',ico:'bi-gear',c:'warning'},
+    ].map(s=>`<div class="col-6 col-md-3"><div class="stat-card d-flex justify-content-between align-items-start">
+      <div><div class="val text-${s.c}">${fmt(s.val)}</div><div class="lbl">${s.lbl}</div></div>
+      <i class="bi ${s.ico} ico text-${s.c}"></i></div></div>`).join('');
+    // WIP
+    let total=0;const chips=DEPTS.map(d=>{const c=(flow[d]||[]).length;total+=c;return `<span class="badge bg-secondary">${DLBL[d]}: ${c}</span>`;}).join('');
+    document.getElementById('dash-wip-row').innerHTML=`<div class="col-12"><div class="card p-3"><div class="d-flex flex-wrap gap-2 align-items-center"><span class="fw-bold text-muted small text-uppercase">WIP</span>${chips}<span class="ms-auto badge bg-primary">Total ${total} batches</span></div></div></div>`;
+    // PO Matrix
+    const orders=matrix.orders||[];
+    if(orders.length){
+      document.getElementById('po-matrix').innerHTML=`<table class="table table-sm table-bordered" style="font-size:.78rem;white-space:nowrap">
+        <thead class="table-light"><tr><th>Order</th><th>PO</th><th>SKU</th><th>Qty</th>${DEPTS.map(d=>`<th class="text-center">${DLBL[d]}</th>`).join('')}<th>Status</th></tr></thead>
+        <tbody>${orders.map(o=>`<tr>
+          <td><b>${o.order_number||'#'+o.id}</b></td><td>${o.po_number||'-'}</td>
+          <td>${o.product_name||'-'}</td><td>${fmt(o.total_quantity)}</td>
+          ${DEPTS.map(d=>{const q=(o.dept_dist||{})[d]||0;return `<td class="text-center">${q?`<span style="background:#2d6e2d;color:#fff;border-radius:10px;padding:1px 6px;font-size:.7rem">${fmt(q)}</span>`:''}</td>`;}).join('')}
+          <td>${statusBadge(o.status)}</td></tr>`).join('')}</tbody></table>`;
+    } else {
+      document.getElementById('po-matrix').innerHTML='<p class="text-muted small">No active production orders.</p>';
+    }
+    // Active prod orders
+    const active=(porders||[]).filter(o=>['in_progress','planned'].includes(o.status));
+    document.getElementById('dash-po-list').innerHTML=active.length?active.map(o=>`
+      <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+        <div><small class="fw-bold">${o.order_number||'#'+o.id}</small><small class="text-muted ms-2">${o.product_name||''}</small></div>
+        <div class="d-flex gap-2">${statusBadge(o.status)}</div>
+      </div>`).join(''):'<p class="text-muted small">No active orders.</p>';
+    // Chart
+    const logs=await api('/api/production-logs?limit=100').catch(()=>[]);
+    const byD={};logs.forEach(l=>{if(!byD[l.log_date])byD[l.log_date]={p:0,a:0};byD[l.log_date].p+=l.planned_qty||0;byD[l.log_date].a+=l.actual_qty||0;});
+    const lbls=Object.keys(byD).sort().slice(-7);
+    const ctx=document.getElementById('dashChart').getContext('2d');
+    if(dashChart) dashChart.destroy();
+    dashChart=new Chart(ctx,{type:'bar',data:{labels:lbls,datasets:[
+      {label:'Planned',data:lbls.map(d=>byD[d].p),backgroundColor:'rgba(59,130,246,.3)',borderColor:'#2d6e2d',borderWidth:1},
+      {label:'Actual',data:lbls.map(d=>byD[d].a),backgroundColor:'rgba(16,185,129,.3)',borderColor:'#10b981',borderWidth:1}
+    ]},options:{responsive:true,plugins:{legend:{position:'top'}},scales:{y:{beginAtZero:true}}}});
+  }catch(e){console.error(e);}
+}
+
+
 // ── Page loader registry ────────────────────────────────────
 Object.assign(PAGE_LOADERS, {
+  'dashboard':           loadDashboard,
   'vcmx':                vcmxLoad,
   'vcmx-lam':            vcmxLamLoad,
   'material-shortfalls': msfLoad,
