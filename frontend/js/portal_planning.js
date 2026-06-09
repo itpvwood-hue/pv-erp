@@ -5552,9 +5552,23 @@ async function stSaveMin(sid,val){
 let _stMvmtLineSeq = 0;
 let _stMvmtType = 'RECEIVE';
 
+// Issue/Use + Adjust operate ONLY on what the station currently holds, so the
+// material picker is built from _stStock (current station stock), never the
+// full consumable catalog. You can't issue or recount something you don't have.
+function _stStockMatOptions(filter){
+  const term = (filter||'').trim().toLowerCase();
+  let rows = (_stStock || []);
+  if(term) rows = rows.filter(s =>
+    (s.material_name||'').toLowerCase().includes(term) ||
+    (s.material_type||'').toLowerCase().includes(term));
+  return rows.map(s =>
+    `<option value="${s.material_id}" data-unit="${s.unit||'pcs'}" data-onhand="${s.current_qty||0}">`
+    + `${s.material_name}${s.material_type?' ['+s.material_type+']':''} — on hand: ${fmt(s.current_qty||0)} ${s.unit||''}</option>`
+  ).join('');
+}
+
 function _stMvmtLineTpl(idx){
-  const opts = (_stStockMats || []).map(m =>
-    `<option value="${m.id}" data-unit="${m.unit||'pcs'}">${m.name}${m.type?' ['+m.type+']':''}</option>`).join('');
+  const opts = _stStockMatOptions();
   return `
   <div class="card mb-2 st-mvmt-line" data-idx="${idx}">
     <div class="card-body py-2">
@@ -5606,12 +5620,7 @@ function _stMvmtLineSearch(idx, q){
   if(!line) return;
   const sel = line.querySelector('.st-l-mat');
   const cur = sel.value;
-  const term = (q||'').trim().toLowerCase();
-  const mats = term
-    ? (_stStockMats||[]).filter(m => (m.name||'').toLowerCase().includes(term) || (m.type||'').toLowerCase().includes(term))
-    : (_stStockMats||[]);
-  sel.innerHTML = '<option value="">— Select material —</option>' +
-    mats.map(m => `<option value="${m.id}" data-unit="${m.unit||'pcs'}">${m.name}${m.type?' ['+m.type+']':''}</option>`).join('');
+  sel.innerHTML = '<option value="">— Select material —</option>' + _stStockMatOptions(q);
   if(cur) sel.value = cur;
 }
 
@@ -5632,20 +5641,32 @@ function _stMvmtLineMatChange(idx){
 async function stOpenStockMove(type){
   _stMvmtType = type;
   document.getElementById('st-mvmt-type').value = type;
-  const titles = {RECEIVE:'Receive Stock from WH/Other',ISSUE:'Issue / Use Stock',ADJUST:'Adjust Stock Count'};
+  const titles = {ISSUE:'Issue / Use Stock', ADJUST:'Adjust Stock Count'};
   const helps = {
-    RECEIVE:'<i class="bi bi-arrow-down-circle me-1 text-success"></i>Add materials received into station stock. Multiple materials in one go.',
-    ISSUE:'<i class="bi bi-arrow-up-circle me-1 text-warning"></i>Subtract materials being used or transferred out.',
-    ADJUST:'<i class="bi bi-pencil-square me-1 text-secondary"></i>Set the absolute current quantity (use after physical count).',
+    ISSUE:'<i class="bi bi-arrow-up-circle me-1 text-warning"></i>Record consumables used or transferred out — only materials currently held at this station are selectable.',
+    ADJUST:'<i class="bi bi-pencil-square me-1 text-secondary"></i>Set the absolute current quantity after a physical count — only materials currently held at this station.',
   };
-  document.getElementById('st-mvmt-modal-title').textContent = titles[type];
-  document.getElementById('st-mvmt-help').innerHTML = helps[type];
+  document.getElementById('st-mvmt-modal-title').textContent = titles[type] || 'Stock Movement';
+  document.getElementById('st-mvmt-help').innerHTML = helps[type] || '';
   document.getElementById('st-mvmt-help').className =
-    'alert alert-' + (type==='RECEIVE'?'success':type==='ISSUE'?'warning':'secondary') + ' py-2 small mb-3';
-  if(!_stStockMats.length) _stStockMats = await api('/api/consumable-materials').catch(()=>[]);
-  document.getElementById('st-mvmt-date').value = '';
-  document.getElementById('st-mvmt-time').value = '';
+    'alert alert-' + (type==='ISSUE'?'warning':'secondary') + ' py-2 small mb-3';
+
+  // Date/time = when it actually happened. Label contextually, default to now.
+  document.getElementById('st-mvmt-date-label').textContent = type==='ADJUST' ? 'Count date' : 'Issued date';
+  document.getElementById('st-mvmt-time-label').textContent = type==='ADJUST' ? 'Count time' : 'Issued time';
+  const now = new Date();
+  document.getElementById('st-mvmt-date').value = now.toISOString().slice(0,10);
+  document.getElementById('st-mvmt-time').value = now.toTimeString().slice(0,5);   // HH:MM local
   document.getElementById('st-mvmt-notes').value = '';
+
+  // Picker is built from current station stock — make sure it's loaded.
+  if(!(_stStock && _stStock.length) && typeof stLoadStock === 'function'){
+    try { await stLoadStock(); } catch {}
+  }
+  if(!(_stStock && _stStock.length)){
+    toast('No stock at this station yet — receive consumables first (View my open requests).', 'warning');
+    return;
+  }
   _stMvmtLineSeq = 0;
   document.getElementById('st-mvmt-lines').innerHTML = '';
   stMvmtAddLine();
@@ -5654,16 +5675,27 @@ async function stOpenStockMove(type){
 
 async function stSubmitMovement(){
   const type = document.getElementById('st-mvmt-type').value;
-  const reqDate = document.getElementById('st-mvmt-date').value || '';
-  const reqTime = document.getElementById('st-mvmt-time').value || '';
+  const mvDate = document.getElementById('st-mvmt-date').value || '';
+  const mvTime = document.getElementById('st-mvmt-time').value || '';
   const sharedNotes = document.getElementById('st-mvmt-notes').value.trim();
+  if(!mvDate){ toast(type==='ADJUST'?'Count date is required':'Issued date is required','warning'); return; }
+  // occurred_at = the operator-stated date/time this happened.
+  const occurredAt = mvDate + (mvTime ? (' ' + mvTime) : ' 00:00');
+
   const lines = [];
   let bad = '';
   document.querySelectorAll('.st-mvmt-line').forEach(el => {
-    const matId = parseInt(el.querySelector('.st-l-mat').value) || 0;
+    const sel = el.querySelector('.st-l-mat');
+    const matId = parseInt(sel.value) || 0;
     const qty = parseFloat(el.querySelector('.st-l-qty').value) || 0;
+    const onHand = parseFloat(sel.options[sel.selectedIndex]?.dataset.onhand) || 0;
     if(!matId || qty < 0){ bad = 'Each line needs a material and a non-negative qty.'; return; }
-    if(type !== 'ADJUST' && qty <= 0){ bad = 'Quantity must be greater than zero (except for Adjust).'; return; }
+    if(type !== 'ADJUST' && qty <= 0){ bad = 'Quantity must be greater than zero.'; return; }
+    // You can only issue what the station holds.
+    if(type === 'ISSUE' && qty > onHand){
+      bad = `Cannot issue ${qty} — only ${onHand} on hand for ${sel.options[sel.selectedIndex]?.text.split(' — ')[0]}.`;
+      return;
+    }
     lines.push({
       material_id: matId,
       qty_change:  qty,
@@ -5672,11 +5704,7 @@ async function stSubmitMovement(){
   });
   if(bad){ toast(bad, 'warning'); return; }
   if(!lines.length){ toast('Add at least one material line.', 'warning'); return; }
-  // Build a tag for the shared notes so warehouse can see when these are needed
-  const tag = (reqDate || reqTime)
-    ? `[needed: ${reqDate||'any date'}${reqTime?(' '+reqTime):''}]`
-    : '';
-  const notesPrefix = [tag, sharedNotes].filter(Boolean).join(' ');
+
   // Fire one movement per line (backend has no bulk endpoint; sequential keeps
   // the per-row validation/error behaviour intact).
   let ok = 0, fail = 0, firstErr = '';
@@ -5687,7 +5715,8 @@ async function stSubmitMovement(){
         material_id: ln.material_id, qty_change: ln.qty_change,
         movement_type: type,
         batch_ref: ln.batch_ref,
-        notes: notesPrefix,
+        notes: sharedNotes,
+        occurred_at: occurredAt,
       });
       ok++;
     } catch(e){ fail++; if(!firstErr) firstErr = e.message || String(e); }
@@ -5716,8 +5745,10 @@ async function stLoadMovements(){
   const tbody=document.getElementById('st-mvmt-tbody');
   if(!_stMvmts.length){tbody.innerHTML='<tr><td colspan="7" class="text-center text-muted py-3">No movements in this period.</td></tr>';return;}
   const COLOR={RECEIVE:'success',ISSUE:'warning text-dark',ADJUST:'secondary',BATCH_USE:'info text-dark'};
+  // Show occurred_at (when it actually happened) — fall back to created_at for
+  // rows logged before that column existed.
   tbody.innerHTML=_stMvmts.map(m=>`<tr>
-    <td class="small text-muted">${(m.created_at||'').replace('T',' ').slice(0,16)}</td>
+    <td class="small text-muted">${((m.occurred_at||m.created_at)||'').replace('T',' ').slice(0,16)}</td>
     <td class="small"><b>${m.material_name}</b>${m.material_code?` <span class="text-muted">${m.material_code}</span>`:''}</td>
     <td><span class="badge bg-${COLOR[m.movement_type]||'secondary'}">${m.movement_type}</span></td>
     <td class="text-end ${m.qty_change>0?'text-success':'text-danger'}">${m.qty_change>0?'+':''}${fmt(m.qty_change)} ${m.unit||''}</td>

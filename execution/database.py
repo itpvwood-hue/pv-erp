@@ -752,6 +752,9 @@ def init_db():
         "ALTER TABLE consumable_request    ADD COLUMN qty_received REAL DEFAULT 0",
         "ALTER TABLE consumable_request    ADD COLUMN received_at  TEXT",
         "ALTER TABLE consumable_request    ADD COLUMN received_by  TEXT",
+        # 2.19.1 — when a station issued/used (or counted) a consumable, as
+        # stated by the operator. Distinct from created_at (when it was logged).
+        "ALTER TABLE station_stock_movements ADD COLUMN occurred_at TEXT",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -3799,12 +3802,16 @@ def log_station_stock_movement(data: dict) -> dict:
     else:
         new_qty = current + qty; delta = qty
 
+    # occurred_at = operator-stated date/time of the issue/use/count. Falls
+    # back to "now" when the caller doesn't supply one.
+    occurred_at = (data.get('occurred_at') or '').strip() or None
     # Record movement
     conn.execute("""INSERT INTO station_stock_movements
-        (department,line_id,material_id,qty_change,movement_type,batch_ref,reference,notes,created_by)
-        VALUES (?,?,?,?,?,?,?,?,?)""",
+        (department,line_id,material_id,qty_change,movement_type,batch_ref,reference,notes,created_by,occurred_at)
+        VALUES (?,?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))""",
         (dept, line_id, mat_id, delta, mtype, data.get('batch_ref',''),
-         data.get('reference',''), data.get('notes',''), data.get('created_by','')))
+         data.get('reference',''), data.get('notes',''), data.get('created_by',''),
+         occurred_at))
     # Update stock
     conn.execute("UPDATE station_stock SET current_qty=?, last_updated=CURRENT_TIMESTAMP WHERE id=?",
                  (new_qty, sid))
