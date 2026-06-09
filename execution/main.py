@@ -4,7 +4,7 @@ Run: python -m uvicorn execution.main:app --host 0.0.0.0 --port 8000 --reload
 """
 import os, sys, json, csv, io, hashlib, logging
 from logging.handlers import RotatingFileHandler
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, Any, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Request
 from fastapi.staticfiles import StaticFiles
@@ -165,6 +165,56 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend')
 def get_version():
     """Application version + recent changelog. Surface in the SPA footer."""
     return _ver_info()
+
+# Server boot time (process-local) — used by /api/health to report uptime.
+_PROC_START = datetime.now()
+
+@app.get("/api/health")
+def health_check():
+    """Liveness + readiness probe. Anonymous (no auth) so monitoring
+    tools — uptime checkers, load balancers, Task Scheduler heartbeats —
+    can hit it without provisioning credentials.
+
+    Returns:
+      ok            -- bool: True if the DB is reachable AND disk has
+                       headroom (>500 MB).
+      db_reachable  -- bool
+      version       -- string (matches /api/version)
+      uptime_s      -- int: seconds since this process started
+      disk_free_mb  -- float: free space on the DB's drive
+      now           -- string: ISO timestamp from the server clock
+    """
+    from database import get_db
+    out = {
+        "ok":            True,
+        "version":       _ver_info().get("version"),
+        "uptime_s":      int((datetime.now() - _PROC_START).total_seconds()),
+        "now":           datetime.now().isoformat(timespec="seconds"),
+        "db_reachable":  False,
+        "disk_free_mb":  None,
+    }
+    # DB ping
+    try:
+        conn = get_db()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        out["db_reachable"] = True
+    except Exception as e:
+        out["ok"] = False
+        out["db_error"] = str(e)[:200]
+    # Disk free on the DB's drive
+    try:
+        from config import DB_PATH
+        import shutil as _shutil
+        free_bytes = _shutil.disk_usage(os.path.dirname(DB_PATH)).free
+        out["disk_free_mb"] = round(free_bytes / (1024 * 1024), 1)
+        if free_bytes < 500 * 1024 * 1024:   # < 500 MB headroom
+            out["ok"] = False
+            out["disk_warning"] = "low disk space"
+    except Exception as e:
+        out["ok"] = False
+        out["disk_error"] = str(e)[:200]
+    return out
 
 @app.get("/api/admin/config")
 def get_config():
