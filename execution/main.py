@@ -94,6 +94,7 @@ from database import (
     log_login, get_login_log,
     # Supply warehouse module
     create_consumable_request, get_consumable_requests, fulfill_consumable_request,
+    receive_consumable_request,
     cancel_consumable_request, get_dept_cost_summary, get_dept_cost_detail,
     get_consumable_materials,
     # FC Station stock / transfer requests
@@ -2155,10 +2156,13 @@ def create_req(body: ConsumableRequestIn, user: dict = Depends(require_auth)):
 
 @app.get("/api/consumable-requests")
 def list_reqs(status: Optional[str] = None, department: Optional[str] = None,
+              line_id: Optional[str] = None, open_only: bool = False,
               user: dict = Depends(require_auth)):
     # Dept leaders only see their own requests
     rb = user['user_id'] if user['role'] == Role.DEPARTMENT_LEADER else None
-    return get_consumable_requests(status=status, department=department, requested_by=rb)
+    return get_consumable_requests(status=status, department=department,
+                                   requested_by=rb, line_id=line_id,
+                                   open_only=open_only)
 
 @app.patch("/api/consumable-requests/{request_id}/fulfill")
 def fulfill_req(request_id: str, body: FulfillIn,
@@ -2168,6 +2172,16 @@ def fulfill_req(request_id: str, body: FulfillIn,
     except ValueError as e:
         # Insufficient-stock guard (and 'request not found') surface as a
         # 400 with the human message instead of a generic 500.
+        raise HTTPException(400, str(e))
+
+@app.patch("/api/consumable-requests/{request_id}/receive")
+def receive_req(request_id: str, user: dict = Depends(require_auth)):
+    """Station confirms physical receipt — deposits the fulfilled qty into
+    station_stock and advances the request. Any signed-in station user can
+    receive against their station's request."""
+    try:
+        return receive_consumable_request(request_id, user['user_id'])
+    except ValueError as e:
         raise HTTPException(400, str(e))
 
 @app.patch("/api/consumable-requests/{request_id}/cancel")

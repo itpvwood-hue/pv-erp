@@ -745,6 +745,13 @@ def init_db():
         # already carry line_id.
         "ALTER TABLE dept_activities       ADD COLUMN line_id  TEXT DEFAULT ''",
         "ALTER TABLE station_presets       ADD COLUMN line_id  TEXT DEFAULT ''",
+        # 2.18.0 — two-step consumable receive. Warehouse 'fulfill' issues
+        # stock (deducts WH, marks FULFILLED); the requesting station then
+        # confirms physical receipt, which deposits into station_stock. Track
+        # how much the station has actually received so partial receipts work.
+        "ALTER TABLE consumable_request    ADD COLUMN qty_received REAL DEFAULT 0",
+        "ALTER TABLE consumable_request    ADD COLUMN received_at  TEXT",
+        "ALTER TABLE consumable_request    ADD COLUMN received_by  TEXT",
     ]
     # ── VCMX BOM master ─────────────────────────────────────────
     conn.execute("""
@@ -7067,7 +7074,8 @@ def create_consumable_request(data: dict) -> dict:
     ).fetchone()
     conn.close(); return row_to_dict(row)
 
-def get_consumable_requests(status=None, department=None, requested_by=None) -> list:
+def get_consumable_requests(status=None, department=None, requested_by=None,
+                            line_id=None, open_only=False) -> list:
     conn = get_db()
     # current_stock + reorder_point are surfaced so the warehouse Supply
     # Queue can show live warehouse stock for each request line, matching
@@ -7087,8 +7095,71 @@ def get_consumable_requests(status=None, department=None, requested_by=None) -> 
     if status:      q += " AND cr.status=?";       params.append(status)
     if department:  q += " AND cr.department=?";   params.append(department)
     if requested_by:q += " AND cr.requested_by=?"; params.append(requested_by)
+    # line_id='' matches centralised-department requests (no line). A non-empty
+    # value matches that line OR the legacy NULL/''. We treat '' as "any".
+    if line_id:     q += " AND cr.line_id=?";      params.append(line_id)
+    # open_only: anything the station still cares about — not cancelled and not
+    # yet fully received. Receipt is tracked via qty_received (there is no
+    # 'RECEIVED' status; the status column has a CHECK constraint limited to
+    # PENDING/PARTIAL/FULFILLED/CANCELLED). Used by "My Open Requests".
+    if open_only:
+        q += (" AND cr.status != 'CANCELLED'"
+              " AND COALESCE(cr.qty_received,0) < cr.qty_requested")
     rows = conn.execute(q + " ORDER BY cr.created_at DESC", params).fetchall()
     conn.close(); return rows_to_list(rows)
+
+
+def receive_consumable_request(request_id: str, received_by: str) -> dict:
+    """Station confirms physical receipt of a (warehouse-fulfilled) consumable
+    request. Deposits the not-yet-received quantity into station_stock for the
+    requesting (department, line) and logs a RECEIVE movement, then advances
+    the request status. Two-step model: warehouse 'fulfill' already deducted
+    WH stock; this is the second hop that makes it visible at the station."""
+    conn = get_db()
+    req = conn.execute("SELECT * FROM consumable_request WHERE request_id=?",
+                       (request_id,)).fetchone()
+    if not req:
+        conn.close(); raise ValueError("Request not found")
+    req = dict(req)
+
+    fulfilled = float(req.get('qty_fulfilled') or 0)
+    received  = float(req.get('qty_received') or 0)
+    to_receive = round(fulfilled - received, 4)
+    if to_receive <= 0:
+        conn.close()
+        raise ValueError("Nothing to receive — warehouse hasn't fulfilled any "
+                         "quantity yet, or it's already been received.")
+    conn.close()  # log_station_stock_movement opens its own connection
+
+    # Deposit into station stock (creates the row if first receipt).
+    log_station_stock_movement({
+        'department':    req['department'],
+        'line_id':       req.get('line_id') or '',
+        'material_id':   req['material_id'],
+        'qty_change':    to_receive,
+        'movement_type': 'RECEIVE',
+        'reference':     request_id,
+        'notes':         f"Received from WH against request {request_id}",
+        'created_by':    received_by,
+    })
+
+    # Advance the request. We DON'T set a 'RECEIVED' status — the status
+    # column's CHECK constraint only allows PENDING/PARTIAL/FULFILLED/
+    # CANCELLED. "Fully received / closed" is derived from
+    # qty_received >= qty_requested wherever it matters (the open_only filter
+    # and the UI badge), so qty_received alone is the source of truth.
+    conn = get_db()
+    new_received = received + to_receive
+    conn.execute("""UPDATE consumable_request
+                       SET qty_received=?, received_by=?,
+                           received_at=CURRENT_TIMESTAMP
+                     WHERE request_id=?""",
+                 (new_received, received_by, request_id))
+    conn.commit()
+    row = row_to_dict(conn.execute(
+        "SELECT * FROM consumable_request WHERE request_id=?", (request_id,)).fetchone())
+    conn.close()
+    return row
 
 def fulfill_consumable_request(request_id: str, qty_to_fulfill: float, fulfilled_by: str) -> dict:
     conn = get_db()
