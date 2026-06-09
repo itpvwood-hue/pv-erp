@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.15.0"
+VERSION    = "2.16.0"
 BUILD_DATE = "2026-06-09"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.16.0", "2026-06-09", "Portal split step 13 DONE: dynamic per-role portal loader. The four static <script src=portal_*.js> tags are gone; auth.js's applySession is now async and loadPortalsForRole(role) injects only the modules the signed-in role needs. WAREHOUSE users download 132 kB instead of 665 kB on first paint; managerial users still load all four. SPLIT_PLAN.md updated — 13 of 14 steps complete (step 14 = optional HTML-page-divs move into portal files, deferred)"),
     ("2.15.0", "2026-06-09", "Portal split steps 11+12 ~done: cross-portal helpers (prioBadge, statusBadge, lineBadge, populateSel, STATION_*/DEPT_*, slStatusBadge, slDeptBadge, escapeHtml) hoisted to core.js; 8 more loaders (Dashboard, Machines, Sales Orders, FG, Materials, Lots & Documents, Purchasing Hub, Traceability) distributed across the four portal files. index.html JS shrunk from ~18,500 to 5,854 lines (~32% of original); PAGE_LOADERS dict now wholly owned by portal modules. Step 13 (dynamic per-role portal loader) is the natural next step"),
     ("2.14.0", "2026-06-08", "Portal split major milestone: completed portal_planning.js (BOM cluster + SLH cluster + order-intake/line-board/kanban/prod-logs/prod-reports/forklift-report — now 14 pages, 372k), created portal_accounting.js (193 lines, 2 pages) and portal_admin.js (353 lines, 2 pages — Factory Assistant + Employees + User Management). index.html now 525k (started at 1.2 MB, ~44% of original). 27 page loaders owned by the four portal files; main inline script keeps the truly cross-cutting pages (dashboard, materials, fg, orders, machines, purchasing, lots-docs, traceability, …)"),
     ("2.13.0", "2026-06-05", "Portal split progress: portal_warehouse.js gained wq/rrec/frfl/fkDash/scrap (+1,218 lines); new portal_planning.js created with VCMX (chunk 1, 562 lines) and Material Shortfalls + FC Material Requests + FC Hub (chunk 2, 958 lines). index.html down from ~1.2 MB to 835k (~30% smaller). 8 page loaders self-registered out of inline script. SPLIT_PLAN.md updated"),
