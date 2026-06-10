@@ -33,6 +33,15 @@ def init_db():
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript("""
         -- ── Core ERP Tables ──────────────────────────────────────
+        -- Manufacturing lines. Base columns only; line_type + sort_order are
+        -- added by the _migrations ALTER list below. Must exist before the
+        -- line_flow / stations tables (which FK to it) and before
+        -- _seed_lines_and_departments() runs.
+        CREATE TABLE IF NOT EXISTS manufacturing_line (
+            line_id   TEXT PRIMARY KEY,
+            line_name TEXT NOT NULL,
+            active    INTEGER NOT NULL DEFAULT 1
+        );
         CREATE TABLE IF NOT EXISTS materials (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -646,6 +655,317 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_gmb_mix ON glue_mix_batches(mix_id)")
     conn.commit()
 
+    # ── Auth, SKU/BOM, packing, and station-log tables ───────────────
+    # These existed on long-lived databases (created by earlier schema
+    # revisions) but were never in this CREATE block, so a FRESH database
+    # (new server install) came up WITHOUT them — users/sessions/skus/
+    # bom_lines/station logs all missing, which broke login and seeding.
+    # Recreated here verbatim (IF NOT EXISTS, so existing DBs are untouched).
+    # Migration-added columns are already inlined; the _migrations ALTERs
+    # below that re-add them simply no-op on fresh DBs (errors are caught).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id      TEXT PRIMARY KEY,
+            username     TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role         TEXT NOT NULL CHECK(role IN (
+                            'MANAGERIAL','PRODUCTION_PLANNING',
+                            'DEPARTMENT_LEADER','WAREHOUSE')),
+            display_name TEXT NOT NULL,
+            active       INTEGER DEFAULT 1,
+            created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            token      TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            expires_at TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS user_departments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            department TEXT NOT NULL,
+            line_id    TEXT,
+            UNIQUE(user_id, department, line_id)
+        );
+        CREATE TABLE IF NOT EXISTS login_log (
+            log_id     TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL REFERENCES users(user_id),
+            username   TEXT NOT NULL,
+            role       TEXT NOT NULL,
+            ip_address TEXT,
+            logged_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            name  TEXT    NOT NULL UNIQUE,
+            notes TEXT
+        );
+        CREATE TABLE IF NOT EXISTS employee (
+            emp_id     TEXT PRIMARY KEY,
+            emp_name   TEXT NOT NULL,
+            department TEXT NOT NULL,
+            role       TEXT NOT NULL,
+            line_id    TEXT REFERENCES manufacturing_line(line_id),
+            active     INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS packing_skus (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            code       TEXT    NOT NULL UNIQUE,
+            name       TEXT    NOT NULL,
+            customer   TEXT,
+            notes      TEXT,
+            is_active  INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS skus (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            code            TEXT    NOT NULL UNIQUE,
+            name            TEXT    NOT NULL,
+            thickness_mm    REAL,
+            width_mm        REAL,
+            length_mm       REAL,
+            pallet_qty      INTEGER NOT NULL DEFAULT 1,
+            packing_sku_id  INTEGER REFERENCES packing_skus(id) ON DELETE SET NULL,
+            approved_date   TEXT,
+            revision        INTEGER NOT NULL DEFAULT 0,
+            is_active       INTEGER NOT NULL DEFAULT 1,
+            notes           TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS bom_groups (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL,
+            calc_method TEXT    NOT NULL CHECK (calc_method IN ('per_sheet','per_pallet')),
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            notes       TEXT
+        );
+        CREATE TABLE IF NOT EXISTS bom_lines (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku_id            INTEGER NOT NULL REFERENCES skus(id)       ON DELETE CASCADE,
+            material_id       INTEGER          REFERENCES materials(id),
+            glue_recipe_id    INTEGER          REFERENCES glue_recipes(id),
+            group_id          INTEGER NOT NULL REFERENCES bom_groups(id) ON DELETE RESTRICT,
+            seq               INTEGER NOT NULL DEFAULT 0,
+            qty_override      REAL,
+            usage_g_per_face  REAL,
+            qty_unit          TEXT,
+            notes             TEXT,
+            created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            waste_factor      REAL,
+            UNIQUE (sku_id, seq),
+            CHECK (NOT (qty_override IS NOT NULL AND usage_g_per_face IS NOT NULL)),
+            CHECK (material_id IS NOT NULL OR glue_recipe_id IS NOT NULL)
+        );
+        CREATE TABLE IF NOT EXISTS packing_lines (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            packing_sku_id  INTEGER NOT NULL REFERENCES packing_skus(id) ON DELETE CASCADE,
+            material_id     INTEGER NOT NULL REFERENCES materials(id)     ON DELETE RESTRICT,
+            seq             INTEGER NOT NULL DEFAULT 0,
+            qty             REAL    NOT NULL DEFAULT 1,
+            qty_unit        TEXT,
+            notes           TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (packing_sku_id, material_id)
+        );
+        CREATE TABLE IF NOT EXISTS ncg_reason (
+            reason_code TEXT PRIMARY KEY,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS mfg_order (
+            order_id      TEXT PRIMARY KEY,
+            po_ref        TEXT DEFAULT '',
+            customer_code TEXT NOT NULL DEFAULT '',
+            sku_code      TEXT NOT NULL,
+            line_id       TEXT NOT NULL REFERENCES manufacturing_line(line_id),
+            qty_ordered   INTEGER NOT NULL CHECK (qty_ordered > 0),
+            due_date      TEXT DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'OPEN'
+                              CHECK (status IN ('OPEN','IN_PROGRESS','COMPLETED','CANCELLED')),
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS prod_batch (
+            batch_id        TEXT PRIMARY KEY,
+            order_id        TEXT REFERENCES mfg_order(order_id),
+            sku_code        TEXT NOT NULL,
+            line_id         TEXT NOT NULL REFERENCES manufacturing_line(line_id),
+            qty_planned     INTEGER NOT NULL CHECK (qty_planned > 0),
+            production_date TEXT NOT NULL DEFAULT (date('now')),
+            shift           TEXT NOT NULL CHECK (shift IN ('MORNING','AFTERNOON','NIGHT')),
+            status          TEXT NOT NULL DEFAULT 'GLUE_MIX'
+                                CHECK (status IN (
+                                    'GLUE_MIX','LAMINATING','COLD_PRESS',
+                                    'REPAIR','SANDING','HOT_PRESS',
+                                    'GRADING','PACKING','COMPLETE')),
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            notes           TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS production_table (
+            table_id   TEXT PRIMARY KEY,
+            table_type TEXT NOT NULL,
+            line_id    TEXT NOT NULL REFERENCES manufacturing_line(line_id),
+            active     INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS prod_machine (
+            machine_id   TEXT PRIMARY KEY,
+            machine_type TEXT NOT NULL,
+            line_id      TEXT NOT NULL REFERENCES manufacturing_line(line_id),
+            active       INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS glue_mix_log (
+            mix_id       TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL,
+            recipe_code  TEXT NOT NULL,
+            qty_kg       REAL NOT NULL CHECK (qty_kg > 0),
+            operator_id  TEXT,
+            operator_name TEXT DEFAULT '',
+            mix_time_min INTEGER,
+            notes        TEXT,
+            mixed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            recipe_id           INTEGER,
+            actual_total_kg     REAL,
+            actual_total_cost   REAL,
+            actual_cost_per_kg  REAL,
+            actual_components   TEXT
+        );
+        CREATE TABLE IF NOT EXISTS laminating_log (
+            lam_id       TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL,
+            table_id     TEXT NOT NULL,
+            emp_code_1   TEXT NOT NULL,
+            emp_code_2   TEXT NOT NULL,
+            glue_mix_ref TEXT,
+            pcs_target   INTEGER NOT NULL CHECK (pcs_target > 0),
+            pcs_actual   INTEGER NOT NULL CHECK (pcs_actual >= 0),
+            shift_start  TEXT NOT NULL DEFAULT (datetime('now')),
+            notes        TEXT,
+            time_minutes INTEGER DEFAULT 0,
+            material_role TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS cold_press_log (
+            cp_id        TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL,
+            machine_id   TEXT NOT NULL,
+            operator_id  TEXT,
+            operator_name TEXT DEFAULT '',
+            pressure_bar REAL,
+            dwell_min    INTEGER,
+            pcs_in       INTEGER NOT NULL CHECK (pcs_in >= 0),
+            pcs_out      INTEGER NOT NULL CHECK (pcs_out >= 0),
+            pressed_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS repair_log (
+            repair_id    TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL,
+            table_id     TEXT NOT NULL,
+            repair_type  TEXT NOT NULL CHECK (repair_type IN ('ROUGH','FINE')),
+            emp_code_1   TEXT NOT NULL,
+            emp_code_2   TEXT NOT NULL,
+            pcs_repaired INTEGER NOT NULL CHECK (pcs_repaired >= 0),
+            notes        TEXT,
+            repaired_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS sanding_log (
+            sand_id      TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL,
+            machine_id   TEXT NOT NULL,
+            operator_id  TEXT,
+            operator_name TEXT DEFAULT '',
+            grit_setting TEXT NOT NULL,
+            feed_speed   REAL,
+            pcs_in       INTEGER NOT NULL CHECK (pcs_in >= 0),
+            pcs_out      INTEGER NOT NULL CHECK (pcs_out >= 0),
+            defect_count INTEGER NOT NULL DEFAULT 0 CHECK (defect_count >= 0),
+            notes        TEXT,
+            sanded_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS hot_press_log (
+            hp_id          TEXT PRIMARY KEY,
+            batch_id       TEXT NOT NULL,
+            machine_id     TEXT NOT NULL,
+            operator_id    TEXT,
+            operator_name  TEXT DEFAULT '',
+            temp_c         REAL NOT NULL,
+            pressure_bar   REAL NOT NULL,
+            press_time_min INTEGER NOT NULL,
+            pcs_in         INTEGER NOT NULL CHECK (pcs_in >= 0),
+            pcs_out        INTEGER NOT NULL CHECK (pcs_out >= 0),
+            pressed_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS grading_log (
+            grade_id        TEXT PRIMARY KEY,
+            batch_id        TEXT NOT NULL,
+            grader_id       TEXT,
+            grader_name     TEXT DEFAULT '',
+            grade_outcome   TEXT NOT NULL CHECK (grade_outcome IN ('PASS','PARTIAL_NCG','FULL_NCG','REJECT')),
+            pcs_grade_a     INTEGER NOT NULL DEFAULT 0 CHECK (pcs_grade_a >= 0),
+            pcs_grade_b     INTEGER NOT NULL DEFAULT 0 CHECK (pcs_grade_b >= 0),
+            pcs_ncg         INTEGER NOT NULL DEFAULT 0 CHECK (pcs_ncg >= 0),
+            pcs_reject      INTEGER NOT NULL DEFAULT 0 CHECK (pcs_reject >= 0),
+            ncg_reason_code TEXT REFERENCES ncg_reason(reason_code),
+            notes           TEXT,
+            graded_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS packing_log (
+            pack_id       TEXT PRIMARY KEY,
+            batch_id      TEXT NOT NULL,
+            operator_name TEXT,
+            table_id      TEXT,
+            pcs_in        INTEGER DEFAULT 0,
+            pcs_packed    INTEGER DEFAULT 0,
+            pcs_held      INTEGER DEFAULT 0,
+            cartons_count INTEGER DEFAULT 0,
+            packaging_sku TEXT,
+            notes         TEXT,
+            logged_at     TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS consumable_request (
+            request_id    TEXT PRIMARY KEY,
+            requested_by  TEXT NOT NULL REFERENCES users(user_id),
+            department    TEXT NOT NULL,
+            line_id       TEXT,
+            material_id   INTEGER NOT NULL REFERENCES materials(id),
+            qty_requested REAL NOT NULL,
+            qty_fulfilled REAL DEFAULT 0,
+            status        TEXT DEFAULT 'PENDING'
+                          CHECK(status IN ('PENDING','PARTIAL','FULFILLED','CANCELLED')),
+            notes         TEXT,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            fulfilled_by  TEXT REFERENCES users(user_id),
+            fulfilled_at  TEXT,
+            priority      INTEGER DEFAULT 2,
+            needed_by     TEXT,
+            needed_time   TEXT,
+            qty_received  REAL DEFAULT 0,
+            received_at   TEXT,
+            received_by   TEXT
+        );
+        CREATE TABLE IF NOT EXISTS dept_cost_ledger (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            department  TEXT NOT NULL,
+            line_id     TEXT,
+            month_year  TEXT NOT NULL,
+            material_id INTEGER NOT NULL REFERENCES materials(id),
+            qty         REAL NOT NULL,
+            unit_cost   REAL NOT NULL,
+            total_cost  REAL NOT NULL,
+            request_id  TEXT REFERENCES consumable_request(request_id),
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_skus_code        ON skus(code);
+        CREATE INDEX IF NOT EXISTS idx_packing_lines_p  ON packing_lines(packing_sku_id);
+        CREATE INDEX IF NOT EXISTS idx_login_log_user   ON login_log(user_id);
+        CREATE INDEX IF NOT EXISTS idx_login_log_at     ON login_log(logged_at);
+        CREATE INDEX IF NOT EXISTS idx_bl_sku           ON bom_lines(sku_id);
+        CREATE INDEX IF NOT EXISTS idx_bl_glue_recipe   ON bom_lines(glue_recipe_id);
+    """)
+    conn.commit()
+
     _migrations = [
         "ALTER TABLE materials ADD COLUMN code TEXT DEFAULT ''",
         "ALTER TABLE materials ADD COLUMN fc_stock REAL DEFAULT 0",
@@ -972,6 +1292,8 @@ def init_db():
     _seed_real_glue_recipes(conn)
     # ── Seed lines, departments, line flow (idempotent) ─────────────
     _seed_lines_and_departments(conn)
+    # ── Bootstrap admin on a brand-new DB so a fresh install can log in ──
+    _seed_default_admin(conn)
     # Phase B cleanup removed glue_formula placeholders from materials entirely;
     # _normalize_glue_materials is no longer needed.
 
@@ -7315,6 +7637,22 @@ def _new_user_id():
     n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     conn.close()
     return f"USR-{n+1:06d}"
+
+def _seed_default_admin(conn):
+    """On a brand-new database (no users), create the bootstrap admin so a
+    fresh install can be logged into. Credentials: admin / admin — DEPLOY.md
+    §2.6 instructs changing the password and creating real users immediately.
+    Never runs once any user exists (idempotent, never resets a password)."""
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if n == 0:
+            conn.execute(
+                "INSERT INTO users (user_id,username,password_hash,role,display_name,active) "
+                "VALUES (?,?,?,?,?,1)",
+                ("USR-000001", "admin", _hash_pw("admin"), "MANAGERIAL", "Administrator"))
+            conn.commit()
+    except Exception:
+        pass
 
 def create_user(data: dict) -> dict:
     conn = get_db()
