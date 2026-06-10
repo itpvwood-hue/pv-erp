@@ -27,3 +27,8 @@ Thumbs.db
 
 # Generated PDF documents (user uploads / supplier POs)
 docs_storage/*.pdf
+
+# Release archives (repo is now the source of truth)
+pv-erp*.zip
+pv-erp*.7z
+venv*.7z
