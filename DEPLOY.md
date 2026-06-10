@@ -120,6 +120,23 @@ Open `http://<server>:8000/admin` from any browser on the LAN. Sign in with the 
 
 ## 3. Updating to a new version
 
+### Quick path — one command
+
+From an **Administrator** PowerShell in the repo clone:
+
+```powershell
+cd D:\PVWood\erp
+.\scripts\deploy.ps1
+```
+
+`deploy.ps1` does the whole cycle: snapshot the DB → `git pull --ff-only` →
+restart the service → poll `/api/health` → print the deployed version. It
+never touches `erp.db`, `.env`, or `docs_storage/` (all gitignored, so they
+survive every pull), and DB schema migrations run automatically on restart.
+Flags: `-SkipBackup`, `-ServiceName`, `-Port`.
+
+### Manual path (what the script automates)
+
 ```powershell
 cd D:\PVWood\erp
 
@@ -140,6 +157,34 @@ Get-Service PVWoodERP
 curl http://localhost:8000/api/health
 curl http://localhost:8000/api/version
 ```
+
+### One-time: convert an old archive (.7z) install to a git clone
+
+If the server's current install came from an uploaded `.7z` (not a git
+clone), do this **once** to switch it onto `git pull` deploys. Your data
+(`erp.db`, `.env`, `docs_storage/`) is preserved because it's gitignored.
+
+```powershell
+# Stop the service so nothing has the DB open.
+Stop-Service PVWoodERP -ErrorAction SilentlyContinue
+
+cd D:\PVWood
+git clone https://github.com/itpvwood-hue/pv-erp.git erp-git
+cd erp-git
+
+# Bring the live data over from the old install (adjust the old path).
+Copy-Item ..\erp\.env            .\.env            -Force
+Copy-Item ..\erp\erp.db          .\erp.db          -Force
+Copy-Item ..\erp\docs_storage\*  .\docs_storage\   -Recurse -Force -ErrorAction SilentlyContinue
+
+# Point the service at this clone and start it.
+.\scripts\install_service.ps1
+.\scripts\deploy.ps1            # verifies health + version
+
+# Once verified, the old D:\PVWood\erp folder can be archived/removed.
+```
+
+From then on, every release is just `.\scripts\deploy.ps1`.
 
 If `git pull` fails because the working tree has untracked changes (rare on a server, but possible if someone edited `.env` or `erp.db` lives in the repo path), stash or remove them first.
 
