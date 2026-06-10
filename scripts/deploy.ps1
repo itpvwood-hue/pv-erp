@@ -29,6 +29,12 @@ $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 Write-Host "Repo: $repo" -ForegroundColor Cyan
 
+# Refresh PATH from the registry so git / py are found even if this PowerShell
+# window was opened before they were installed (a freshly-installed tool isn't
+# on the PATH of already-running shells).
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+            [System.Environment]::GetEnvironmentVariable("Path","User")
+
 # -- Must be Administrator (Restart-Service needs it) ------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -66,10 +72,19 @@ if ($before -eq $after) {
 Write-Host "`n[3/4] Restarting service '$ServiceName'..." -ForegroundColor Cyan
 $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if (-not $svc) {
-    Write-Error "Service '$ServiceName' not found. Run .\scripts\install_service.ps1 first (one-time)."
+    Write-Host "Service '$ServiceName' is not installed yet." -ForegroundColor Yellow
+    Write-Host "deploy.ps1 only UPDATES an existing service. Run the one-time install first:" -ForegroundColor Yellow
+    Write-Host "    .\scripts\install_service.ps1" -ForegroundColor Yellow
     exit 1
 }
-Restart-Service -Name $ServiceName -Force
+try {
+    Restart-Service -Name $ServiceName -Force -ErrorAction Stop
+} catch {
+    Write-Host "Could not restart '$ServiceName': $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "The service may be half-registered / 'marked for deletion'. Re-run the installer:" -ForegroundColor Yellow
+    Write-Host "    .\scripts\install_service.ps1   (it now waits for a stuck delete to clear)" -ForegroundColor Yellow
+    exit 1
+}
 
 # -- 4. Verify health + version ----------------------------------------
 Write-Host "`n[4/4] Verifying..." -ForegroundColor Cyan

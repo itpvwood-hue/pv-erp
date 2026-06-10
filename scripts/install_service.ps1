@@ -56,7 +56,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ── Sanity: must be administrator ──────────────────────────────
+# Refresh PATH from the registry so nssm / py / git are found even if this
+# PowerShell window was opened before they were installed.
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+            [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# -- Sanity: must be administrator ------------------------------
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin     = (New-Object Security.Principal.WindowsPrincipal($currentUser)).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -66,7 +71,7 @@ if (-not $isAdmin) {
     exit 1
 }
 
-# ── Sanity: NSSM on PATH ───────────────────────────────────────
+# -- Sanity: NSSM on PATH ---------------------------------------
 $nssm = (Get-Command nssm -ErrorAction SilentlyContinue)
 if (-not $nssm) {
     Write-Host "[ERROR] nssm.exe not found on PATH." -ForegroundColor Red
@@ -76,7 +81,7 @@ if (-not $nssm) {
     exit 1
 }
 
-# ── Project root + python discovery ────────────────────────────
+# -- Project root + python discovery ----------------------------
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $logsDir     = Join-Path $projectRoot 'logs'
 if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Force -Path $logsDir | Out-Null }
@@ -95,7 +100,7 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-# ── Resolve bind host/port from config.py (.env) unless overridden ──
+# -- Resolve bind host/port from config.py (.env) unless overridden --
 # config.py is the single source of truth and loads .env; mirror its values
 # here so a PORT set in .env actually changes the listen port (uvicorn binds
 # to the CLI args we pass, so they must reflect .env). Explicit -BindHost /
@@ -114,18 +119,18 @@ if (-not $PSBoundParameters.ContainsKey('BindHost')) {
     } catch {}
 }
 
-Write-Host "──────────────────────────────────────────────"  -ForegroundColor Cyan
+Write-Host "----------------------------------------------"  -ForegroundColor Cyan
 Write-Host " PVWood ERP service install"                       -ForegroundColor Cyan
-Write-Host "──────────────────────────────────────────────"  -ForegroundColor Cyan
+Write-Host "----------------------------------------------"  -ForegroundColor Cyan
 Write-Host " service name : $ServiceName"
 Write-Host " project root : $projectRoot"
 Write-Host " python       : $pythonCmd $($pythonArgsPrefix -join ' ')"
-Write-Host " bind         : $BindHost:$Port"
+Write-Host " bind         : ${BindHost}:$Port"
 Write-Host " logs         : $logsDir\service-stdout.log + service-stderr.log"
 Write-Host ""
 
-# ── Stop + remove any prior service of the same name ───────────
-# We deliberately overwrite — re-running this script is the documented
+# -- Stop + remove any prior service of the same name -----------
+# We deliberately overwrite - re-running this script is the documented
 # way to refresh service config after a git pull.
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -134,12 +139,30 @@ if ($existing) {
         & nssm.exe stop $ServiceName confirm | Out-Null
     }
     & nssm.exe remove $ServiceName confirm | Out-Null
-    Start-Sleep -Seconds 1
+    # Windows can leave the service 'marked for deletion' while another process
+    # holds a handle (an open Services.msc / Task Manager window is the usual
+    # culprit). Re-creating it then fails. Poll until it's actually gone before
+    # continuing, and give a clear instruction if it stays stuck.
+    $gone = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 1
+        if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { $gone = $true; break }
+    }
+    if (-not $gone) {
+        Write-Host ""
+        Write-Host "ERROR: '$ServiceName' is stuck 'marked for deletion'." -ForegroundColor Red
+        Write-Host "Windows won't recreate it while something holds a handle. Fix:" -ForegroundColor Yellow
+        Write-Host "  1. CLOSE Services.msc, Task Manager, and any 'nssm edit' window." -ForegroundColor Yellow
+        Write-Host "  2. Run:  sc.exe delete $ServiceName" -ForegroundColor Yellow
+        Write-Host "  3. If it still won't clear, REBOOT the server (guaranteed fix)." -ForegroundColor Yellow
+        Write-Host "Then re-run this script." -ForegroundColor Yellow
+        exit 1
+    }
 } else {
-    Write-Host "[1/5] No existing service named '$ServiceName' — fresh install."
+    Write-Host "[1/5] No existing service named '$ServiceName' - fresh install."
 }
 
-# ── Install the service ─────────────────────────────────────────
+# -- Install the service -----------------------------------------
 # Uvicorn is launched from the execution/ folder via -m so the existing
 # `from database import ...` lazy-style relative imports keep resolving.
 Write-Host "[2/5] Registering service..."
@@ -156,7 +179,7 @@ $uvicornArgs = $pythonArgsPrefix + @(
 $executionDir = Join-Path $projectRoot 'execution'
 & nssm.exe set $ServiceName AppDirectory $executionDir | Out-Null
 
-# ── Logging: stdout + stderr to rotating files ─────────────────
+# -- Logging: stdout + stderr to rotating files -----------------
 Write-Host "[3/5] Configuring log rotation..."
 & nssm.exe set $ServiceName AppStdout (Join-Path $logsDir 'service-stdout.log') | Out-Null
 & nssm.exe set $ServiceName AppStderr (Join-Path $logsDir 'service-stderr.log') | Out-Null
@@ -165,7 +188,7 @@ Write-Host "[3/5] Configuring log rotation..."
 & nssm.exe set $ServiceName AppRotateBytes  5242880  | Out-Null   # 5 MB per file
 & nssm.exe set $ServiceName AppRotateSeconds 86400   | Out-Null   # daily rotation regardless of size
 
-# ── Lifecycle: auto-start + restart on crash ───────────────────
+# -- Lifecycle: auto-start + restart on crash -------------------
 Write-Host "[4/5] Setting auto-start + crash-restart..."
 & nssm.exe set $ServiceName Start          SERVICE_AUTO_START  | Out-Null
 & nssm.exe set $ServiceName AppExit        Default Restart     | Out-Null   # any exit -> restart
@@ -176,7 +199,7 @@ Write-Host "[4/5] Setting auto-start + crash-restart..."
 & nssm.exe set $ServiceName Description    "PVWood ERP (FastAPI + uvicorn). Project root: $projectRoot" | Out-Null
 & nssm.exe set $ServiceName DisplayName    "PVWood ERP"                                                | Out-Null
 
-# ── Start it ────────────────────────────────────────────────────
+# -- Start it ----------------------------------------------------
 Write-Host "[5/5] Starting service..."
 & nssm.exe start $ServiceName | Out-Null
 Start-Sleep -Seconds 2
