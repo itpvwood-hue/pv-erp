@@ -12,7 +12,11 @@
    shrinking html font-size makes the whole UI ~12% denser, closer to what an
    on-floor ERP needs without forcing the user to ctrl-minus the browser. */
 html{font-size:14px;}
-body{margin:0;font-family:'Segoe UI',sans-serif;background:#f7f4ef;overflow-x:hidden;}
+/* Font stack: Latin/numbers render in Segoe UI; Thai glyphs (which Segoe UI
+   covers poorly) fall through per-character to Leelawadee UI / Tahoma — both
+   ship with Windows, so Thai renders correctly with NO web download (works on
+   the offline factory LAN). 'Noto Sans Thai' is preferred if ever installed. */
+body{margin:0;font-family:'Segoe UI','Leelawadee UI','Noto Sans Thai',Tahoma,system-ui,sans-serif;background:#f7f4ef;overflow-x:hidden;}
 /* ── Sidebar (collapses to icon strip; expands on hover or when pinned) ── */
 #sidebar{position:fixed;top:0;left:0;width:var(--sb-collapsed);height:100vh;background:var(--pv-brown);color:#e8d9c8;overflow-x:hidden;overflow-y:auto;z-index:200;display:flex;flex-direction:column;transition:width .18s ease;}
 #sidebar:hover, #sidebar.pinned{width:var(--sb);overflow-y:auto;box-shadow:4px 0 12px rgba(0,0,0,.25);}
