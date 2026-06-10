@@ -4856,13 +4856,13 @@
   <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
       <h4 class="mb-0"><i class="bi bi-diagram-3 me-2 text-success"></i>Traceability Report</h4>
-      <small class="text-muted">Trace every PO to the exact material lots and supplier documents consumed</small>
+      <small class="text-muted">Every board, veneer &amp; glue released to a PO — with all supplier PDFs, downloadable as one ZIP</small>
     </div>
     <div class="d-flex gap-2">
       <select class="form-select form-select-sm" id="trace-po" style="min-width:280px" onchange="traceLoad()"></select>
       <button class="btn btn-sm btn-outline-secondary" onclick="traceLoad()"><i class="bi bi-arrow-clockwise"></i></button>
       <a class="btn btn-sm btn-success" id="trace-export" target="_blank" href="#" onclick="return traceExport(event)">
-        <i class="bi bi-download me-1"></i>Export CSV
+        <i class="bi bi-file-earmark-zip me-1"></i>Export PDFs (ZIP)
       </a>
     </div>
   </div>

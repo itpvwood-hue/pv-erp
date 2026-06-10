@@ -6500,6 +6500,240 @@ def delete_material_document(doc_id: int) -> dict:
 # ════════════════════════════════════════════════════════════════
 # TRACEABILITY REPORT — per sales PO
 # ════════════════════════════════════════════════════════════════
+def get_po_document_trace(po_id: int) -> dict:
+    """Document-centric traceability for a sales PO.
+
+    Resolves the PO → its production orders + batches → every BOARD, VENEER and
+    GLUE *material* that fed it, and pulls all PDFs (`material_documents`)
+    attached to those materials (material-level certs + any lot-level docs).
+
+    Sources of the material links (these are how the factory actually records
+    them — not the sparsely-populated batch_material_lots ledger):
+      • Veneers — `prod_order_veneer_alloc` (FC grade-mix release, face+back),
+        with `production_orders.confirmed_face/back_veneer_id` as a fallback.
+      • Boards  — the SKU's BOM base-board line (`bom_lines` seq 1).
+      • Glue    — `glue_mix_log.actual_components` (what the glue-mix station
+        actually consumed), falling back to the recipe's `material_links`.
+
+    Returns {purchase_order, production_orders[], sections{boards,veneers,glue},
+    doc_count}. Each section item: {material_id, material_code, material_name,
+    material_type, role, qty, qty_uom, source, documents[]}.
+    """
+    import json as _json
+    conn = get_db()
+    try:
+        po = conn.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+        if not po:
+            return {"error": "PO not found"}
+        po = dict(po)
+
+        prod_orders = rows_to_list(conn.execute("""
+            SELECT po2.id, po2.prod_order_number, po2.quantity,
+                   po2.confirmed_face_veneer_id, po2.confirmed_back_veneer_id,
+                   p.sku AS product_sku, p.name AS product_name
+            FROM production_orders po2
+            JOIN products p ON p.id = po2.product_id
+            WHERE po2.po_id = ?
+            ORDER BY po2.id
+        """, (po_id,)).fetchall())
+        po_ids = [r['id'] for r in prod_orders]
+
+        # Glue/station logs reference a batch by its batch_number STRING
+        # (see _STATION_LOG_TABLES), not the integer batches.id — collect both.
+        batch_numbers = []
+        if po_ids:
+            qmarks = ",".join("?" * len(po_ids))
+            batch_numbers = [r['batch_number'] for r in conn.execute(
+                f"SELECT batch_number FROM batches WHERE prod_order_id IN ({qmarks}) AND batch_number IS NOT NULL",
+                po_ids
+            ).fetchall()]
+
+        # Accumulators keyed by material_id within each section.
+        boards, veneers, glue = {}, {}, {}
+
+        def _docs_for(material_id):
+            rows = conn.execute("""
+                SELECT d.id, d.doc_type, d.filename, d.file_size, d.content_type,
+                       d.uploaded_at, d.uploaded_by, ml.lot_code AS lot_code
+                FROM material_documents d
+                LEFT JOIN material_lots ml ON ml.id = d.lot_id
+                WHERE d.material_id = ?
+                ORDER BY d.uploaded_at DESC
+            """, (material_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+        def _add(bucket, material_id, role, qty, uom, source):
+            if not material_id:
+                return
+            ent = bucket.get(material_id)
+            if not ent:
+                m = conn.execute("SELECT code, name, type FROM materials WHERE id=?",
+                                 (material_id,)).fetchone()
+                if not m:
+                    return
+                ent = bucket[material_id] = {
+                    "material_id": material_id, "material_code": m['code'],
+                    "material_name": m['name'], "material_type": m['type'],
+                    "role": role, "qty": 0.0, "qty_uom": uom,
+                    "sources": set(), "documents": _docs_for(material_id),
+                }
+            ent['qty'] += float(qty or 0)
+            ent['sources'].add(source)
+            if role and role not in (ent['role'] or '').split(', '):
+                ent['role'] = (ent['role'] + ', ' + role) if ent['role'] else role
+
+        # ── Boards: base-board BOM line (seq 1) per distinct product SKU ──
+        seen_sku = set()
+        for r in prod_orders:
+            sku_code = r['product_sku']
+            if not sku_code or sku_code in seen_sku:
+                continue
+            seen_sku.add(sku_code)
+            sk = conn.execute("SELECT id, pallet_qty FROM skus WHERE code=?", (sku_code,)).fetchone()
+            if not sk:
+                continue
+            board_rows = conn.execute("""
+                SELECT bl.material_id, bl.qty_override
+                FROM bom_lines bl WHERE bl.sku_id=? AND bl.seq=1 AND bl.material_id IS NOT NULL
+            """, (sk['id'],)).fetchall()
+            for b in board_rows:
+                _add(boards, b['material_id'], 'base_board', 0, 'sheets', 'BOM')
+
+        # ── Veneers: FC grade-mix allocation (face + back) ──
+        if po_ids:
+            qmarks = ",".join("?" * len(po_ids))
+            alloc = conn.execute(f"""
+                SELECT material_id, side, qty_allocated
+                FROM prod_order_veneer_alloc WHERE prod_order_id IN ({qmarks})
+            """, po_ids).fetchall()
+            for a in alloc:
+                _add(veneers, a['material_id'], a['side'], a['qty_allocated'], 'sheets', 'FC release')
+        # Fallback: confirmed primary veneer ids when no alloc rows exist
+        if not veneers:
+            for r in prod_orders:
+                _add(veneers, r['confirmed_face_veneer_id'], 'face', 0, 'sheets', 'FC confirmed')
+                _add(veneers, r['confirmed_back_veneer_id'], 'back', 0, 'sheets', 'FC confirmed')
+
+        def _add_recipe_ingredients(recipe_id, source, qty_hint=0):
+            """material_links is a JSON object {ingredient_name: material_id} —
+            the material ids are the VALUES."""
+            if not recipe_id:
+                return
+            rr = conn.execute("SELECT material_links FROM glue_recipes WHERE id=?",
+                              (recipe_id,)).fetchone()
+            if not (rr and rr['material_links']):
+                return
+            try:
+                links = _json.loads(rr['material_links']) or {}
+            except Exception:
+                return
+            mids = links.values() if isinstance(links, dict) else links
+            for mid in mids:
+                try:
+                    _add(glue, int(mid), 'glue ingredient', 0, 'kg', source)
+                except (TypeError, ValueError):
+                    pass
+
+        # ── Glue: what the glue-mix station actually consumed for these batches ──
+        if batch_numbers:
+            qmarks = ",".join("?" * len(batch_numbers))
+            mixes = conn.execute(f"""
+                SELECT actual_components, recipe_id, recipe_code, qty_kg
+                FROM glue_mix_log WHERE batch_id IN ({qmarks})
+            """, batch_numbers).fetchall()
+            for mx in mixes:
+                comps = []
+                if mx['actual_components']:
+                    try:
+                        comps = _json.loads(mx['actual_components']) or []
+                    except Exception:
+                        comps = []
+                if comps:
+                    for c in comps:
+                        _add(glue, c.get('material_id'), 'glue ingredient',
+                             c.get('kg'), 'kg', 'glue mix')
+                else:
+                    _add_recipe_ingredients(mx['recipe_id'], 'glue mix (recipe)')
+
+        # Fallback: if no station glue mix was logged yet, surface the glue
+        # recipe ingredients the BOM specifies (seq 4/5) so their certs/MSDS
+        # still travel with the PO.
+        if not glue:
+            for sku_code in seen_sku:
+                sk = conn.execute("SELECT id FROM skus WHERE code=?", (sku_code,)).fetchone()
+                if not sk:
+                    continue
+                for gl in conn.execute("""
+                    SELECT glue_recipe_id FROM bom_lines
+                    WHERE sku_id=? AND seq IN (4,5) AND glue_recipe_id IS NOT NULL
+                """, (sk['id'],)).fetchall():
+                    _add_recipe_ingredients(gl['glue_recipe_id'], 'BOM recipe')
+
+        def _finalise(bucket):
+            out = []
+            for ent in bucket.values():
+                ent['sources'] = ", ".join(sorted(ent['sources']))
+                ent['qty'] = round(ent['qty'], 3)
+                ent['doc_count'] = len(ent['documents'])
+                out.append(ent)
+            out.sort(key=lambda e: (e['material_code'] or ''))
+            return out
+
+        sections = {
+            "boards":  _finalise(boards),
+            "veneers": _finalise(veneers),
+            "glue":    _finalise(glue),
+        }
+        doc_count = sum(it['doc_count'] for sec in sections.values() for it in sec)
+        return {
+            "purchase_order": po,
+            "production_orders": prod_orders,
+            "sections": sections,
+            "doc_count": doc_count,
+        }
+    finally:
+        conn.close()
+
+
+def get_po_document_trace_files(po_id: int) -> list:
+    """Flatten a document trace into a de-duplicated list of files for ZIP export.
+    Each entry: {section, material_code, material_name, doc_type, filename,
+    stored_path, file_size, document_id}. De-dupes by document id (a material
+    cert shared across sections is bundled once)."""
+    trace = get_po_document_trace(po_id)
+    if 'error' in trace:
+        return []
+    conn = get_db()
+    try:
+        seen = set()
+        files = []
+        for section, items in trace['sections'].items():
+            for it in items:
+                for d in it['documents']:
+                    did = d['id']
+                    if did in seen:
+                        continue
+                    seen.add(did)
+                    row = conn.execute(
+                        "SELECT stored_path FROM material_documents WHERE id=?",
+                        (did,)).fetchone()
+                    if not row:
+                        continue
+                    files.append({
+                        "section": section,
+                        "material_code": it['material_code'],
+                        "material_name": it['material_name'],
+                        "doc_type": d.get('doc_type') or 'OTHER',
+                        "filename": d.get('filename') or f"doc_{did}.pdf",
+                        "stored_path": row['stored_path'],
+                        "file_size": d.get('file_size') or 0,
+                        "document_id": did,
+                    })
+        return files
+    finally:
+        conn.close()
+
+
 def get_po_traceability(po_id: int) -> dict:
     conn = get_db()
     try:

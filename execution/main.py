@@ -123,7 +123,8 @@ from database import (
     # Material lots (FIFO) & documents & traceability
     create_material_lot, list_material_lots, fifo_consume_lots,
     register_material_document, list_material_documents, get_material_document,
-    delete_material_document, get_po_traceability, DOCS_DIR,
+    delete_material_document, get_po_traceability,
+    get_po_document_trace, get_po_document_trace_files, DOCS_DIR,
     create_fc_transfer_request, create_fc_return_request,
     fulfill_fc_transfer_request, cancel_fc_transfer_request, adjust_fc_stock,
     # FC re-grading & veneer grade-mix allocation
@@ -3322,42 +3323,59 @@ def remove_material_doc(doc_id: int):
 # ════════════════════════════════════════════════════════════════
 @app.get("/api/traceability/po/{po_id}")
 def trace_po(po_id: int):
-    res = get_po_traceability(po_id)
+    """Document-centric traceability: every board/veneer/glue material that fed
+    this PO, with all PDFs attached to those materials."""
+    res = get_po_document_trace(po_id)
     if 'error' in res:
         raise HTTPException(status_code=404, detail=res['error'])
     return res
 
-@app.get("/api/export/traceability/po/{po_id}")
-def export_trace_po(po_id: int):
-    res = get_po_traceability(po_id)
+@app.get("/api/export/traceability/po/{po_id}/zip")
+def export_trace_po_zip(po_id: int):
+    """Bundle every supplier PDF for the PO's boards/veneers/glue into one ZIP,
+    foldered by section, with an index.csv manifest."""
+    import io, zipfile
+    res = get_po_document_trace(po_id)
     if 'error' in res:
         raise HTTPException(status_code=404, detail=res['error'])
     po = res['purchase_order']
-    header = "po_number,batch_number,sku,product_name,material_code,material_name,material_type,role,qty_consumed,uom,lot_code,supplier,supplier_lot_ref,received_at,expiry_date,unit_cost,documents"
-    def esc(v):
-        if v is None: return ''
-        s = str(v); return '"'+s.replace('"','""')+'"' if (',' in s or '"' in s or '\n' in s) else s
-    lines = [header]
-    for b in res['batches']:
-        if not b.get('lots_consumed'):
-            lines.append(",".join([esc(po.get('po_number')), esc(b.get('batch_number')),
-                esc(b.get('product_sku')), esc(b.get('product_name')),
-                '','','','','','','','','','','','','']))
-            continue
-        for l in b['lots_consumed']:
-            docs = "; ".join(f"{d.get('doc_type')}:{d.get('filename')}" for d in (l.get('documents') or []))
-            lines.append(",".join([
-                esc(po.get('po_number')), esc(b.get('batch_number')),
-                esc(b.get('product_sku')), esc(b.get('product_name')),
-                esc(l.get('material_code')), esc(l.get('material_name')),
-                esc(l.get('material_type')), esc(l.get('role')),
-                esc(l.get('qty_consumed')), esc(l.get('uom')),
-                esc(l.get('lot_code')), esc(l.get('supplier')), esc(l.get('supplier_lot_ref')),
-                esc(l.get('received_at')), esc(l.get('expiry_date')),
-                esc(l.get('unit_cost')), esc(docs),
-            ]))
-    fname = f"traceability_{(po.get('po_number') or po_id)}.csv"
-    return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
+    po_num = po.get('po_number') or f"PO{po_id}"
+    files = get_po_document_trace_files(po_id)
+
+    def _safe(s):
+        return ''.join(c if (c.isalnum() or c in ' ._-') else '_' for c in str(s or '')).strip() or 'file'
+
+    buf = io.BytesIO()
+    manifest = ["section,material_code,material_name,doc_type,filename,file_size,status"]
+    used_names = set()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            section = {'boards': 'Boards', 'veneers': 'Veneers', 'glue': 'Glue'}.get(f['section'], f['section'])
+            full = os.path.join(DOCS_DIR, f['stored_path'])
+            base = f"{_safe(f['material_code'])}__{_safe(f['doc_type'])}__{_safe(f['filename'])}"
+            if not base.lower().endswith('.pdf'):
+                base += '.pdf'
+            arc = f"{section}/{base}"
+            n = 1
+            while arc in used_names:
+                n += 1; arc = f"{section}/{n}_{base}"
+            used_names.add(arc)
+            status = 'ok'
+            if os.path.exists(full):
+                try:
+                    zf.write(full, arc)
+                except Exception:
+                    status = 'read_error'
+            else:
+                status = 'missing_on_disk'
+            mrow = [f['section'], f['material_code'], f['material_name'],
+                    f['doc_type'], f['filename'], str(f['file_size']), status]
+            manifest.append(",".join('"'+str(v or '').replace('"','""')+'"' for v in mrow))
+        zf.writestr("index.csv", "\n".join(manifest) + "\n")
+
+    buf.seek(0)
+    fname = f"traceability_{_safe(po_num)}_documents.zip"
+    return Response(content=buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 

@@ -587,53 +587,70 @@ function traceExport(ev){
   ev.preventDefault();
   const id=document.getElementById('trace-po').value;
   if(!id){ alert('Pick a PO first'); return false; }
-  window.open('/api/export/traceability/po/'+id,'_blank');
+  window.open('/api/export/traceability/po/'+id+'/zip','_blank');
   return false;
 }
+function _traceDocBadges(docs){
+  if(!docs || !docs.length) return '<span class="text-muted small">— no PDF attached —</span>';
+  return docs.map(d=>{
+    const kb = d.file_size ? ' ('+Math.max(1,Math.round(d.file_size/1024))+' KB)' : '';
+    return `<a class="badge bg-danger text-decoration-none me-1 mb-1" title="${d.filename||''}${kb}"
+      href="/api/material-documents/${d.id}/download" target="_blank">
+      <i class="bi bi-file-earmark-pdf me-1"></i>${d.doc_type||'PDF'}</a>`;
+  }).join('');
+}
+function _traceSection(title, icon, colour, items){
+  const total = items.reduce((s,it)=>s+(it.doc_count||0),0);
+  let body;
+  if(!items.length){
+    body = '<div class="card-body py-2 text-muted small">No materials of this type traced to the PO.</div>';
+  }else{
+    body = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+      <thead class="table-light"><tr>
+        <th>Material</th><th>Role</th><th class="text-end">Qty</th><th>Source</th><th style="min-width:200px">PDF documents</th>
+      </tr></thead><tbody>` +
+      items.map(it=>`<tr>
+        <td class="small"><span class="badge bg-light text-dark me-1">${(it.material_type||'').toUpperCase()}</span><b>${it.material_code||''}</b> ${it.material_name||''}</td>
+        <td class="small">${it.role||'—'}</td>
+        <td class="text-end small">${it.qty?_accFmtN(it.qty)+' '+(it.qty_uom||''):'—'}</td>
+        <td class="small text-muted">${it.sources||''}</td>
+        <td>${_traceDocBadges(it.documents)}</td>
+      </tr>`).join('') +
+      '</tbody></table></div>';
+  }
+  return `<div class="card mb-2">
+    <div class="card-header py-2 d-flex justify-content-between align-items-center bg-${colour} bg-opacity-10">
+      <span class="fw-semibold small"><i class="bi ${icon} me-1"></i>${title}</span>
+      <span class="badge bg-${colour}">${total} PDF${total!==1?'s':''}</span>
+    </div>${body}</div>`;
+}
 function traceRender(r){
-  const po=r.purchase_order||{}; const batches=r.batches||[];
+  const po=r.purchase_order||{}; const sec=r.sections||{};
+  const pos=r.production_orders||[];
+  const id=document.getElementById('trace-po').value;
+  const totalDocs=r.doc_count||0;
   let html=`<div class="card mb-3"><div class="card-body py-2">
     <div class="row small">
       <div class="col-md-3"><span class="text-muted">PO #</span><br><b>${po.po_number||po.id}</b></div>
       <div class="col-md-3"><span class="text-muted">Customer</span><br>${po.customer||'—'}</div>
       <div class="col-md-3"><span class="text-muted">Delivery</span><br>${po.delivery_date||'—'}</div>
       <div class="col-md-3"><span class="text-muted">Status</span><br>${po.status||'—'}</div>
+    </div>
+    <hr class="my-2">
+    <div class="d-flex justify-content-between align-items-center small">
+      <span class="text-muted">${pos.length} production order${pos.length!==1?'s':''}: ${pos.map(p=>(p.prod_order_number||('#'+p.id))+' ('+(p.product_sku||'')+')').join(', ')||'—'}</span>
+      <button class="btn btn-sm btn-success" ${totalDocs?'':'disabled'} onclick="window.open('/api/export/traceability/po/'+${JSON.stringify(id)}+'/zip','_blank')">
+        <i class="bi bi-file-earmark-zip me-1"></i>Download all PDFs (${totalDocs})
+      </button>
     </div></div></div>`;
-  if(!batches.length){
-    html+='<div class="alert alert-warning small">No production batches linked to this PO yet.</div>';
+  if(!pos.length){
+    html+='<div class="alert alert-warning small">No production orders linked to this PO yet.</div>';
+  }else if(!totalDocs){
+    html+='<div class="alert alert-info small">Materials were traced, but none of them have PDF documents uploaded yet. Attach supplier certs/COAs on the Lots &amp; Documents page.</div>';
   }
-  batches.forEach(b=>{
-    html+=`<div class="card mb-2"><div class="card-header py-2 d-flex justify-content-between">
-      <span class="fw-semibold small"><i class="bi bi-box me-1"></i>${b.batch_number||('#'+b.id)} — ${b.product_sku||''} ${b.product_name||''}</span>
-      <span class="small text-muted">${_accFmtN(b.pcs_actual||b.quantity)} pcs</span>
-    </div>`;
-    if(!b.lots_consumed || !b.lots_consumed.length){
-      html+='<div class="card-body py-2 text-muted small">No lot consumption recorded for this batch.</div>';
-    }else{
-      html+=`<div class="table-responsive"><table class="table table-sm mb-0">
-        <thead class="table-light"><tr>
-          <th>Material</th><th>Role</th><th class="text-end">Qty</th>
-          <th>Lot</th><th>Supplier</th><th>Received</th><th>Expiry</th><th>Docs</th>
-        </tr></thead><tbody>`;
-      b.lots_consumed.forEach(l=>{
-        const docs=(l.documents||[]).map(d=>
-          `<a class="badge bg-danger text-decoration-none me-1" href="/api/material-documents/${d.id}/download" target="_blank"><i class="bi bi-file-earmark-pdf me-1"></i>${d.doc_type}</a>`
-        ).join('') || '<span class="text-muted small">—</span>';
-        html+=`<tr>
-          <td class="small"><span class="badge bg-light text-dark me-1">${(l.material_type||'').toUpperCase()}</span><b>${l.material_code||''}</b> ${l.material_name||''}</td>
-          <td class="small">${l.role||'—'}</td>
-          <td class="text-end">${_accFmtN(l.qty_consumed)} ${l.uom||''}</td>
-          <td class="small fw-semibold">${l.lot_code}</td>
-          <td class="small">${l.supplier||'—'}${l.supplier_lot_ref?'<br><span class="text-muted">'+l.supplier_lot_ref+'</span>':''}</td>
-          <td class="small">${(l.received_at||'').slice(0,10)}</td>
-          <td class="small">${l.expiry_date||'—'}</td>
-          <td>${docs}</td>
-        </tr>`;
-      });
-      html+='</tbody></table></div>';
-    }
-    html+='</div>';
-  });
+  html+=_traceSection('Boards', 'bi-layers', 'primary', sec.boards||[]);
+  html+=_traceSection('Veneers', 'bi-file-earmark', 'info', sec.veneers||[]);
+  html+=_traceSection('Glue', 'bi-droplet', 'warning', sec.glue||[]);
   document.getElementById('trace-content').innerHTML=html;
 }
 
