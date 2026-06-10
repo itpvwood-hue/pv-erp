@@ -1468,10 +1468,14 @@ def _seed_lines_and_departments(conn):
 # in one place. Helpers return the raw Row / scalar — callers wrap with
 # row_to_dict() when they need a dict.
 def _mat_by_id(conn, mid):
-    return _mat_by_id(conn, mid)
+    """Return the materials row for an id, or None."""
+    if mid is None: return None
+    return conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
 
 def _mat_by_code(conn, code):
-    return _mat_by_code(conn, code)
+    """Return the materials row for a code, or None."""
+    if not code: return None
+    return conn.execute("SELECT * FROM materials WHERE code=?", (code,)).fetchone()
 
 def _mat_id_by_code(conn, code):
     """Return materials.id for a code, or None if not present."""
