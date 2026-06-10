@@ -12,9 +12,11 @@ response. Every SQL query is validated against an allowlist (SELECT only,
 single statement, no PRAGMA / ATTACH / vacuum etc.) so the assistant cannot
 mutate the DB even if the model is confused.
 
-Generated Excel files live in `backups/factory_assistant/` and are served
-via the /api/factory-assistant/export/<filename> endpoint so users can
-download them with one click from the chat UI.
+Generated Excel files live in a dedicated store (config.FA_DIR, default
+`fa_storage/`, overridable via the FA_DIR env var) — independent of material
+docs and DB backups. They are served via the
+/api/factory-assistant/export/<filename> endpoint so users can download them
+with one click from the chat UI.
 """
 
 from __future__ import annotations
@@ -22,9 +24,9 @@ import os, re, json, sqlite3, datetime, uuid
 from typing import Any
 
 try:
-    from config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH, make_anthropic_client
+    from config import ANTHROPIC_API_KEY, LOG_PATH, FA_DIR, DB_PATH, make_anthropic_client
 except ImportError:
-    from execution.config import ANTHROPIC_API_KEY, LOG_PATH, BACKUP_DIR, DB_PATH, make_anthropic_client
+    from execution.config import ANTHROPIC_API_KEY, LOG_PATH, FA_DIR, DB_PATH, make_anthropic_client
 
 # Memory layer (conversation history + operational knowledge).
 try:
@@ -42,8 +44,9 @@ try:
 except Exception:
     _client = None
 
-# Where generated xlsx files live. Served via the FastAPI endpoint.
-EXPORT_DIR = os.path.join(BACKUP_DIR, "factory_assistant")
+# Where generated xlsx files live — a dedicated store (config.FA_DIR),
+# independent of material docs and DB backups. Served via the FastAPI endpoint.
+EXPORT_DIR = FA_DIR
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 # Bound the heavy bits so a runaway request can't lock up the server.

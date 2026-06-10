@@ -297,7 +297,8 @@ D:\PVWood\erp\                       <- $projectRoot (everywhere below)
 ├── backups\                          daily snapshots (and any ad-hoc)
 │   ├── erp-20260609-020000.db
 │   └── erp-20260608-020000.db
-├── docs_storage\                     supplier PO PDFs etc.
+├── docs_storage\                     supplier PO / material PDFs etc.
+├── fa_storage\                       Factory Assistant generated files (xlsx)
 ├── logs\
 │   ├── server.log                    application log (FastAPI + uvicorn + project)
 │   ├── service-stdout.log            NSSM-captured stdout (rotated 5 MB / daily)

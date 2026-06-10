@@ -84,6 +84,11 @@ LOG_DIR   = os.getenv("LOG_DIR",
 LOG_PATH  = os.path.join(LOG_DIR, 'server.log')
 BACKUP_DIR = os.getenv("BACKUP_DIR",
                        os.path.join(PROJECT_ROOT, 'backups'))
+# Dedicated store for files the Factory Assistant generates (xlsx exports,
+# etc.) — kept separate from DOCS_DIR (material PDFs) and BACKUP_DIR (DB
+# snapshots) so it can be sized/cleaned/relocated independently.
+FA_DIR    = os.getenv("FA_DIR",
+                      os.path.join(PROJECT_ROOT, 'fa_storage'))
 
 # ── Server ──────────────────────────────────────────────────────
 HOST  = os.getenv("HOST", "0.0.0.0")          # bind to all interfaces for LAN
@@ -106,6 +111,7 @@ def summary() -> dict:
         "project_root":     PROJECT_ROOT,
         "db_path":          DB_PATH,
         "docs_dir":         DOCS_DIR,
+        "fa_dir":           FA_DIR,
         "log_dir":          LOG_DIR,
         "host":             HOST,
         "port":             PORT,

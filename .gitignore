@@ -28,6 +28,9 @@ Thumbs.db
 # Generated PDF documents (user uploads / supplier POs)
 docs_storage/*.pdf
 
+# Factory Assistant generated files (xlsx exports, etc.)
+fa_storage/
+
 # Release archives (repo is now the source of truth)
 pv-erp*.zip
 pv-erp*.7z
