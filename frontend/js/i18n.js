@@ -151,8 +151,43 @@ function t(key){
   return entry[_LANG] || key;
 }
 
-// Apply translations to every element marked with data-i18n* attributes.
-// Safe to call repeatedly (e.g. after dynamic rendering).
+// ── Auto-translation (no per-element tagging) ───────────────────────
+// Translate common UI elements by looking their English text up in the
+// dictionary. Only EXACT dictionary matches are replaced, so data-driven
+// text (names, codes, counts) is never touched. The original English is
+// cached in data-i18n-auto so switching languages keeps working.
+//
+// Scope: buttons + common UI text (table headers, card/section titles,
+// form labels, status badges).
+const AUTO_I18N_SELECTOR =
+  'button, .btn, th, label, .form-label, .badge, .card-title, ' +
+  '.card-header, h3, h4, h5, h6, .sb-sec, .nav-link, option';
+
+function _autoI18nEl(el){
+  // Explicit data-i18n wins; don't double-handle.
+  if(el.hasAttribute('data-i18n')) return;
+  // Only the element's OWN immediate text (skip nested element text), so an
+  // icon + label button like `<i></i> Add` translates just the " Add" node.
+  const textNodes = [];
+  for(const n of el.childNodes){
+    if(n.nodeType === 3 && n.textContent.trim()) textNodes.push(n);
+  }
+  if(textNodes.length !== 1) return;   // empty, icon-only, or ambiguous → skip
+  const node = textNodes[0];
+  let key = el.getAttribute('data-i18n-auto');
+  if(key === null){
+    key = node.textContent.trim();
+    if(!I18N[key]) return;             // unknown string → leave English as-is
+    el.setAttribute('data-i18n-auto', key);
+  }
+  const lead  = node.textContent.match(/^\s*/)[0];
+  const trail = node.textContent.match(/\s*$/)[0];
+  node.textContent = lead + t(key) + trail;
+}
+
+// Apply translations to every element marked with data-i18n* attributes,
+// then the dictionary-lookup auto pass. Safe to call repeatedly (e.g. after
+// dynamic rendering) — idempotent thanks to the data-i18n-auto cache.
 function applyI18n(root){
   root = root || document;
   root.querySelectorAll('[data-i18n]').forEach(el => {
@@ -164,6 +199,25 @@ function applyI18n(root){
   root.querySelectorAll('[data-i18n-title]').forEach(el => {
     const k = el.getAttribute('data-i18n-title'); el.setAttribute('title', t(k));
   });
+  // Auto pass: the root itself (if it matches) + all matching descendants.
+  if(root.nodeType === 1 && root.matches && root.matches(AUTO_I18N_SELECTOR)) _autoI18nEl(root);
+  root.querySelectorAll(AUTO_I18N_SELECTOR).forEach(_autoI18nEl);
+}
+
+// Watch for dynamically-rendered DOM (portals build pages after load) and
+// auto-translate new subtrees. Only runs when a non-English language is set.
+let _i18nObserver = null;
+function _startI18nObserver(){
+  if(_i18nObserver || !document.body) return;
+  _i18nObserver = new MutationObserver(muts => {
+    if(_LANG === 'en') return;
+    for(const m of muts){
+      for(const node of m.addedNodes){
+        if(node.nodeType === 1) applyI18n(node);
+      }
+    }
+  });
+  _i18nObserver.observe(document.body, {childList:true, subtree:true});
 }
 
 function setLang(lang){
@@ -190,6 +244,7 @@ function loginRebrand(){ /* alias kept for login-screen language buttons */ }
 document.addEventListener('DOMContentLoaded', () => {
   document.documentElement.setAttribute('lang', _LANG === 'zh' ? 'zh-Hans' : _LANG);
   applyI18n();
+  _startI18nObserver();
   // Mark current language in any picker that exists
   document.querySelectorAll('[data-lang-pick]').forEach(el => {
     el.classList.toggle('active-lang', el.getAttribute('data-lang-pick') === _LANG);
