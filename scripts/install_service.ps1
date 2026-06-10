@@ -95,6 +95,25 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     exit 1
 }
 
+# ── Resolve bind host/port from config.py (.env) unless overridden ──
+# config.py is the single source of truth and loads .env; mirror its values
+# here so a PORT set in .env actually changes the listen port (uvicorn binds
+# to the CLI args we pass, so they must reflect .env). Explicit -BindHost /
+# -Port on the command line still win.
+$cfgExec = Join-Path $projectRoot 'execution'
+if (-not $PSBoundParameters.ContainsKey('Port')) {
+    try {
+        $p = (& $pythonCmd @pythonArgsPrefix '-c' "import sys;sys.path.insert(0,r'$cfgExec');from config import PORT;print(PORT)" 2>$null)
+        if ($p) { $Port = [int]($p.Trim()) }
+    } catch {}
+}
+if (-not $PSBoundParameters.ContainsKey('BindHost')) {
+    try {
+        $h = (& $pythonCmd @pythonArgsPrefix '-c' "import sys;sys.path.insert(0,r'$cfgExec');from config import HOST;print(HOST)" 2>$null)
+        if ($h) { $BindHost = $h.Trim() }
+    } catch {}
+}
+
 Write-Host "──────────────────────────────────────────────"  -ForegroundColor Cyan
 Write-Host " PVWood ERP service install"                       -ForegroundColor Cyan
 Write-Host "──────────────────────────────────────────────"  -ForegroundColor Cyan

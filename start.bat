@@ -39,12 +39,15 @@ if not exist erp.db (
 )
 
 REM ── Launch ──────────────────────────────────────────────────
-REM HOST + PORT come from .env (loaded by execution/config.py at import
-REM time). The values below are only used when those env vars are unset.
+REM Resolve HOST + PORT from config.py — the single source of truth, which
+REM loads .env. (uvicorn binds to the CLI --host/--port we pass below, so we
+REM must read the effective values here rather than rely on shell env vars.)
+for /f "delims=" %%i in ('%PYTHON% -c "import sys;sys.path.insert(0,'execution');from config import HOST;print(HOST)"') do set HOST=%%i
+for /f "delims=" %%i in ('%PYTHON% -c "import sys;sys.path.insert(0,'execution');from config import PORT;print(PORT)"') do set PORT=%%i
 if "%HOST%"=="" set HOST=0.0.0.0
 if "%PORT%"=="" set PORT=8000
 
-echo [3/3] Starting ERP server on %HOST%:%PORT% ...
+echo [3/3] Starting ERP server on %HOST%:%PORT% (from .env via config.py) ...
 echo.
 echo  Open your browser: http://localhost:%PORT%
 echo  Press Ctrl+C to stop.
