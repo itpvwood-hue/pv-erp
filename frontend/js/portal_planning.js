@@ -4486,6 +4486,7 @@ async function gmSubmitMix(){
     (_gmSelectedBatches.length>1 ? ` [Shared mix across batches: ${allBNs}]` : '');
   const body={
     batch_id: primary.batch_number,
+    batch_numbers: _gmSelectedBatches.map(b=>b.batch_number),
     recipe_code: _gmActiveRecipe.recipe_code,
     qty_kg: totalKg,
     mix_time_min: parseInt(document.getElementById('gm-mix-min').value)||_gmActiveRecipe.mix_time_min||20,

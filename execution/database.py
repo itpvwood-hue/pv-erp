@@ -628,6 +628,22 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bml_batch ON batch_material_lots(batch_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bml_lot ON batch_material_lots(lot_id)")
+
+    # ── Glue mix ↔ batch link (one mix can serve many batches / POs) ──
+    # A single glue mix is often shared across batches from DIFFERENT sales POs
+    # (operators group identical recipes). glue_mix_log only carries one primary
+    # batch_id; this table records EVERY batch a mix served so traceability
+    # attributes the real mix to all of them.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS glue_mix_batches (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            mix_id       TEXT NOT NULL,
+            batch_number TEXT NOT NULL,
+            UNIQUE(mix_id, batch_number)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gmb_batch ON glue_mix_batches(batch_number)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gmb_mix ON glue_mix_batches(mix_id)")
     conn.commit()
 
     _migrations = [
@@ -924,6 +940,30 @@ def init_db():
                SET waste_factor = CASE WHEN seq IN (2,3) THEN 0.05 ELSE 0 END
              WHERE waste_factor IS NULL
         """)
+        conn.commit()
+    except Exception:
+        pass
+
+    # ── Backfill glue_mix_batches from existing glue_mix_log (idempotent) ──
+    # Captures each mix's primary batch_id plus any batch numbers recorded in
+    # the legacy "[Shared mix across batches: …]" notes tag, so historical
+    # shared mixes are linked. INSERT OR IGNORE keeps it safe to run each boot.
+    try:
+        import re as _re
+        for r in conn.execute("SELECT mix_id, batch_id, notes FROM glue_mix_log").fetchall():
+            bns = set()
+            if r['batch_id']:
+                bns.add(str(r['batch_id']).strip())
+            m = _re.search(r'Shared mix across batches:\s*([^\]]+)', r['notes'] or '')
+            if m:
+                for bn in m.group(1).split(','):
+                    bn = bn.strip()
+                    if bn:
+                        bns.add(bn)
+            for bn in bns:
+                conn.execute(
+                    "INSERT OR IGNORE INTO glue_mix_batches (mix_id, batch_number) VALUES (?,?)",
+                    (r['mix_id'], bn))
         conn.commit()
     except Exception:
         pass
@@ -6635,12 +6675,19 @@ def get_po_document_trace(po_id: int) -> dict:
                     pass
 
         # ── Glue: what the glue-mix station actually consumed for these batches ──
+        # Match via the glue_mix_batches link table (captures shared mixes that
+        # span multiple POs) OR the legacy direct batch_id on glue_mix_log.
         if batch_numbers:
             qmarks = ",".join("?" * len(batch_numbers))
             mixes = conn.execute(f"""
-                SELECT actual_components, recipe_id, recipe_code, qty_kg
-                FROM glue_mix_log WHERE batch_id IN ({qmarks})
-            """, batch_numbers).fetchall()
+                SELECT DISTINCT g.mix_id, g.actual_components, g.recipe_id,
+                       g.recipe_code, g.qty_kg
+                FROM glue_mix_log g
+                WHERE g.batch_id IN ({qmarks})
+                   OR g.mix_id IN (
+                        SELECT mix_id FROM glue_mix_batches
+                        WHERE batch_number IN ({qmarks}))
+            """, batch_numbers + batch_numbers).fetchall()
             for mx in mixes:
                 comps = []
                 if mx['actual_components']:
@@ -6881,6 +6928,16 @@ def log_glue_mix_with_stock(data: dict) -> dict:
          data.get('mix_time_min'), data.get('notes'),
          recipe_id, round(total_kg, 4), round(total_cost, 4),
          round(cost_per_kg, 4), _json.dumps(actual_components)))
+
+    # Link this mix to EVERY batch it served (shared mixes span multiple POs).
+    # Falls back to the single primary batch_id when no list is supplied.
+    _bns = data.get('batch_numbers') or ([data['batch_id']] if data.get('batch_id') else [])
+    for _bn in _bns:
+        _bn = str(_bn).strip()
+        if _bn:
+            conn.execute(
+                "INSERT OR IGNORE INTO glue_mix_batches (mix_id, batch_number) VALUES (?,?)",
+                (mid, _bn))
     conn.commit(); conn.close()
 
     # Deduct components from station_stock (separate path so a stock-write
@@ -6924,6 +6981,13 @@ def log_glue_mix(data):
             (mid,data['batch_id'],data['recipe_code'],data['qty_kg'],
              data.get('operator_id'),data.get('operator_name',''),
              data.get('mix_time_min'),data.get('notes')))
+        # Link to every batch served (defaults to the single primary batch)
+        for _bn in (data.get('batch_numbers') or ([data['batch_id']] if data.get('batch_id') else [])):
+            _bn = str(_bn).strip()
+            if _bn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO glue_mix_batches (mix_id, batch_number) VALUES (?,?)",
+                    (mid, _bn))
         conn.commit()
         return mid
     finally:
