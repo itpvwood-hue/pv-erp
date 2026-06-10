@@ -126,18 +126,28 @@ TOOLS = [
     {
         "name": "export_to_excel",
         "description": (
-            "Write a list of row-objects to an .xlsx file and return its "
-            "download path. Use this whenever the user asks for an "
-            "analysis they want to keep, send, or open in Excel. The "
-            "first row's keys become column headers. Returns the public "
-            "download URL the UI can link to."
+            "Write query results to an .xlsx file and return its download URL. "
+            "Use this whenever the user wants an analysis to keep, send, or open "
+            "in Excel.\n"
+            "ALMOST ALWAYS pass `sql`: give the SELECT statement and the server "
+            "runs it and writes every matching row to the sheet. Do NOT run "
+            "query_database first and then paste the rows back — that wastes "
+            "huge amounts of tokens and will fail on large results. Just pass "
+            "the `sql` directly here.\n"
+            "Only use `rows` for a small, hand-built table you computed yourself "
+            "that has no single SQL query behind it. The column headers come "
+            "from the query columns (or the first row's keys)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "A single read-only SELECT/WITH statement. The server executes it and exports the result. PREFERRED — pass this instead of rows.",
+                },
                 "rows": {
                     "type": "array",
-                    "description": "Array of objects; each object is one row. Keys must be consistent across rows.",
+                    "description": "Fallback only: a small array of row-objects you built by hand (no SQL behind it). Prefer `sql`.",
                     "items": {"type": "object"},
                 },
                 "sheet_name": {
@@ -149,7 +159,7 @@ TOOLS = [
                     "description": "Suggested basename without extension (e.g. 'low_stock_2026_q2'). A timestamp is appended automatically.",
                 },
             },
-            "required": ["rows"],
+            "required": [],
         },
     },
     {
@@ -223,6 +233,11 @@ HOW YOU WORK
 - Plan an analysis: understand the question -> probe the schema with small
   queries -> run the real aggregation -> state the finding. Use LIMIT when
   sampling; don't scan blindly.
+- EXPORTING TO EXCEL: pass the SELECT statement as export_to_excel's `sql`
+  argument and let the server fetch and write the rows. NEVER run
+  query_database and then paste the result rows into export_to_excel — that
+  re-emits the whole dataset and exhausts the token budget. The export's `sql`
+  can be the exact query whose result the user wants saved.
 - Constructive by default. Every problem you flag comes with the next action
   and which ERP screen to do it on (e.g. "raise this on Material Shortfalls",
   "log it at the Glue Mixing station", "check the BOM -> Glue Formulas tab").
@@ -267,6 +282,7 @@ def _run_tool(name: str, params: dict[str, Any]) -> Any:
         return _tool_read_log(int(params.get("lines") or 200))
     if name == "export_to_excel":
         return _tool_export(
+            sql=params.get("sql") or "",
             rows=params.get("rows") or [],
             sheet_name=params.get("sheet_name") or "Report",
             filename=params.get("filename") or "fa_report",
@@ -304,7 +320,9 @@ def _open_conn() -> sqlite3.Connection:
     return conn
 
 
-def _tool_query(sql: str) -> dict:
+def _run_select(sql: str) -> dict:
+    """Guarded SELECT execution shared by query_database and export_to_excel.
+    Returns {rows:[...], truncated:bool} or {error:str}."""
     sql = (sql or "").strip().rstrip(";")
     if not sql:
         return {"error": "Empty SQL."}
@@ -320,15 +338,22 @@ def _tool_query(sql: str) -> dict:
         rows = cur.fetchmany(MAX_SQL_ROWS + 1)
         truncated = len(rows) > MAX_SQL_ROWS
         if truncated: rows = rows[:MAX_SQL_ROWS]
-        return {
-            "row_count": len(rows),
-            "truncated": truncated,
-            "rows": [dict(r) for r in rows],
-        }
+        return {"rows": [dict(r) for r in rows], "truncated": truncated}
     except sqlite3.Error as e:
         return {"error": f"SQL error: {e}"}
     finally:
         conn.close()
+
+
+def _tool_query(sql: str) -> dict:
+    res = _run_select(sql)
+    if "error" in res:
+        return res
+    return {
+        "row_count": len(res["rows"]),
+        "truncated": res["truncated"],
+        "rows": res["rows"],
+    }
 
 
 def _tool_list_tables() -> dict:
@@ -379,9 +404,19 @@ def _tool_read_log(lines: int) -> dict:
         return {"error": f"Could not read log: {e}"}
 
 
-def _tool_export(*, rows: list, sheet_name: str, filename: str) -> dict:
+def _tool_export(*, rows: list, sheet_name: str, filename: str, sql: str = "") -> dict:
+    # Preferred path: the model passes a SELECT and the SERVER fetches the rows.
+    # This avoids forcing the model to re-emit the whole dataset as tool input
+    # (which blows the output-token budget on anything but tiny results).
+    if sql:
+        res = _run_select(sql)
+        if "error" in res:
+            return res
+        rows = res["rows"]
+        if not rows:
+            return {"error": "Query returned no rows — nothing to export."}
     if not rows:
-        return {"error": "Nothing to export — rows array is empty."}
+        return {"error": "Provide a `sql` query to export (preferred), or a non-empty `rows` array."}
     if len(rows) > MAX_SQL_ROWS:
         return {"error": f"Too many rows ({len(rows)}); limit is {MAX_SQL_ROWS}."}
 
