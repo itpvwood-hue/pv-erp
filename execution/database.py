@@ -6592,15 +6592,33 @@ def get_po_document_trace(po_id: int) -> dict:
         boards, veneers, glue = {}, {}, {}
 
         def _docs_for(material_id):
+            # Traceability cares about QUALITY/cert documents (COA, MSDS,
+            # SUPPLIER_CERT, INSPECTION, OTHER…) — NOT purchasing paperwork.
+            # The purchasing flow auto-attaches a SUPPLIER_PO/PO doc to a
+            # material on every PR, which floods the report with files the
+            # user never uploaded; exclude those. De-dupe identical files
+            # (same stored_path is registered once per PR) and flag whether
+            # the file is actually present on disk so the UI never offers a
+            # broken download link.
             rows = conn.execute("""
                 SELECT d.id, d.doc_type, d.filename, d.file_size, d.content_type,
-                       d.uploaded_at, d.uploaded_by, ml.lot_code AS lot_code
+                       d.uploaded_at, d.uploaded_by, d.stored_path, ml.lot_code AS lot_code
                 FROM material_documents d
                 LEFT JOIN material_lots ml ON ml.id = d.lot_id
                 WHERE d.material_id = ?
+                  AND UPPER(COALESCE(d.doc_type,'')) NOT IN ('SUPPLIER_PO','PO')
                 ORDER BY d.uploaded_at DESC
             """, (material_id,)).fetchall()
-            return [dict(r) for r in rows]
+            out, seen = [], set()
+            for r in rows:
+                r = dict(r)
+                sp = r.pop('stored_path', None)
+                if sp in seen:
+                    continue
+                seen.add(sp)
+                r['available'] = bool(sp and os.path.exists(os.path.join(DOCS_DIR, sp)))
+                out.append(r)
+            return out
 
         def _add(bucket, material_id, role, qty, uom, source):
             if not material_id:
@@ -6721,7 +6739,11 @@ def get_po_document_trace(po_id: int) -> dict:
             for ent in bucket.values():
                 ent['sources'] = ", ".join(sorted(ent['sources']))
                 ent['qty'] = round(ent['qty'], 3)
-                ent['doc_count'] = len(ent['documents'])
+                docs = ent['documents']
+                # doc_count = downloadable PDFs; missing_count = recorded but
+                # the file isn't present on this server.
+                ent['doc_count'] = sum(1 for d in docs if d.get('available'))
+                ent['missing_count'] = sum(1 for d in docs if not d.get('available'))
                 out.append(ent)
             out.sort(key=lambda e: (e['material_code'] or ''))
             return out
@@ -6731,12 +6753,14 @@ def get_po_document_trace(po_id: int) -> dict:
             "veneers": _finalise(veneers),
             "glue":    _finalise(glue),
         }
-        doc_count = sum(it['doc_count'] for sec in sections.values() for it in sec)
+        doc_count     = sum(it['doc_count']     for sec in sections.values() for it in sec)
+        missing_count = sum(it['missing_count'] for sec in sections.values() for it in sec)
         return {
             "purchase_order": po,
             "production_orders": prod_orders,
             "sections": sections,
             "doc_count": doc_count,
+            "missing_count": missing_count,
         }
     finally:
         conn.close()
@@ -6757,6 +6781,8 @@ def get_po_document_trace_files(po_id: int) -> list:
         for section, items in trace['sections'].items():
             for it in items:
                 for d in it['documents']:
+                    if not d.get('available'):
+                        continue  # file not on disk — nothing to bundle
                     did = d['id']
                     if did in seen:
                         continue

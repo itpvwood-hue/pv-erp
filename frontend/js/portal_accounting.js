@@ -591,13 +591,21 @@ function traceExport(ev){
   return false;
 }
 function _traceDocBadges(docs){
-  if(!docs || !docs.length) return '<span class="text-muted small">— no PDF attached —</span>';
-  return docs.map(d=>{
+  if(!docs || !docs.length) return '<span class="text-muted small">— no document on file —</span>';
+  const avail = docs.filter(d=>d.available);
+  const missing = docs.filter(d=>!d.available);
+  let html = avail.map(d=>{
     const kb = d.file_size ? ' ('+Math.max(1,Math.round(d.file_size/1024))+' KB)' : '';
     return `<a class="badge bg-danger text-decoration-none me-1 mb-1" title="${d.filename||''}${kb}"
       href="/api/material-documents/${d.id}/download" target="_blank">
       <i class="bi bi-file-earmark-pdf me-1"></i>${d.doc_type||'PDF'}</a>`;
   }).join('');
+  if(missing.length){
+    html += `<span class="badge bg-light text-muted border me-1 mb-1" title="${missing.map(d=>d.filename||d.doc_type).join(', ')}">
+      <i class="bi bi-exclamation-triangle me-1"></i>${missing.length} not on this server</span>`;
+  }
+  if(!avail.length && missing.length) return html;
+  return html || '<span class="text-muted small">— no document on file —</span>';
 }
 function _traceSection(title, icon, colour, items){
   const total = items.reduce((s,it)=>s+(it.doc_count||0),0);
@@ -643,10 +651,13 @@ function traceRender(r){
         <i class="bi bi-file-earmark-zip me-1"></i>Download all PDFs (${totalDocs})
       </button>
     </div></div></div>`;
+  const missing=r.missing_count||0;
   if(!pos.length){
     html+='<div class="alert alert-warning small">No production orders linked to this PO yet.</div>';
+  }else if(!totalDocs && missing){
+    html+=`<div class="alert alert-warning small">${missing} cert/document${missing!==1?'s are':' is'} recorded for these materials, but the file${missing!==1?'s are':' is'} not present on this server (uploaded elsewhere). Nothing to download.</div>`;
   }else if(!totalDocs){
-    html+='<div class="alert alert-info small">Materials were traced, but none of them have PDF documents uploaded yet. Attach supplier certs/COAs on the Lots &amp; Documents page.</div>';
+    html+='<div class="alert alert-info small">Materials were traced, but no quality documents (COA/MSDS/cert) have been uploaded for them yet. Attach them on the Lots &amp; Documents page.</div>';
   }
   html+=_traceSection('Boards', 'bi-layers', 'primary', sec.boards||[]);
   html+=_traceSection('Veneers', 'bi-file-earmark', 'info', sec.veneers||[]);

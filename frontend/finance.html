@@ -1472,9 +1472,12 @@ function ftraceExport(ev){
   window.open('/api/export/traceability/po/'+id+'/zip','_blank'); return false;
 }
 function _ftraceDocs(docs){
-  if(!docs||!docs.length) return '<span class="text-muted small">— no PDF —</span>';
-  return docs.map(d=>`<a class="badge bg-danger text-decoration-none me-1 mb-1" title="${d.filename||''}"
+  if(!docs||!docs.length) return '<span class="text-muted small">— no document on file —</span>';
+  const avail=docs.filter(d=>d.available), missing=docs.filter(d=>!d.available);
+  let h=avail.map(d=>`<a class="badge bg-danger text-decoration-none me-1 mb-1" title="${d.filename||''}"
     href="/api/material-documents/${d.id}/download" target="_blank"><i class="bi bi-file-earmark-pdf me-1"></i>${d.doc_type||'PDF'}</a>`).join('');
+  if(missing.length) h+=`<span class="badge bg-light text-muted border me-1 mb-1" title="${missing.map(d=>d.filename||d.doc_type).join(', ')}"><i class="bi bi-exclamation-triangle me-1"></i>${missing.length} not on this server</span>`;
+  return h || '<span class="text-muted small">— no document on file —</span>';
 }
 function _ftraceSection(title,icon,items){
   const total=items.reduce((s,it)=>s+(it.doc_count||0),0);
@@ -1507,8 +1510,10 @@ function ftraceRender(r){
     <button class="btn btn-sm btn-success" ${totalDocs?'':'disabled'} onclick="window.open('/api/export/traceability/po/'+${JSON.stringify(id)}+'/zip','_blank')">
       <i class="bi bi-file-earmark-zip me-1"></i>Download all PDFs (${totalDocs})</button>
   </div></div></div>`;
+  const missing=r.missing_count||0;
   if(!pos.length) h+='<div class="alert alert-warning small">No production orders linked yet.</div>';
-  else if(!totalDocs) h+='<div class="alert alert-info small">Materials traced, but no PDFs uploaded for them yet.</div>';
+  else if(!totalDocs && missing) h+=`<div class="alert alert-warning small">${missing} document(s) recorded for these materials, but the file(s) are not on this server.</div>`;
+  else if(!totalDocs) h+='<div class="alert alert-info small">Materials traced, but no quality documents (COA/MSDS/cert) uploaded for them yet.</div>';
   h+=_ftraceSection('Boards','bi-layers',sec.boards||[]);
   h+=_ftraceSection('Veneers','bi-file-earmark',sec.veneers||[]);
   h+=_ftraceSection('Glue','bi-droplet',sec.glue||[]);
