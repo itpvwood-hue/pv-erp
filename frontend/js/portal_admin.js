@@ -109,10 +109,12 @@ async function faSend(){
         const card = document.createElement('div');
         card.className = 'd-inline-block me-2 mb-2';
         card.innerHTML = `
-          <a class="btn btn-sm btn-outline-success" href="${ex.download_url}" target="_blank">
+          <button type="button" class="btn btn-sm btn-outline-success">
             <i class="bi bi-file-earmark-spreadsheet me-1"></i>${ex.filename}
             <span class="badge bg-success-subtle text-success ms-1">${ex.row_count} rows</span>
-          </a>`;
+          </button>`;
+        card.querySelector('button').addEventListener('click',
+          () => authedDownload(ex.download_url, ex.filename));
         tray.appendChild(card);
       });
     }

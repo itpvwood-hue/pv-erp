@@ -20,6 +20,23 @@ async function api(path,method='GET',body=null){
   const ct=r.headers.get('content-type')||'';
   return ct.includes('json')?r.json():{};
 }
+// Download a file from an AUTH-GATED endpoint. A plain <a href>/window.open
+// can't attach the X-Auth-Token header, so the browser hits the endpoint
+// unauthenticated (401). Fetch it with the header, then save the blob.
+async function authedDownload(url, filename){
+  const token=localStorage.getItem('erp_token')||'';
+  try{
+    const r=await fetch(url,{headers:{'X-Auth-Token':token}});
+    if(r.status===401){doLogout();return;}
+    if(!r.ok){const e=await r.json().catch(()=>({detail:r.statusText}));throw new Error(e.detail||r.statusText);}
+    const blob=await r.blob();
+    const obj=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=obj; a.download=filename||'download';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(obj),1000);
+  }catch(e){ toast('Download failed: '+(e.message||e),'danger'); }
+}
 function toast(msg,type='success'){
   const el=document.getElementById('toast');
   el.className=`toast align-items-center text-bg-${type} border-0`;
