@@ -2276,8 +2276,11 @@ const SL_DEPT_OPTIONS = {
 // Station Leader Hub line options — main production lines only (excludes
 // aux PUV/PVS/PSP which don't have a station-leader workflow).
 function SL_LINE_OPTIONS_get(){
-  const codes = catalogLineCodes('main');
-  return codes.length ? codes : ['P01','P02','P37'];
+  // Main lamination lines + FC (its own 'prep' line, where a batch's first
+  // step happens). Keeps FC selectable in the Station Hub without putting it
+  // on the main line board.
+  const codes = [...catalogLineCodes('prep'), ...catalogLineCodes('main')];
+  return codes.length ? codes : ['FC','P01','P02','P37'];
 }
 
 function slPostReportPrompt(batch, pcsReported, opts){

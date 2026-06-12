@@ -1393,7 +1393,10 @@ def _seed_real_glue_recipes(conn):
 # All inserts are upserts keyed by primary key so re-running init_db is safe.
 
 # (code, label, line_type, sort_order)
+# FC / Cutting is its OWN line (a shared upstream prep operation that feeds the
+# lamination lines) — not a station owned by P01/P02/P37.
 _DEFAULT_LINES = [
+    ('FC',  'FC / Cutting',        'prep', 0),
     ('P01', 'Production Line 01', 'main', 1),
     ('P02', 'Production Line 02', 'main', 2),
     ('P37', 'Production Line 37', 'main', 3),
@@ -1419,7 +1422,11 @@ _DEFAULT_DEPARTMENTS = [
 
 # Production flow per line. Aux lines have no flow (they're request-only hubs).
 # Each list = department code sequence the line traverses.
+# FC's own flow is just the cutting step (so the FC line owns the FC station).
+# The main lines still LIST fc at seq 0 so a batch starts at FC, but they no
+# longer own a per-line FC station (see the station seed below).
 _DEFAULT_FLOW = {
+    'FC':  ['fc'],
     'P01': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
     'P02': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
     'P37': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
@@ -1475,6 +1482,11 @@ def _seed_lines_and_departments(conn):
     for line_code, depts in _DEFAULT_FLOW.items():
         for dept in depts:
             if dept in centralised: continue   # handled below
+            # FC is its own line — only the FC line owns the FC/Cutting station;
+            # the main lines list fc in their flow (batch starts there) but don't
+            # get a per-line FC station.
+            if dept == 'fc' and line_code != 'FC':
+                continue
             existing = conn.execute(
                 "SELECT id FROM stations WHERE line_code=? AND department_code=?",
                 (line_code, dept)).fetchone()
@@ -1485,6 +1497,11 @@ def _seed_lines_and_departments(conn):
             conn.execute("""INSERT INTO stations
                             (line_code, department_code, label, is_active)
                             VALUES (?,?,?,1)""", (line_code, dept, label))
+    # Retire any pre-existing per-(main)line FC stations (P01.fc / P02.fc /
+    # P37.fc) now that FC is its own line. Deactivate (don't delete) so any
+    # historical references stay intact. Idempotent.
+    conn.execute("UPDATE stations SET is_active=0 "
+                 "WHERE department_code='fc' AND COALESCE(line_code,'') NOT IN ('','FC')")
     for dept_code in centralised:
         existing = conn.execute(
             "SELECT id FROM stations WHERE line_code IS NULL AND department_code=?",
