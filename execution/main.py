@@ -1009,8 +1009,14 @@ def add_dept_activity(body: DeptActivityIn): return create_dept_activity(body.di
 # BULK UPLOAD
 # ══════════════════════════════════════════════════════════════
 @app.post("/api/upload/inventory")
-async def upload_inventory(file: UploadFile = File(...), mode: str = "add"):
+async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
+                           default_type: str = ""):
     """mode=add: upsert (default). mode=replace: delete rows by code then re-insert.
+
+    default_type: category to apply to any row that doesn't carry its own
+    `type` column — set by the Veneers/Boards drop zones (whose templates have
+    no type column) so their rows aren't all filed as 'other'. A row's explicit
+    `type` always wins.
 
     Encoding: tries UTF-8 (with BOM), then CP1252 / Windows-1252 (most common
     Excel save format), then latin-1 as a last-resort that never fails.
@@ -1049,6 +1055,9 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add"):
         if not row.get('name'):
             errors.append(f"Row {src_lineno}: missing 'name' (had code={row.get('code') or '?'})")
             continue
+        # Apply the drop-zone's category to rows that don't specify their own.
+        if default_type and not (row.get('type') or '').strip():
+            row['type'] = default_type
         try:
             r = bulk_upsert_material(row)
             results.append(r)

@@ -1014,11 +1014,11 @@
                 onclick="document.getElementById('dt-file-veneers').click()"
                 ondragover="event.preventDefault();this.classList.add('drag-over')"
                 ondragleave="this.classList.remove('drag-over')"
-                ondrop="this.classList.remove('drag-over');dtUploadDrop('inventory',event)">
+                ondrop="this.classList.remove('drag-over');dtUploadDrop('inventory',event,'veneer')">
                 <i class="bi bi-cloud-upload me-1 text-muted"></i>
                 <span class="text-muted small">Drop veneer .csv here</span>
               </div>
-              <input type="file" id="dt-file-veneers" accept=".csv" class="d-none" onchange="dtUpload('inventory',this)">
+              <input type="file" id="dt-file-veneers" accept=".csv" class="d-none" onchange="dtUpload('inventory',this,'veneer')">
             </div>
           </div>
         </div>
@@ -1038,11 +1038,11 @@
                 onclick="document.getElementById('dt-file-boards').click()"
                 ondragover="event.preventDefault();this.classList.add('drag-over')"
                 ondragleave="this.classList.remove('drag-over')"
-                ondrop="this.classList.remove('drag-over');dtUploadDrop('inventory',event)">
+                ondrop="this.classList.remove('drag-over');dtUploadDrop('inventory',event,'board')">
                 <i class="bi bi-cloud-upload me-1 text-muted"></i>
                 <span class="text-muted small">Drop board .csv here</span>
               </div>
-              <input type="file" id="dt-file-boards" accept=".csv" class="d-none" onchange="dtUpload('inventory',this)">
+              <input type="file" id="dt-file-boards" accept=".csv" class="d-none" onchange="dtUpload('inventory',this,'board')">
             </div>
           </div>
         </div>
@@ -5878,13 +5878,13 @@ async function _doUploadCsv(type,file){
 // ════════════════════════════════════════════════════════════
 // DATA TOOLS — Upload with mode (add / replace)
 // ════════════════════════════════════════════════════════════
-async function dtUpload(type, input){
+async function dtUpload(type, input, defaultType=''){
   const file = input.files[0]; if(!file) return;
   const mode = document.querySelector(`input[name="dt-mode-${type}"]:checked`)?.value || 'add';
-  await _dtDoUpload(type, file, mode);
+  await _dtDoUpload(type, file, mode, defaultType);
   input.value = '';
 }
-function dtUploadDrop(type, event){
+function dtUploadDrop(type, event, defaultType=''){
   const file = event.dataTransfer?.files?.[0];
   const rid = `dt-result-${type}`;
   if(!file || !file.name.endsWith('.csv')){
@@ -5892,16 +5892,17 @@ function dtUploadDrop(type, event){
     return;
   }
   const mode = document.querySelector(`input[name="dt-mode-${type}"]:checked`)?.value || 'add';
-  _dtDoUpload(type, file, mode);
+  _dtDoUpload(type, file, mode, defaultType);
 }
-async function _dtDoUpload(type, file, mode){
+async function _dtDoUpload(type, file, mode, defaultType=''){
   const rid = `dt-result-${type}`;
   const el = document.getElementById(rid);
   const endpoint = type === 'inventory' ? '/api/upload/inventory' : '/api/upload/bom';
   el.innerHTML = '<div class="d-flex align-items-center gap-2 text-muted small"><div class="spinner-border spinner-border-sm"></div>Uploading '+file.name+'…</div>';
   try{
     const fd = new FormData(); fd.append('file', file);
-    const r = await fetch(`${endpoint}?mode=${mode}`, {method:'POST', body:fd});
+    const dt = (type==='inventory' && defaultType) ? `&default_type=${encodeURIComponent(defaultType)}` : '';
+    const r = await fetch(`${endpoint}?mode=${mode}${dt}`, {method:'POST', body:fd});
     const data = await r.json();
     if(!r.ok) throw new Error(data.detail || 'Upload failed');
     const modeLabel = mode === 'replace' ? 'replaced' : 'imported';

@@ -980,6 +980,29 @@ def init_db():
     _migrations = [
         "ALTER TABLE materials ADD COLUMN code TEXT DEFAULT ''",
         "ALTER TABLE materials ADD COLUMN fc_stock REAL DEFAULT 0",
+        # Extended material attributes (Thai/Chinese names, veneer/board specs,
+        # dimensions, accounting code, etc.). These existed only on long-lived
+        # dev DBs; without them a fresh install (a) crashed the warehouse
+        # dashboard on m.name_th and (b) silently dropped veneer/board columns
+        # on import. Idempotent: ALTERs that already applied just error+skip.
+        "ALTER TABLE materials ADD COLUMN name_th TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN name_zh TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN is_active INTEGER DEFAULT 1",
+        "ALTER TABLE materials ADD COLUMN supplier_id INTEGER",
+        "ALTER TABLE materials ADD COLUMN price REAL DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN thickness_mm REAL",
+        "ALTER TABLE materials ADD COLUMN width_mm REAL",
+        "ALTER TABLE materials ADD COLUMN length_mm REAL",
+        "ALTER TABLE materials ADD COLUMN auto_glue_code TEXT",
+        "ALTER TABLE materials ADD COLUMN acc_code TEXT",
+        "ALTER TABLE materials ADD COLUMN board_type TEXT",
+        "ALTER TABLE materials ADD COLUMN glue_type TEXT",
+        "ALTER TABLE materials ADD COLUMN fsc TEXT",
+        "ALTER TABLE materials ADD COLUMN species TEXT",
+        "ALTER TABLE materials ADD COLUMN cut_type TEXT",
+        "ALTER TABLE materials ADD COLUMN matching TEXT",
+        "ALTER TABLE materials ADD COLUMN grade TEXT",
+        "ALTER TABLE materials ADD COLUMN face_back TEXT",
         "ALTER TABLE fc_transfer_requests ADD COLUMN direction TEXT DEFAULT 'inbound'",
         "ALTER TABLE fc_transfer_requests ADD COLUMN batch_ref TEXT DEFAULT ''",
         "ALTER TABLE fc_transfer_requests ADD COLUMN po_ref TEXT DEFAULT ''",
