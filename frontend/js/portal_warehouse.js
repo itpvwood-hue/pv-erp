@@ -459,6 +459,9 @@ function rrecRender(){
   if(cat)                   rows=rows.filter(r=>r.material_type===cat);
   if(q) rows=rows.filter(r=>JSON.stringify(r).toLowerCase().includes(q));
   const today=new Date().toISOString().slice(0,10);
+  // Only Warehouse + Managerial actually receive; other roles (e.g. Production
+  // Planning) get this page read-only for arrival planning.
+  const canReceive = ['WAREHOUSE','MANAGERIAL'].includes(((typeof getCurrentUser==='function'?getCurrentUser():null)||{}).role);
   const tb=document.getElementById('rrec-tbody');
   if(!rows.length){
     tb.innerHTML='<tr><td colspan="10" class="text-center text-muted py-4">No shipments match the filter.</td></tr>';
@@ -470,11 +473,11 @@ function rrecRender(){
       ? (r.planned_arrival<today && r.status!=='RECEIVED' ? 'text-danger fw-bold' : 'small')
       : 'small text-muted';
     let action;
-    if(r.status==='PLANNED'||r.status==='PARTIAL'){
+    if(canReceive && (r.status==='PLANNED'||r.status==='PARTIAL')){
       action=`<button class="btn btn-xs btn-success"
         onclick='rrecOpenReceive(${JSON.stringify(r).replace(/'/g,"&apos;")})'>
         <i class="bi bi-box-arrow-in-down me-1"></i>Receive</button>`;
-    }else if(r.status==='UNPLANNED'){
+    }else if(canReceive && r.status==='UNPLANNED'){
       action=`<button class="btn btn-xs btn-warning text-dark" title="No schedule yet — receive walk-in goods"
         onclick='rrecOpenReceive(${JSON.stringify(r).replace(/'/g,"&apos;")})'>
         <i class="bi bi-box-arrow-in-down me-1"></i>Walk-in Receive</button>`;
