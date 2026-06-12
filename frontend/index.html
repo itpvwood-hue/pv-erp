@@ -5941,7 +5941,7 @@ const ROLE_PAGES = {
   ]),
   PRODUCTION_PLANNING: new Set([
     'dashboard','customers','order-intake','line-board','prod-flow',
-    'bom','materials','fg','lots-docs','traceability','wip-import',
+    'bom','materials','fg','lots-docs','traceability','wip-import','raw-receiving',
     'dept-fg_warehouse',
     'prod-logs','reports','material-shortfalls',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
@@ -5989,7 +5989,7 @@ const NAV_SEC_ROLES = {
   'nav-sec-admin':           ['MANAGERIAL'],
   'nav-consumable-requests': ['DEPARTMENT_LEADER'],
   'nav-warehouse-queue':     ['WAREHOUSE'],
-  'nav-raw-receiving':       ['WAREHOUSE','MANAGERIAL'],
+  'nav-raw-receiving':       ['WAREHOUSE','MANAGERIAL','PRODUCTION_PLANNING'],
   'nav-forklift-refuel':     ['WAREHOUSE','MANAGERIAL'],
   'nav-forklift-dash':       ['WAREHOUSE','MANAGERIAL'],
   'nav-forklift-report':     ['MANAGERIAL','PRODUCTION_PLANNING'],
