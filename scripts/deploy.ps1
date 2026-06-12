@@ -17,8 +17,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ServiceName = "PVWoodERP",
-    [int]$Port = 8000,
+    [string]$ServiceName = "PVWoodERP",   # NSSM Windows service (if you use one)
+    [string]$TaskName    = "",            # Task Scheduler task name (auto-detected if blank)
+    [int]$Port           = 8000,
     [switch]$SkipBackup
 )
 
@@ -68,21 +69,65 @@ if ($before -eq $after) {
     Write-Host "Updated $before -> $after" -ForegroundColor Green
 }
 
-# -- 3. Restart the service (picks up new code; runs migrations) -------
-Write-Host "`n[3/4] Restarting service '$ServiceName'..." -ForegroundColor Cyan
-$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if (-not $svc) {
-    Write-Host "Service '$ServiceName' is not installed yet." -ForegroundColor Yellow
-    Write-Host "deploy.ps1 only UPDATES an existing service. Run the one-time install first:" -ForegroundColor Yellow
-    Write-Host "    .\scripts\install_service.ps1" -ForegroundColor Yellow
-    exit 1
+# -- 3. Restart the running server (NSSM service OR scheduled task) -----
+# Picks up the new code; DB migrations run on startup. Works whichever way
+# the server is launched: a Windows service, a Task Scheduler task, or just
+# a process holding the port.
+Write-Host "`n[3/4] Restarting the ERP server..." -ForegroundColor Cyan
+
+function Stop-PortProcess([int]$p) {
+    $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
+    foreach ($procId in (@($conns.OwningProcess) | Sort-Object -Unique)) {
+        if ($procId) { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue }
+    }
 }
-try {
-    Restart-Service -Name $ServiceName -Force -ErrorAction Stop
-} catch {
-    Write-Host "Could not restart '$ServiceName': $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "The service may be half-registered / 'marked for deletion'. Re-run the installer:" -ForegroundColor Yellow
-    Write-Host "    .\scripts\install_service.ps1   (it now waits for a stuck delete to clear)" -ForegroundColor Yellow
+
+$restarted = $false
+
+# (a) NSSM / Windows service, if one is installed and registered.
+$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($svc) {
+    try {
+        Restart-Service -Name $ServiceName -Force -ErrorAction Stop
+        Write-Host "  restarted Windows service '$ServiceName'" -ForegroundColor Green
+        $restarted = $true
+    } catch {
+        Write-Host "  service '$ServiceName' exists but would not restart: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# (b) Task Scheduler task (your setup). Find it by name, else auto-detect a
+#     task whose action runs uvicorn / main:app / start.bat / this repo.
+if (-not $restarted) {
+    $task = $null
+    if ($TaskName) {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    if (-not $task) {
+        $task = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+            $a = ($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' '
+            $a -match 'uvicorn|main:app|start\.bat|pvwood|pv-erp'
+        } | Select-Object -First 1
+    }
+    if ($task) {
+        $tn = $task.TaskName
+        Write-Host "  restarting scheduled task '$tn'..." -ForegroundColor Cyan
+        Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Stop-PortProcess $Port      # in case the server detached from the task
+        Start-Sleep -Seconds 1
+        Start-ScheduledTask -TaskName $tn
+        Write-Host "  scheduled task '$tn' restarted" -ForegroundColor Green
+        $restarted = $true
+    }
+}
+
+if (-not $restarted) {
+    Write-Host "No PVWoodERP service or scheduled task found to restart." -ForegroundColor Red
+    Write-Host "Options:" -ForegroundColor Yellow
+    Write-Host "  - Pass your task name:   .\scripts\deploy.ps1 -TaskName 'Your Task Name'" -ForegroundColor Yellow
+    Write-Host "  - List tasks to find it: Get-ScheduledTask | Where-Object State -ne 'Disabled' | Select TaskName,TaskPath" -ForegroundColor Yellow
+    Write-Host "  - Or start it manually:  .\start.bat" -ForegroundColor Yellow
     exit 1
 }
 
