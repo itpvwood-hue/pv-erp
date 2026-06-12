@@ -79,6 +79,7 @@ from database import (
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
     get_all_batches, get_batch, move_batch, split_batch, split_batch_by_pcs,
+    import_wip_batches,
     merge_batches, find_mergeable_siblings, get_batch_history, delete_batch,
     get_planning_flow, get_po_flow_matrix,
     create_laminating_record, get_laminating_records, get_laminating_stats,
@@ -1318,6 +1319,41 @@ def consumables_template():
         "PKG-TP,Packing Tape 48mm,packing,roll,80,20,35.00,Pack Supply Co.",
     ]
     return _csv_response(rows, "consumables_template.csv")
+
+@app.get("/api/upload/template/wip")
+def wip_template():
+    """Opening work-in-progress template — one in-flight job per row, placed at
+    its current station. sku_code must match an existing finished-good SKU;
+    line is the manufacturing line; current_station is the department it's at."""
+    rows = [
+        "sku_code,line,quantity,current_station,batch_ref,po_ref",
+        "3ENR24NF1,P01,120,laminating,WIP-A12,POD250389",
+        "3ENR28NF1,P01,80,sanding,WIP-A13,",
+        "3ENR30NF1,P02,200,grading,WIP-B07,POD20056",
+        "3ENR32NF1,P37,60,packing,WIP-C01,",
+    ]
+    return _csv_response(rows, "opening_wip_template.csv")
+
+@app.post("/api/upload/wip")
+async def upload_wip(file: UploadFile = File(...), mode: str = "validate"):
+    """Validate (mode=validate, default) or import (mode=commit) opening WIP.
+    Always returns a per-row report with errors + closest-match suggestions so
+    bad SKU/line/station names are caught before anything is written."""
+    content = await file.read()
+    text = None
+    for enc in ('utf-8-sig', 'cp1252', 'latin-1'):
+        try:
+            text = content.decode(enc); break
+        except UnicodeDecodeError:
+            continue
+    rows_csv = list(csv.DictReader(io.StringIO(text or '')))
+    rows_csv = [{(k or '').strip().lower().replace(' ', '_'): (v.strip() if v else '')
+                 for k, v in r.items()} for r in rows_csv]
+    # drop fully-blank rows (Excel trailing artifact)
+    rows_csv = [r for r in rows_csv if any(r.get(k) for k in
+                ('sku_code', 'line', 'quantity', 'current_station', 'batch_ref', 'po_ref'))]
+    return import_wip_batches(rows_csv, commit=(mode == 'commit'),
+                              created_by='wip_import')
 
 @app.post("/api/upload/po-pdf")
 async def upload_po_pdf(file: UploadFile = File(...)):

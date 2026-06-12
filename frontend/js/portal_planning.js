@@ -9168,7 +9168,73 @@ async function loadDashboard(){
 
 
 // ── Page loader registry ────────────────────────────────────
+// ── Opening WIP import ───────────────────────────────────────
+let _wipLastReport = null;
+function loadWipImport(){
+  document.getElementById('wip-results').innerHTML = '';
+  document.getElementById('wip-summary').textContent = '';
+  const btn = document.getElementById('wip-import-btn');
+  if(btn) btn.disabled = true;
+  _wipLastReport = null;
+}
+async function _wipSend(mode){
+  const f = document.getElementById('wip-file').files[0];
+  if(!f){ toast('Choose a CSV file first','warning'); return null; }
+  const fd = new FormData(); fd.append('file', f);
+  const token = localStorage.getItem('erp_token')||'';
+  const r = await fetch('/api/upload/wip?mode='+mode, {
+    method:'POST', headers:{'X-Auth-Token':token}, body:fd });
+  if(r.status===401){ doLogout(); return null; }
+  if(!r.ok){ const e=await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||r.statusText); }
+  return r.json();
+}
+function _wipRender(res){
+  _wipLastReport = res;
+  const btn = document.getElementById('wip-import-btn');
+  const committed = res.mode === 'commit';
+  document.getElementById('wip-summary').innerHTML =
+    `<b>${res.valid}</b> valid · <b class="${res.invalid?'text-danger':''}">${res.invalid}</b> invalid` +
+    (committed ? ` · <b class="text-success">${res.created} imported</b>` : '');
+  if(btn) btn.disabled = committed || res.valid === 0;
+  const rowsHtml = res.report.map(r=>{
+    const sug = Object.entries(r.suggestions||{}).map(([k,v])=>
+      `<span class="badge bg-warning-subtle text-dark border me-1">${k} → ${v}</span>`).join('');
+    const errs = (r.errors||[]).map(e=>`<div class="text-danger">${e}</div>`).join('');
+    const status = r.created_batch
+      ? `<span class="badge bg-success">imported ${r.created_batch}</span>`
+      : (r.ok ? '<span class="badge bg-primary">ready</span>'
+              : '<span class="badge bg-danger">fix</span>');
+    return `<tr class="${r.ok?'':'table-danger'}">
+      <td class="small">${r.row}</td>
+      <td class="small"><b>${r.sku_code||'—'}</b></td>
+      <td class="small">${r.line||'—'}</td>
+      <td class="small">${r.current_station||'—'}</td>
+      <td class="small text-end">${r.quantity||'—'}</td>
+      <td class="small">${r.batch_ref||''}</td>
+      <td>${status}${errs?'<div class="small mt-1">'+errs+'</div>':''}${sug?'<div class="small mt-1">'+sug+'</div>':''}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('wip-results').innerHTML = `
+    <div class="table-responsive"><table class="table table-sm table-hover align-middle">
+      <thead class="table-light"><tr>
+        <th>#</th><th>SKU</th><th>Line</th><th>Station</th><th class="text-end">Qty</th><th>Ref</th><th>Status</th>
+      </tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+}
+async function wipValidate(){
+  try{ const res = await _wipSend('validate'); if(res) _wipRender(res); }
+  catch(e){ toast('Validation failed: '+e.message,'danger'); }
+}
+async function wipCommit(){
+  if(!_wipLastReport || _wipLastReport.valid===0){ toast('Validate first','warning'); return; }
+  if(!confirm(`Import ${_wipLastReport.valid} valid WIP batch(es)? Invalid rows are skipped.`)) return;
+  try{
+    const res = await _wipSend('commit');
+    if(res){ _wipRender(res); toast(`${res.created} WIP batch(es) imported`,'success'); }
+  }catch(e){ toast('Import failed: '+e.message,'danger'); }
+}
+
 Object.assign(PAGE_LOADERS, {
+  'wip-import':          loadWipImport,
   'dashboard':           loadDashboard,
   'vcmx':                vcmxLoad,
   'vcmx-lam':            vcmxLamLoad,

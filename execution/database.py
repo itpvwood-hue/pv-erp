@@ -2304,6 +2304,131 @@ def delete_batch(batch_id):
     conn.commit()
     conn.close()
 
+def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -> dict:
+    """Bulk-import opening work-in-progress: one production order + one batch
+    per row, placed at its current station. Used for the go-live cutover so
+    the floor's in-flight goods appear without replaying their full history.
+
+    Each row: {sku_code, line, quantity, current_station, batch_ref?, po_ref?}
+
+    Always validates against the live catalogue (SKUs, lines, stations) and
+    returns a per-row report with errors + closest-match suggestions (the
+    'name checker'). With commit=False it's a pure dry run (writes nothing).
+    With commit=True it creates records ONLY for rows that pass validation.
+    """
+    import difflib, datetime as _dt
+    conn = get_db()
+    try:
+        valid_skus  = {r[0]: r[1] for r in conn.execute("SELECT sku, id FROM products").fetchall()}
+        sku_with_bom = {r[0] for r in conn.execute("SELECT code FROM skus").fetchall()}
+        valid_lines = [r[0] for r in conn.execute("SELECT line_id FROM manufacturing_line WHERE COALESCE(active,1)=1").fetchall()]
+        valid_depts = [r[0] for r in conn.execute("SELECT code FROM departments WHERE COALESCE(is_active,1)=1").fetchall()]
+        po_by_number = {r[0]: r[1] for r in conn.execute("SELECT po_number, id FROM purchase_orders").fetchall()}
+    finally:
+        conn.close()
+
+    line_set = set(valid_lines); dept_set = set(valid_depts)
+
+    def _suggest(value, pool):
+        m = difflib.get_close_matches(str(value or ''), pool, n=1, cutoff=0.6)
+        return m[0] if m else None
+
+    report = []
+    for i, raw in enumerate(rows, start=1):
+        sku  = (raw.get('sku_code') or '').strip()
+        line = (raw.get('line') or '').strip().upper()
+        stn  = (raw.get('current_station') or '').strip().lower()
+        qty_raw = (raw.get('quantity') or '').strip()
+        batch_ref = (raw.get('batch_ref') or '').strip()
+        po_ref    = (raw.get('po_ref') or '').strip()
+
+        errors = []; suggestions = {}
+
+        if not sku:
+            errors.append("sku_code is required")
+        elif sku not in valid_skus:
+            errors.append(f"SKU '{sku}' not found")
+            s = _suggest(sku, list(valid_skus.keys()))
+            if s: suggestions['sku_code'] = s
+        elif sku not in sku_with_bom:
+            # exists as a product but has no BOM — allowed, but worth flagging
+            suggestions['sku_code'] = f"(no BOM defined for {sku})"
+
+        if not line:
+            errors.append("line is required")
+        elif line not in line_set:
+            errors.append(f"line '{line}' not valid (expected one of {', '.join(valid_lines)})")
+            s = _suggest(line, valid_lines)
+            if s: suggestions['line'] = s
+
+        if not stn:
+            errors.append("current_station is required")
+        elif stn not in dept_set:
+            errors.append(f"station '{stn}' not valid")
+            s = _suggest(stn, valid_depts)
+            if s: suggestions['current_station'] = s
+
+        qty = None
+        try:
+            qty = int(float(qty_raw))
+            if qty <= 0:
+                errors.append("quantity must be a positive whole number")
+        except (TypeError, ValueError):
+            errors.append(f"quantity '{qty_raw}' is not a number")
+
+        po_id = po_by_number.get(po_ref) if po_ref else None
+        if po_ref and po_id is None:
+            suggestions['po_ref'] = f"(no sales PO '{po_ref}' — batch will import unlinked)"
+
+        report.append({
+            "row": i, "sku_code": sku, "line": line, "current_station": stn,
+            "quantity": qty if qty is not None else qty_raw,
+            "batch_ref": batch_ref, "po_ref": po_ref,
+            "ok": not errors, "errors": errors, "suggestions": suggestions,
+            "_product_id": valid_skus.get(sku), "_po_id": po_id,
+        })
+
+    valid_rows = [r for r in report if r["ok"]]
+    created = []
+    if commit:
+        for r in valid_rows:
+            try:
+                stamp = _dt.datetime.now().strftime("%Y%m%d%H%M%S")
+                pon = f"WIP-{stamp}-{r['row']:03d}"
+                order = create_production_order({
+                    'prod_order_number': pon,
+                    'product_id': r['_product_id'],
+                    'production_line': r['line'],
+                    'quantity': r['quantity'],
+                    'po_id': r['_po_id'],
+                    'status': 'in_progress',
+                    'notes': ("Opening WIP import" +
+                              (f"; ref {r['batch_ref']}" if r['batch_ref'] else "")),
+                })
+                rel = release_production_order(order['id'])
+                if r['current_station'] != 'fc':
+                    move_batch(rel['batch_id'], r['current_station'], r['quantity'],
+                               notes="Opening WIP placement", moved_by=created_by)
+                r['created_batch'] = rel['batch_number']
+                created.append(r)
+            except Exception as e:
+                r['ok'] = False
+                r['errors'].append(f"import failed: {e}")
+
+    # strip internal keys before returning
+    for r in report:
+        r.pop('_product_id', None); r.pop('_po_id', None)
+
+    return {
+        "mode": "commit" if commit else "validate",
+        "total": len(report),
+        "valid": len(valid_rows),
+        "invalid": len(report) - len(valid_rows),
+        "created": len(created),
+        "report": report,
+    }
+
+
 def move_batch(batch_id, to_department, quantity, time_minutes=0, notes='', moved_by=''):
     conn = get_db()
     try:
