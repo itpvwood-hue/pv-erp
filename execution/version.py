@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.18"
+VERSION    = "2.21.19"
 BUILD_DATE = "2026-06-12"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.19", "2026-06-12", "deploy.ps1 now reads the listen port from config.py (.env) instead of hardcoding 8000. The restart succeeded but the health check polled localhost:8000 while the server runs on 8001 (from .env), reporting a false 'Service did not become healthy on port 8000'. Now, unless -Port is passed explicitly, deploy.ps1 resolves PORT from config (same as start.bat / install_service.ps1) so the health check and the port-process kill target the real port."),
     ("2.21.18", "2026-06-12", "deploy.ps1 now supports Task Scheduler deployments (not just NSSM service). Restart step 3 is runner-agnostic: (a) restart the Windows service if one is registered, else (b) restart a scheduled task — found by new -TaskName param or auto-detected by scanning Get-ScheduledTask actions for uvicorn/main:app/start.bat/pv-erp — via Stop-ScheduledTask + kill-process-on-$Port (in case the server detached) + Start-ScheduledTask; else (c) clear error listing how to pass -TaskName / find the task / start manually. Context: the NSSM service fails on this server because Python is installed per-user (Administrator profile) so the SYSTEM/service account's py launcher reports 'No Installed Pythons Found' — Task Scheduler running as Administrator avoids that, hence first-class support here."),
     ("2.21.17", "2026-06-12", "Raw Material Receiving is read-only for non-receiving roles. rrecRender now only renders the Receive / Walk-in Receive buttons when the signed-in role is WAREHOUSE or MANAGERIAL (via getCurrentUser); Production Planning sees the arrivals, quantities, ETAs and statuses for planning but no action buttons (rows show '—'). Complements 2.21.16 which exposed the page to Planning. Note: the receive endpoints themselves are require_auth (not role-gated) — this is a UI control; backend tightening can follow if desired."),
     ("2.21.16", "2026-06-12", "Show Raw Material Receiving to Production Planning so planners can see incoming-material timing for production planning. Added 'raw-receiving' to ROLE_PAGES.PRODUCTION_PLANNING and PRODUCTION_PLANNING to the NAV_SEC_ROLES['nav-raw-receiving'] override (the link was double-gated). No loader/endpoint change: Planning already loads the warehouse portal bundle (rrecLoad) and GET /api/shipments only needs auth. Receiving is read/plan visibility for planners; the actual receive action remains warehouse-gated on the backend."),

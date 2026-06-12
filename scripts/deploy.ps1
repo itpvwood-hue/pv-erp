@@ -36,6 +36,17 @@ Write-Host "Repo: $repo" -ForegroundColor Cyan
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
             [System.Environment]::GetEnvironmentVariable("Path","User")
 
+# Resolve the listen port from config.py (.env) unless -Port was passed, so the
+# health check (and port-process kill) target the port the server actually binds.
+if (-not $PSBoundParameters.ContainsKey('Port')) {
+    try {
+        $cfgExec = Join-Path $repo 'execution'
+        $p = (& py -3 -c "import sys;sys.path.insert(0,r'$cfgExec');from config import PORT;print(PORT)" 2>$null)
+        if ($p) { $Port = [int]($p.ToString().Trim()) }
+    } catch {}
+}
+Write-Host "Port: $Port" -ForegroundColor Cyan
+
 # -- Must be Administrator (Restart-Service needs it) ------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()
