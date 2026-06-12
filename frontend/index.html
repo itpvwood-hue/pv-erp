@@ -144,6 +144,8 @@
     <i class="bi bi-layers-half"></i><span data-i18n="VCMX Orders">VCMX Orders</span>
     <span class="badge bg-info ms-auto d-none" id="nav-vcmx-badge" style="font-size:.65rem">0</span>
   </a>
+  <a class="nav-link" data-page="lots-docs" href="#"><i class="bi bi-file-earmark-pdf"></i><span data-i18n="Lots & Documents">Lots &amp; Documents</span></a>
+  <a class="nav-link" data-page="traceability" href="#"><i class="bi bi-diagram-3"></i><span data-i18n="Traceability">Traceability</span></a>
 
   <!-- ── 2. PRODUCTION MODULE ─────────────────────────────── -->
   <div class="nav-sec" data-i18n="Production Module">Production Module</div>
@@ -5842,7 +5844,7 @@ let _prodAiMessages=[];
 const ROLE_PAGES = {
   MANAGERIAL: new Set([
     'dashboard','order-intake','line-board','factory-assistant',
-    'bom','materials','fg',
+    'bom','materials','fg','lots-docs','traceability',
     'dept-fg_warehouse',
     'prod-logs','reports',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
@@ -5851,7 +5853,7 @@ const ROLE_PAGES = {
   ]),
   PRODUCTION_PLANNING: new Set([
     'dashboard','order-intake','line-board','prod-flow',
-    'bom','materials','fg',
+    'bom','materials','fg','lots-docs','traceability',
     'dept-fg_warehouse',
     'prod-logs','reports','material-shortfalls',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
