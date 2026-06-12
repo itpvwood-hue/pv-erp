@@ -134,6 +134,17 @@ def init_db():
             notes TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS customers (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            name           TEXT UNIQUE NOT NULL,
+            contact_person TEXT DEFAULT '',
+            phone          TEXT DEFAULT '',
+            email          TEXT DEFAULT '',
+            address        TEXT DEFAULT '',
+            notes          TEXT DEFAULT '',
+            is_active      INTEGER NOT NULL DEFAULT 1,
+            created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS po_lines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             po_id INTEGER NOT NULL,
@@ -1294,6 +1305,17 @@ def init_db():
     _seed_lines_and_departments(conn)
     # ── Bootstrap admin on a brand-new DB so a fresh install can log in ──
     _seed_default_admin(conn)
+    # ── Auto-register customers already named on existing purchase orders ──
+    # (so the 'customer must be registered' rule never rejects pre-existing
+    # data). Idempotent: INSERT OR IGNORE on the unique name.
+    try:
+        for r in conn.execute(
+            "SELECT DISTINCT customer FROM purchase_orders WHERE TRIM(COALESCE(customer,'')) <> ''"
+        ).fetchall():
+            conn.execute("INSERT OR IGNORE INTO customers (name) VALUES (?)", (r[0].strip(),))
+        conn.commit()
+    except Exception:
+        pass
     # Phase B cleanup removed glue_formula placeholders from materials entirely;
     # _normalize_glue_materials is no longer needed.
 
@@ -1945,6 +1967,12 @@ def get_purchase_order(po_id):
     conn.close(); return po
 
 def create_purchase_order(data):
+    # Customer must be registered first (rudimentary CRM gate).
+    cust = (data.get('customer') or '').strip()
+    if not cust:
+        raise ValueError("Customer is required")
+    if not customer_exists(cust):
+        raise ValueError(f"Customer '{cust}' is not registered. Add them on the Customers page first.")
     conn = get_db()
     prio = int(data.get('priority') or 2)
     if prio not in (1,2,3): prio = 2
@@ -1972,6 +2000,85 @@ def update_purchase_order(po_id, data):
 
 def delete_purchase_order(po_id):
     conn = get_db(); conn.execute("DELETE FROM purchase_orders WHERE id=?",(po_id,)); conn.commit(); conn.close()
+
+# ═══════════════════════════════════════════════════════════════
+# CUSTOMERS (rudimentary CRM) — a sales order's customer must be
+# registered here first (enforced in create_purchase_order).
+# ═══════════════════════════════════════════════════════════════
+def get_customers(active_only=True):
+    conn = get_db()
+    q = "SELECT * FROM customers"
+    if active_only: q += " WHERE COALESCE(is_active,1)=1"
+    q += " ORDER BY name COLLATE NOCASE"
+    rows = rows_to_list(conn.execute(q).fetchall())
+    # attach order count + most recent order date per customer (the 'filing')
+    for c in rows:
+        agg = conn.execute(
+            "SELECT COUNT(*), MAX(order_date) FROM purchase_orders WHERE customer=?",
+            (c['name'],)).fetchone()
+        c['order_count'] = agg[0] or 0
+        c['last_order']  = agg[1] or ''
+    conn.close(); return rows
+
+def customer_exists(name: str) -> bool:
+    if not name: return False
+    conn = get_db()
+    row = conn.execute("SELECT 1 FROM customers WHERE name=? AND COALESCE(is_active,1)=1",
+                       (name.strip(),)).fetchone()
+    conn.close(); return bool(row)
+
+def create_customer(data: dict) -> dict:
+    name = (data.get('name') or '').strip()
+    if not name:
+        raise ValueError("Customer name is required")
+    conn = get_db()
+    try:
+        if conn.execute("SELECT 1 FROM customers WHERE name=?", (name,)).fetchone():
+            raise ValueError(f"Customer '{name}' already exists")
+        cur = conn.execute(
+            "INSERT INTO customers (name,contact_person,phone,email,address,notes) VALUES (?,?,?,?,?,?)",
+            (name, data.get('contact_person',''), data.get('phone',''), data.get('email',''),
+             data.get('address',''), data.get('notes','')))
+        conn.commit()
+        return row_to_dict(conn.execute("SELECT * FROM customers WHERE id=?", (cur.lastrowid,)).fetchone())
+    finally:
+        conn.close()
+
+def update_customer(cid: int, data: dict) -> dict:
+    conn = get_db()
+    try:
+        name = (data.get('name') or '').strip()
+        if not name:
+            raise ValueError("Customer name is required")
+        dup = conn.execute("SELECT 1 FROM customers WHERE name=? AND id<>?", (name, cid)).fetchone()
+        if dup:
+            raise ValueError(f"Another customer is already named '{name}'")
+        old = conn.execute("SELECT name FROM customers WHERE id=?", (cid,)).fetchone()
+        conn.execute(
+            "UPDATE customers SET name=?,contact_person=?,phone=?,email=?,address=?,notes=?,is_active=? WHERE id=?",
+            (name, data.get('contact_person',''), data.get('phone',''), data.get('email',''),
+             data.get('address',''), data.get('notes',''),
+             1 if data.get('is_active', 1) else 0, cid))
+        # keep existing orders pointing at this customer in sync if renamed
+        if old and old[0] and old[0] != name:
+            conn.execute("UPDATE purchase_orders SET customer=? WHERE customer=?", (name, old[0]))
+        conn.commit()
+        return row_to_dict(conn.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone())
+    finally:
+        conn.close()
+
+def get_customer_orders(cid: int) -> dict:
+    """A customer's 'filing': their record + every sales order placed for them."""
+    conn = get_db()
+    cust = row_to_dict(conn.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone())
+    if not cust:
+        conn.close(); return {"error": "Customer not found"}
+    orders = rows_to_list(conn.execute(
+        "SELECT id,po_number,order_date,delivery_date,status,priority,notes "
+        "FROM purchase_orders WHERE customer=? ORDER BY order_date DESC, id DESC",
+        (cust['name'],)).fetchall())
+    conn.close()
+    return {"customer": cust, "orders": orders}
 
 _PO_LINE_SELECT = """
     SELECT pol.*, p.name as product_name, p.sku,

@@ -76,6 +76,7 @@ from database import (
     get_dashboard_stats, get_full_bom_context, get_capacity_context,
     # New
     get_all_purchase_orders, get_purchase_order, create_purchase_order, update_purchase_order, delete_purchase_order,
+    get_customers, create_customer, update_customer, get_customer_orders,
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
     get_all_batches, get_batch, move_batch, split_batch, split_batch_by_pcs,
@@ -649,7 +650,11 @@ def get_one_purchase_order(po_id: int):
     return po
 
 @app.post("/api/purchase-orders", status_code=201)
-def add_purchase_order(body: PurchaseOrderIn): return create_purchase_order(body.dict())
+def add_purchase_order(body: PurchaseOrderIn):
+    try:
+        return create_purchase_order(body.dict())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 @app.put("/api/purchase-orders/{po_id}")
 def edit_purchase_order(po_id: int, body: PurchaseOrderIn):
@@ -658,6 +663,39 @@ def edit_purchase_order(po_id: int, body: PurchaseOrderIn):
 
 @app.delete("/api/purchase-orders/{po_id}")
 def remove_purchase_order(po_id: int): delete_purchase_order(po_id); return {"ok":True}
+
+# ── Customers (rudimentary CRM) ───────────────────────────────
+class CustomerIn(BaseModel):
+    name: str
+    contact_person: str = ""
+    phone: str = ""
+    email: str = ""
+    address: str = ""
+    notes: str = ""
+    is_active: bool = True
+
+@app.get("/api/customers")
+def list_customers(active_only: bool = True): return get_customers(active_only=active_only)
+
+@app.post("/api/customers", status_code=201)
+def add_customer(body: CustomerIn):
+    try:
+        return create_customer(body.dict())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.put("/api/customers/{cid}")
+def edit_customer(cid: int, body: CustomerIn):
+    try:
+        return update_customer(cid, body.dict())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/customers/{cid}/orders")
+def customer_orders(cid: int):
+    res = get_customer_orders(cid)
+    if 'error' in res: raise HTTPException(404, res['error'])
+    return res
 
 @app.get("/api/purchase-orders/{po_id}/lines")
 def list_po_lines(po_id: int): return get_po_lines(po_id)

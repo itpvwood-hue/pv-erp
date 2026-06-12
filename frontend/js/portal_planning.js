@@ -6458,7 +6458,7 @@ function openBomBuilderWithSku(sku){
 function openPoModal(){
   document.getElementById('po-id').value='';
   document.getElementById('po-number').value='';
-  document.getElementById('po-customer').value='';
+  custFillSelect('');
   document.getElementById('po-order-date').value='';
   document.getElementById('po-req-date').value='';
   document.getElementById('po-notes').value='';
@@ -6470,7 +6470,7 @@ async function editPoModal(id){
   if(!po){toast('PO not found','danger');return;}
   document.getElementById('po-id').value=po.id;
   document.getElementById('po-number').value=po.po_number||'';
-  document.getElementById('po-customer').value=po.customer||'';
+  await custFillSelect(po.customer||'');
   document.getElementById('po-order-date').value=(po.order_date||'').slice(0,10);
   document.getElementById('po-req-date').value=(po.delivery_date||'').slice(0,10);
   document.getElementById('po-notes').value=po.notes||'';
@@ -9233,7 +9233,83 @@ async function wipCommit(){
   }catch(e){ toast('Import failed: '+e.message,'danger'); }
 }
 
+// ── Customers (rudimentary CRM) ──────────────────────────────
+let _custCache = [];
+async function loadCustomers(){
+  const tb = document.getElementById('cust-tbody');
+  try{
+    _custCache = await api('/api/customers?active_only=false');
+    if(!_custCache.length){ tb.innerHTML='<tr><td colspan="7" class="text-muted small p-3">No customers yet. Click <b>New Customer</b> to add one.</td></tr>'; return; }
+    tb.innerHTML = _custCache.map(c=>`<tr class="${c.is_active?'':'text-muted'}">
+      <td class="small fw-semibold">${c.name}${c.is_active?'':' <span class="badge bg-secondary">inactive</span>'}</td>
+      <td class="small">${c.contact_person||''}</td><td class="small">${c.phone||''}</td><td class="small">${c.email||''}</td>
+      <td class="text-end small">${c.order_count||0}</td>
+      <td class="small">${(c.last_order||'').slice(0,10)||'—'}</td>
+      <td class="text-end text-nowrap">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="custOpenForm(${c.id})" title="Edit"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="custViewOrders(${c.id})" title="Order history"><i class="bi bi-folder2-open"></i></button>
+      </td></tr>`).join('');
+  }catch(e){ tb.innerHTML='<tr><td colspan="7" class="text-danger small p-3">'+e.message+'</td></tr>'; }
+}
+function custOpenForm(id){
+  const c = id ? _custCache.find(x=>x.id===id) : null;
+  document.getElementById('cust-modal-title').textContent = c?'Edit Customer':'New Customer';
+  document.getElementById('cust-id').value = c?c.id:'';
+  document.getElementById('cust-name').value = c?c.name:'';
+  document.getElementById('cust-contact').value = c?(c.contact_person||''):'';
+  document.getElementById('cust-phone').value = c?(c.phone||''):'';
+  document.getElementById('cust-email').value = c?(c.email||''):'';
+  document.getElementById('cust-address').value = c?(c.address||''):'';
+  document.getElementById('cust-notes').value = c?(c.notes||''):'';
+  document.getElementById('cust-active-wrap').style.display = c?'':'none';
+  document.getElementById('cust-active').checked = c? !!c.is_active : true;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('custModal')).show();
+}
+async function custSave(){
+  const id = document.getElementById('cust-id').value;
+  const body = {
+    name: document.getElementById('cust-name').value.trim(),
+    contact_person: document.getElementById('cust-contact').value.trim(),
+    phone: document.getElementById('cust-phone').value.trim(),
+    email: document.getElementById('cust-email').value.trim(),
+    address: document.getElementById('cust-address').value.trim(),
+    notes: document.getElementById('cust-notes').value.trim(),
+    is_active: document.getElementById('cust-active').checked,
+  };
+  if(!body.name){ toast('Customer name is required','danger'); return; }
+  try{
+    await api(id?('/api/customers/'+id):'/api/customers', id?'PUT':'POST', body);
+    bootstrap.Modal.getInstance(document.getElementById('custModal')).hide();
+    toast('Customer saved'); loadCustomers();
+  }catch(e){ toast('Save failed: '+e.message,'danger'); }
+}
+async function custViewOrders(id){
+  try{
+    const r = await api('/api/customers/'+id+'/orders');
+    document.getElementById('cust-orders-title').textContent = 'Orders — '+r.customer.name;
+    const o = r.orders||[];
+    document.getElementById('cust-orders-body').innerHTML = o.length
+      ? `<div class="table-responsive"><table class="table table-sm mb-0"><thead class="table-light"><tr><th>PO #</th><th>Order date</th><th>Delivery</th><th>Status</th></tr></thead><tbody>`+
+        o.map(x=>`<tr><td class="small fw-semibold">${x.po_number}</td><td class="small">${(x.order_date||'').slice(0,10)}</td><td class="small">${(x.delivery_date||'').slice(0,10)||'—'}</td><td class="small">${x.status||''}</td></tr>`).join('')+
+        '</tbody></table></div>'
+      : '<div class="text-muted small">No orders yet for this customer.</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('custOrdersModal')).show();
+  }catch(e){ toast('Could not load orders: '+e.message,'danger'); }
+}
+// Populate a <select id="po-customer"> with registered customers (Order Intake).
+async function custFillSelect(selectedName){
+  const sel = document.getElementById('po-customer');
+  if(!sel || sel.tagName !== 'SELECT') return;
+  try{
+    const list = await api('/api/customers');   // active only
+    sel.innerHTML = '<option value="">— select customer —</option>' +
+      list.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
+    if(selectedName) sel.value = selectedName;
+  }catch(e){ /* leave empty */ }
+}
+
 Object.assign(PAGE_LOADERS, {
+  'customers':           loadCustomers,
   'wip-import':          loadWipImport,
   'dashboard':           loadDashboard,
   'vcmx':                vcmxLoad,

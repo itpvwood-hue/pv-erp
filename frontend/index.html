@@ -124,6 +124,7 @@
   <!-- ── 1. PLANNING (top of workflow) ─────────────────────── -->
   <div class="nav-sec" data-i18n="Planning">Planning</div>
   <a class="nav-link active" data-page="dashboard" href="#"><i class="bi bi-speedometer2"></i><span data-i18n="Dashboard">Dashboard</span></a>
+  <a class="nav-link" data-page="customers" href="#"><i class="bi bi-people"></i><span data-i18n="Customers">Customers</span></a>
   <a class="nav-link" data-page="order-intake" href="#"><i class="bi bi-clipboard-plus"></i><span data-i18n="Order Intake">Order Intake</span></a>
   <a class="nav-link" data-page="line-board" href="#"><i class="bi bi-layout-three-columns"></i><span data-i18n="Line Board">Line Board</span></a>
   <a class="nav-link" data-page="factory-assistant" id="nav-factory-assistant" href="#">
@@ -3267,7 +3268,7 @@
     <div class="modal-body">
       <input type="hidden" id="po-id">
       <div class="mb-2"><label class="form-label">PO Number</label><input class="form-control" id="po-number"></div>
-      <div class="mb-2"><label class="form-label">Customer</label><input class="form-control" id="po-customer"></div>
+      <div class="mb-2"><label class="form-label">Customer <span class="text-muted small">(must be registered — manage on the Customers page)</span></label><select class="form-select" id="po-customer"></select></div>
       <div class="row g-2 mb-2">
         <div class="col"><label class="form-label">Order Date</label><input type="date" class="form-control" id="po-order-date"></div>
         <div class="col"><label class="form-label">Required Date</label><input type="date" class="form-control" id="po-req-date"></div>
@@ -4901,6 +4902,63 @@
   <div id="wip-results"></div>
 </div>
 
+<!-- ══ CUSTOMERS (CRM) — PLANNING ══════════════════════════════ -->
+<div class="page" id="page-customers">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h4 class="mb-0"><i class="bi bi-people me-2 text-primary"></i>Customers</h4>
+      <small class="text-muted">Register customers here — a sales order can only be raised for a registered customer.</small>
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="custOpenForm()"><i class="bi bi-plus-lg me-1"></i>New Customer</button>
+  </div>
+  <div class="card"><div class="card-body p-0">
+    <div class="table-responsive"><table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light"><tr>
+        <th>Name</th><th>Contact</th><th>Phone</th><th>Email</th>
+        <th class="text-end">Orders</th><th>Last order</th><th></th>
+      </tr></thead>
+      <tbody id="cust-tbody"><tr><td colspan="7" class="text-muted small p-3">Loading…</td></tr></tbody>
+    </table></div>
+  </div></div>
+</div>
+
+<!-- Customer create/edit modal -->
+<div class="modal fade" id="custModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header py-2"><h6 class="modal-title" id="cust-modal-title">New Customer</h6>
+    <button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <input type="hidden" id="cust-id">
+    <div class="mb-2"><label class="form-label small mb-0">Name <span class="text-danger">*</span></label>
+      <input class="form-control form-control-sm" id="cust-name" placeholder="DRAGONPLY"></div>
+    <div class="row g-2">
+      <div class="col-md-6 mb-2"><label class="form-label small mb-0">Contact person</label>
+        <input class="form-control form-control-sm" id="cust-contact"></div>
+      <div class="col-md-6 mb-2"><label class="form-label small mb-0">Phone</label>
+        <input class="form-control form-control-sm" id="cust-phone"></div>
+    </div>
+    <div class="mb-2"><label class="form-label small mb-0">Email</label>
+      <input class="form-control form-control-sm" id="cust-email"></div>
+    <div class="mb-2"><label class="form-label small mb-0">Address</label>
+      <textarea class="form-control form-control-sm" id="cust-address" rows="2"></textarea></div>
+    <div class="mb-2"><label class="form-label small mb-0">Notes</label>
+      <textarea class="form-control form-control-sm" id="cust-notes" rows="2"></textarea></div>
+    <div class="form-check" id="cust-active-wrap" style="display:none">
+      <input class="form-check-input" type="checkbox" id="cust-active" checked>
+      <label class="form-check-label small" for="cust-active">Active</label></div>
+  </div>
+  <div class="modal-footer py-2">
+    <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-sm btn-primary" onclick="custSave()">Save</button>
+  </div>
+</div></div></div>
+
+<!-- Customer orders (filing) modal -->
+<div class="modal fade" id="custOrdersModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header py-2"><h6 class="modal-title" id="cust-orders-title">Customer orders</h6>
+    <button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body" id="cust-orders-body"></div>
+</div></div></div>
+
 <!-- ══ MATERIAL SHORTFALLS — PLANNING ══════════════════════════ -->
 <div class="page" id="page-material-shortfalls">
   <div class="alert alert-warning py-2 mb-2 small d-flex align-items-center">
@@ -5873,7 +5931,7 @@ let _prodAiMessages=[];
 // ══════════════════════════════════════════════════════════════
 const ROLE_PAGES = {
   MANAGERIAL: new Set([
-    'dashboard','order-intake','line-board','factory-assistant',
+    'dashboard','customers','order-intake','line-board','factory-assistant',
     'bom','materials','fg','lots-docs','traceability','wip-import',
     'dept-fg_warehouse',
     'prod-logs','reports',
@@ -5882,7 +5940,7 @@ const ROLE_PAGES = {
     'forklift-dash','forklift-report','scrap-bin',
   ]),
   PRODUCTION_PLANNING: new Set([
-    'dashboard','order-intake','line-board','prod-flow',
+    'dashboard','customers','order-intake','line-board','prod-flow',
     'bom','materials','fg','lots-docs','traceability','wip-import',
     'dept-fg_warehouse',
     'prod-logs','reports','material-shortfalls',
