@@ -4789,7 +4789,7 @@
       <div class="modal-body">
         <div class="row g-2">
           <div class="col-12"><label class="form-label small fw-semibold">Material *</label>
-            <select class="form-select form-select-sm" id="lot-new-material"></select></div>
+            <select class="form-select form-select-sm" id="lot-new-material" onchange="lotMatPicked()"></select></div>
           <div class="col-md-6"><label class="form-label small fw-semibold">Lot Code *</label>
             <input class="form-control form-control-sm" id="lot-new-code" placeholder="e.g. LOT-20260518-001"></div>
           <div class="col-md-6"><label class="form-label small fw-semibold">Supplier</label>
@@ -4798,10 +4798,10 @@
             <input class="form-control form-control-sm" id="lot-new-supref"></div>
           <div class="col-md-6"><label class="form-label small fw-semibold">Linked PR (optional)</label>
             <select class="form-select form-select-sm" id="lot-new-pr"></select></div>
-          <div class="col-md-4"><label class="form-label small fw-semibold">Qty *</label>
-            <input type="number" class="form-control form-control-sm" id="lot-new-qty" step="0.01" min="0"></div>
-          <div class="col-md-4"><label class="form-label small fw-semibold">UoM</label>
-            <input class="form-control form-control-sm" id="lot-new-uom"></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold">Qty received * <span class="text-success fw-bold" id="lot-qty-unit"></span></label>
+            <input type="number" class="form-control form-control-sm" id="lot-new-qty" step="0.01" min="0" placeholder="for FIFO"></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold">Unit</label>
+            <input class="form-control form-control-sm" id="lot-new-uom" readonly placeholder="set by material"></div>
           <div class="col-md-4"><label class="form-label small fw-semibold">Unit Cost <span class="badge bg-success">฿ THB</span></label>
             <div class="input-group input-group-sm"><span class="input-group-text">฿</span>
               <input type="number" class="form-control" id="lot-new-cost" step="0.01" min="0">

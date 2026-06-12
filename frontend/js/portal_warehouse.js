@@ -1995,6 +1995,7 @@ async function loadDeptPage(dept){
 // ══════════════════════════════════════════════════════════════
 async function lotsPrimeMatSelect(){
   await prPrimeMaterialSelects();
+  lotMatPicked();   // reflect the unit of the initially-selected material
   // Also populate PR dropdown in lot modal
   try{
     const prs = await api('/api/purchase-requests?status=APPROVED');
@@ -2002,6 +2003,17 @@ async function lotsPrimeMatSelect(){
     sel.innerHTML='<option value="">— none —</option>'+prs.map(p=>
       `<option value="${p.id}">${p.request_number} — ${p.material_name} (${p.qty_requested} ${p.uom||''})</option>`).join('');
   }catch{}
+}
+// When a material is picked in the lot modal, show its unit next to Qty and
+// fill the (read-only) Unit field — so receivers know what unit the FIFO
+// quantity is in without typing it.
+function lotMatPicked(){
+  const id = Number(document.getElementById('lot-new-material')?.value || 0);
+  const pool = (typeof _prMaterials !== 'undefined' && _prMaterials) ? _prMaterials : [];
+  const m = pool.find(x => x.id === id);
+  const unit = m ? (m.unit || '') : '';
+  const uomEl = document.getElementById('lot-new-uom'); if(uomEl) uomEl.value = unit;
+  const hint  = document.getElementById('lot-qty-unit'); if(hint) hint.textContent = unit ? '('+unit+')' : '';
 }
 async function lotsLoad(){
   const matId=document.getElementById('lot-mat-filter').value;
