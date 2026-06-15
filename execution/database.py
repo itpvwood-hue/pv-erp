@@ -145,6 +145,17 @@ def init_db():
             is_active      INTEGER NOT NULL DEFAULT 1,
             created_at     TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS wh_stock_transfers (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id   INTEGER NOT NULL,
+            from_location TEXT NOT NULL,
+            to_location   TEXT NOT NULL,
+            qty           REAL NOT NULL,
+            moved_by      TEXT DEFAULT '',
+            notes         TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        );
         CREATE TABLE IF NOT EXISTS po_lines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             po_id INTEGER NOT NULL,
@@ -2114,6 +2125,63 @@ def update_customer(cid: int, data: dict) -> dict:
         return row_to_dict(conn.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone())
     finally:
         conn.close()
+
+# ═══════════════════════════════════════════════════════════════
+# WAREHOUSE INTERNAL STOCK MOVEMENTS (WH <-> WLWH) — Phase 2
+# WH staff self-service: move board/veneer stock between the two warehouse
+# locations. Each move shifts qty between the bucket columns and is logged.
+# ═══════════════════════════════════════════════════════════════
+_WH_LOC_COL = {'WH': 'current_stock', 'WLWH': 'wlwh_stock'}
+
+def wh_move_stock(material_id: int, from_location: str, to_location: str,
+                  qty, moved_by: str = '', notes: str = '') -> dict:
+    from_loc = (from_location or '').strip().upper()
+    to_loc   = (to_location or '').strip().upper()
+    if from_loc not in _WH_LOC_COL or to_loc not in _WH_LOC_COL:
+        raise ValueError("Location must be WH or WLWH")
+    if from_loc == to_loc:
+        raise ValueError("From and To locations must be different")
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        raise ValueError("Quantity must be a number")
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    conn = get_db()
+    try:
+        m = row_to_dict(conn.execute("SELECT * FROM materials WHERE id=?", (material_id,)).fetchone())
+        if not m:
+            raise ValueError("Material not found")
+        from_col, to_col = _WH_LOC_COL[from_loc], _WH_LOC_COL[to_loc]
+        avail = float(m.get(from_col) or 0)
+        if qty > avail:
+            raise ValueError(f"Insufficient {from_loc} stock: only {avail:g} available")
+        # column names come from the fixed _WH_LOC_COL map (not user input)
+        conn.execute(f"UPDATE materials SET {from_col}=MAX(0,{from_col}-?), {to_col}={to_col}+? WHERE id=?",
+                     (qty, qty, material_id))
+        conn.execute("""INSERT INTO wh_stock_transfers
+                        (material_id, from_location, to_location, qty, moved_by, notes)
+                        VALUES (?,?,?,?,?,?)""",
+                     (material_id, from_loc, to_loc, qty, moved_by, notes))
+        conn.commit()
+        return {"ok": True, "material_id": material_id, "from_location": from_loc,
+                "to_location": to_loc, "qty": qty,
+                "new_from_qty": max(0.0, avail - qty),
+                "new_to_qty": float(m.get(to_col) or 0) + qty}
+    finally:
+        conn.close()
+
+def get_wh_transfer_log(material_id: int = None, limit: int = 50) -> list:
+    conn = get_db()
+    q = """SELECT t.*, m.code AS material_code, m.name AS material_name, m.unit
+           FROM wh_stock_transfers t JOIN materials m ON m.id = t.material_id WHERE 1=1"""
+    params = []
+    if material_id:
+        q += " AND t.material_id=?"; params.append(material_id)
+    q += " ORDER BY t.created_at DESC, t.id DESC LIMIT ?"; params.append(int(limit))
+    rows = rows_to_list(conn.execute(q, params).fetchall())
+    conn.close(); return rows
+
 
 def get_customer_orders(cid: int) -> dict:
     """A customer's 'filing': their record + every sales order placed for them."""

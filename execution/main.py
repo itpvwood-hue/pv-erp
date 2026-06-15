@@ -77,6 +77,7 @@ from database import (
     # New
     get_all_purchase_orders, get_purchase_order, create_purchase_order, update_purchase_order, delete_purchase_order,
     get_customers, create_customer, update_customer, get_customer_orders,
+    wh_move_stock, get_wh_transfer_log,
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
     get_all_batches, get_batch, move_batch, split_batch, split_batch_by_pcs,
@@ -2440,6 +2441,28 @@ def export_fg_stock():
     content = "\n".join(lines) + "\n"
     return Response(content=content.encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=fg_stock_export.csv"})
+
+# ── Warehouse internal stock movements (WH <-> WLWH) ──────────
+class WhMoveIn(BaseModel):
+    material_id: int
+    from_location: str
+    to_location: str
+    qty: float
+    notes: str = ""
+
+@app.post("/api/warehouse/move-stock", status_code=201)
+def warehouse_move_stock(body: WhMoveIn,
+                         user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
+    try:
+        return wh_move_stock(body.material_id, body.from_location, body.to_location,
+                             body.qty, moved_by=(user.get('username') or ''), notes=body.notes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/warehouse/move-log")
+def warehouse_move_log(material_id: Optional[int] = None, limit: int = 50,
+                       user: dict = Depends(require_auth)):
+    return get_wh_transfer_log(material_id=material_id, limit=limit)
 
 # ── ACCOUNTING — read-only data hub ──────────────────────────
 @app.get("/api/accounting/summary")

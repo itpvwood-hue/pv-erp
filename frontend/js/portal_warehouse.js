@@ -2172,16 +2172,68 @@ function openMatById(id){
   if(m) openMaterialModal(m);
 }
 const _editBtn = id=>`<button class="btn btn-xs btn-outline-secondary py-0 px-1" data-bs-toggle="modal" data-bs-target="#materialModal" onclick="openMatById(${id})"><i class="bi bi-pencil"></i></button>`;
+// Move stock between warehouse locations (WH <-> WLWH) — boards/veneers only.
+const _moveBtn = id=>`<button class="btn btn-xs btn-outline-info py-0 px-1 me-1" title="Move stock WH ↔ WLWH" onclick="whMoveOpen(${id})"><i class="bi bi-arrow-left-right"></i></button>`;
+function whMoveOpen(id){
+  const m=[..._allMaterials].find(x=>x.id===id); if(!m){ toast('Material not found','warning'); return; }
+  _whMoveMat=m;
+  document.getElementById('whmove-title').textContent=`Move stock — ${m.code||''} ${m.name||''}`;
+  document.getElementById('whmove-id').value=m.id;
+  document.getElementById('whmove-unit').textContent=m.unit||'';
+  document.getElementById('whmove-from').value='WH';
+  document.getElementById('whmove-to').value='WLWH';
+  document.getElementById('whmove-qty').value='';
+  document.getElementById('whmove-notes').value='';
+  whMoveRefreshAvail();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('whMoveModal')).show();
+}
+function whMoveRefreshAvail(){
+  const m=_whMoveMat; if(!m) return;
+  const from=document.getElementById('whmove-from').value;
+  const avail=from==='WH'?(m.current_stock||0):(m.wlwh_stock||0);
+  document.getElementById('whmove-avail').textContent=`Available at ${from}: ${fmt(avail)} ${m.unit||''}`;
+  // keep from/to different
+  const toSel=document.getElementById('whmove-to');
+  if(toSel.value===from) toSel.value = from==='WH'?'WLWH':'WH';
+}
+async function whMoveSubmit(){
+  const id=parseInt(document.getElementById('whmove-id').value)||0;
+  const from=document.getElementById('whmove-from').value;
+  const to=document.getElementById('whmove-to').value;
+  const qty=parseFloat(document.getElementById('whmove-qty').value)||0;
+  const notes=document.getElementById('whmove-notes').value;
+  if(from===to){ toast('From and To must differ','warning'); return; }
+  if(qty<=0){ toast('Enter a quantity','warning'); return; }
+  try{
+    await api('/api/warehouse/move-stock','POST',{material_id:id, from_location:from, to_location:to, qty, notes});
+    bootstrap.Modal.getInstance(document.getElementById('whMoveModal')).hide();
+    toast(`Moved ${fmt(qty)} from ${from} to ${to}`);
+    loadMaterials();
+  }catch(e){ toast(e.message,'danger'); }
+}
+let _whMoveMat=null;
+// Single-location stock cell (consumables / generic) — just the number.
 const _stockCell = m=>{
   const low=(m.current_stock||0)<(m.reorder_point||0);
-  // Boards + veneers can also sit at WLWH (2nd storage location) and FC.
-  // Show WH as the headline number with a small per-location breakdown.
-  let extra='';
-  if(m.type==='core_board' || m.type==='veneer_sheet'){
-    extra = `<div class="text-muted" style="font-size:.62rem;line-height:1.1">WLWH ${fmt(m.wlwh_stock||0)} · FC ${fmt(m.fc_stock||0)}</div>`;
-  }
-  return `<td class="${low?'text-danger fw-bold':''}">WH ${fmt(m.current_stock)}${low?' <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:.7rem"></i>':''}${extra}</td>`;
+  return `<td class="${low?'text-danger fw-bold':''}">${fmt(m.current_stock)}${low?' <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:.7rem"></i>':''}</td>`;
 };
+// Boards/veneers can sit in 2 warehouse locations (WH + WLWH). Render each
+// location that holds stock as a Location | Qty column pair (two pairs; the
+// 2nd is blank when stock is in a single location). FC (production floor)
+// is shown on the FC Hub, not here.
+const _locBadge = loc => `<span class="badge ${loc==='WLWH'?'bg-info-subtle text-info border border-info':'bg-secondary-subtle text-secondary border'}" style="font-size:.62rem">${loc}</span>`;
+function _locStockCells(m){
+  const wh=Number(m.current_stock||0), wl=Number(m.wlwh_stock||0);
+  const locs=[];
+  if(wh>0) locs.push(['WH',wh]);
+  if(wl>0) locs.push(['WLWH',wl]);
+  if(!locs.length) locs.push(['WH',0]);
+  const low=(m.current_stock||0)<(m.reorder_point||0)&&(m.reorder_point||0)>0;
+  const cell = pair => pair
+    ? `<td>${_locBadge(pair[0])}</td><td class="text-end ${pair[0]==='WH'&&low?'text-danger fw-bold':''}">${fmt(pair[1])}</td>`
+    : `<td class="text-muted">—</td><td class="text-end text-muted">—</td>`;
+  return cell(locs[0]) + cell(locs[1]||null);
+}
 const _fscBadge = f=>f&&f!=='-'?`<span class="badge bg-success-subtle text-success border border-success" style="font-size:.65rem">${f}</span>`:'<span class="text-muted">—</span>';
 
 // ── Board row ──────────────────────────────────────────────────
@@ -2195,10 +2247,10 @@ function boardRow(m){
     <td class="text-center">${dims}</td>
     <td>${_fscBadge(m.fsc)}</td>
     <td>${m.unit||''}</td>
-    ${_stockCell(m)}
+    ${_locStockCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td>${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
@@ -2215,10 +2267,10 @@ function veneerRow(m){
     <td>${gradeMatch}</td>
     <td>${_fscBadge(m.fsc)}</td>
     <td>${m.unit||''}</td>
-    ${_stockCell(m)}
+    ${_locStockCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td>${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
@@ -2233,7 +2285,7 @@ function matRow(m, showType=true){
     ${_stockCell(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td>${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
@@ -2253,8 +2305,8 @@ function matDisplayName(m){
 }
 
 const MAT_HEADS = {
-  core_board: `<tr><th>Code</th><th>Board Type</th><th>Glue</th><th class="text-center">Thick(mm)</th><th class="text-center">W×L (mm)</th><th>FSC</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
-  veneer_sheet: `<tr><th>Code</th><th>Species</th><th>Cut</th><th class="text-center">V-Thick</th><th class="text-center">W×L (mm)</th><th>Grade / Match</th><th>FSC</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
+  core_board: `<tr><th>Code</th><th>Board Type</th><th>Glue</th><th class="text-center">Thick(mm)</th><th class="text-center">W×L (mm)</th><th>FSC</th><th>Unit</th><th>Location</th><th class="text-end">Qty</th><th>Location</th><th class="text-end">Qty</th><th>Min</th><th>Price</th><th></th></tr>`,
+  veneer_sheet: `<tr><th>Code</th><th>Species</th><th>Cut</th><th class="text-center">V-Thick</th><th class="text-center">W×L (mm)</th><th>Grade / Match</th><th>FSC</th><th>Unit</th><th>Location</th><th class="text-end">Qty</th><th>Location</th><th class="text-end">Qty</th><th>Min</th><th>Price</th><th></th></tr>`,
   _generic: `<tr><th>Code</th><th>Description</th><th>Type</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
 };
 

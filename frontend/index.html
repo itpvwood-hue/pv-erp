@@ -3729,6 +3729,33 @@
 </div>
 
 <!-- Material Modal -->
+<!-- Warehouse stock move (WH <-> WLWH) -->
+<div class="modal fade" id="whMoveModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header py-2"><h6 class="modal-title" id="whmove-title">Move stock</h6>
+    <button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <input type="hidden" id="whmove-id">
+    <div class="row g-2 align-items-end">
+      <div class="col-5"><label class="form-label small mb-0">From</label>
+        <select class="form-select form-select-sm" id="whmove-from" onchange="whMoveRefreshAvail()">
+          <option value="WH">WH</option><option value="WLWH">WLWH</option></select></div>
+      <div class="col-2 text-center text-muted"><i class="bi bi-arrow-right"></i></div>
+      <div class="col-5"><label class="form-label small mb-0">To</label>
+        <select class="form-select form-select-sm" id="whmove-to" onchange="whMoveRefreshAvail()">
+          <option value="WLWH">WLWH</option><option value="WH">WH</option></select></div>
+    </div>
+    <div class="small text-muted mt-1" id="whmove-avail"></div>
+    <div class="mt-2"><label class="form-label small mb-0">Quantity <span id="whmove-unit" class="text-success fw-bold"></span></label>
+      <input type="number" class="form-control form-control-sm" id="whmove-qty" min="0" step="0.01"></div>
+    <div class="mt-2"><label class="form-label small mb-0">Notes</label>
+      <input class="form-control form-control-sm" id="whmove-notes" placeholder="optional"></div>
+  </div>
+  <div class="modal-footer py-2">
+    <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-sm btn-info" onclick="whMoveSubmit()"><i class="bi bi-arrow-left-right me-1"></i>Move</button>
+  </div>
+</div></div></div>
+
 <div class="modal fade" id="materialModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
   <div class="modal-header"><h5 class="modal-title" id="mat-modal-title">Material</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
   <div class="modal-body">
