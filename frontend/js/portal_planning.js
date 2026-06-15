@@ -7851,12 +7851,15 @@ async function rgrSubmit(){
   if(fromId===toId){ toast('Source and target must be different materials','warning'); return; }
 
   try{
-    await api('/api/fc/regrade','POST',{
+    const res = await api('/api/fc/regrade','POST',{
       from_material_id:fromId, to_material_id:toId, qty,
       notes:notes||null,
     });
     bootstrap.Modal.getInstance(document.getElementById('fcRegradeModal')).hide();
-    toast(`Re-grade recorded — ${fmt(qty)} units moved in FC stock`);
+    const cb=res&&res.to_unit_cost_before, ca=res&&res.to_unit_cost_after;
+    const costMsg=(cb!=null&&ca!=null&&Number(cb)!==Number(ca))
+      ? ` · target cost ฿${fmt(cb)}→฿${fmt(ca)} (weighted avg)` : '';
+    toast(`Re-grade recorded — ${fmt(qty)} units moved in FC stock${costMsg}`);
     fcLoadStock();
   }catch(e){ toast(e.message,'danger'); }
 }

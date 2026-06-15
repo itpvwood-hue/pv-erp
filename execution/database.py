@@ -1003,6 +1003,11 @@ def init_db():
         "ALTER TABLE materials ADD COLUMN matching TEXT",
         "ALTER TABLE materials ADD COLUMN grade TEXT",
         "ALTER TABLE materials ADD COLUMN face_back TEXT",
+        # Regrade cost audit: source cost carried in, and target cost before/after
+        # the weighted-average blend.
+        "ALTER TABLE veneer_regrade_log ADD COLUMN from_unit_cost REAL",
+        "ALTER TABLE veneer_regrade_log ADD COLUMN to_unit_cost_before REAL",
+        "ALTER TABLE veneer_regrade_log ADD COLUMN to_unit_cost_after REAL",
         "ALTER TABLE fc_transfer_requests ADD COLUMN direction TEXT DEFAULT 'inbound'",
         "ALTER TABLE fc_transfer_requests ADD COLUMN batch_ref TEXT DEFAULT ''",
         "ALTER TABLE fc_transfer_requests ADD COLUMN po_ref TEXT DEFAULT ''",
@@ -8585,19 +8590,37 @@ def create_veneer_regrade(data: dict) -> dict:
         conn.close()
         raise ValueError(f"Insufficient FC stock: only {src_stock} available")
 
-    # Deduct from source fc_stock, add to target fc_stock
+    # ── Weighted-average costing ──────────────────────────────────────
+    # The regraded pieces carry the SOURCE's unit cost into the target, and
+    # the target SKU's single unit_cost is re-blended over its TOTAL on-hand
+    # (FC + WH — there is no separate PSP bucket today) so the cost is correct
+    # for both up- and down-grades. The source's unit_cost is unchanged
+    # (removing pieces at a uniform average doesn't move the average).
+    tgt_full = row_to_dict(conn.execute(
+        "SELECT * FROM materials WHERE id=?", (data['to_material_id'],)).fetchone())
+    from_cost = float(from_mat.get('unit_cost') or 0)
+    to_cost_before = float(tgt_full.get('unit_cost') or 0)
+    tgt_total = float(tgt_full.get('fc_stock') or 0) + float(tgt_full.get('current_stock') or 0)
+    incoming_value = qty * from_cost
+    new_total = tgt_total + qty
+    to_cost_after = round(((tgt_total * to_cost_before) + incoming_value) / new_total, 4) \
+        if new_total > 0 else to_cost_before
+
+    # Deduct from source fc_stock, add to target fc_stock; reprice the target.
     conn.execute("UPDATE materials SET fc_stock=MAX(0,fc_stock-?) WHERE id=?",
                  (qty, data['from_material_id']))
-    conn.execute("UPDATE materials SET fc_stock=fc_stock+? WHERE id=?",
-                 (qty, data['to_material_id']))
+    conn.execute("UPDATE materials SET fc_stock=fc_stock+?, unit_cost=? WHERE id=?",
+                 (qty, to_cost_after, data['to_material_id']))
 
     rid = _new_regrade_id()
     conn.execute(
         """INSERT INTO veneer_regrade_log
-           (record_id, from_material_id, to_material_id, qty, from_location, to_location, graded_by, notes)
-           VALUES (?,?,?,?,?,?,?,?)""",
+           (record_id, from_material_id, to_material_id, qty, from_location, to_location,
+            graded_by, notes, from_unit_cost, to_unit_cost_before, to_unit_cost_after)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, data['from_material_id'], data['to_material_id'], qty,
-         'fc_station', 'fc_station', data['graded_by'], data.get('notes', ''))
+         'fc_station', 'fc_station', data['graded_by'], data.get('notes', ''),
+         round(from_cost, 4), round(to_cost_before, 4), to_cost_after)
     )
     conn.commit()
     row = conn.execute("""
