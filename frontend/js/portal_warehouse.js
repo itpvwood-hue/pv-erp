@@ -2174,7 +2174,13 @@ function openMatById(id){
 const _editBtn = id=>`<button class="btn btn-xs btn-outline-secondary py-0 px-1" data-bs-toggle="modal" data-bs-target="#materialModal" onclick="openMatById(${id})"><i class="bi bi-pencil"></i></button>`;
 const _stockCell = m=>{
   const low=(m.current_stock||0)<(m.reorder_point||0);
-  return `<td class="${low?'text-danger fw-bold':''}">${fmt(m.current_stock)}${low?' <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:.7rem"></i>':''}</td>`;
+  // Boards + veneers can also sit at WLWH (2nd storage location) and FC.
+  // Show WH as the headline number with a small per-location breakdown.
+  let extra='';
+  if(m.type==='core_board' || m.type==='veneer_sheet'){
+    extra = `<div class="text-muted" style="font-size:.62rem;line-height:1.1">WLWH ${fmt(m.wlwh_stock||0)} · FC ${fmt(m.fc_stock||0)}</div>`;
+  }
+  return `<td class="${low?'text-danger fw-bold':''}">WH ${fmt(m.current_stock)}${low?' <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:.7rem"></i>':''}${extra}</td>`;
 };
 const _fscBadge = f=>f&&f!=='-'?`<span class="badge bg-success-subtle text-success border border-success" style="font-size:.65rem">${f}</span>`:'<span class="text-muted">—</span>';
 

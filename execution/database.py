@@ -1003,6 +1003,9 @@ def init_db():
         "ALTER TABLE materials ADD COLUMN matching TEXT",
         "ALTER TABLE materials ADD COLUMN grade TEXT",
         "ALTER TABLE materials ADD COLUMN face_back TEXT",
+        # WLWH — a second physical storage location (boards + veneers), alongside
+        # current_stock (WH) and fc_stock (FC). WH staff move stock between them.
+        "ALTER TABLE materials ADD COLUMN wlwh_stock REAL DEFAULT 0",
         # Regrade cost audit: source cost carried in, and target cost before/after
         # the weighted-average blend.
         "ALTER TABLE veneer_regrade_log ADD COLUMN from_unit_cost REAL",
