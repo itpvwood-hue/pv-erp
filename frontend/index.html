@@ -5307,6 +5307,13 @@
       <div class="col-md-6"><label class="form-label small fw-semibold">Lot Code</label>
         <input class="form-control form-control-sm" id="rrec-lot" placeholder="auto if blank">
       </div>
+      <div class="col-md-6" id="rrec-dest-wrap" style="display:none">
+        <label class="form-label small fw-semibold">Receive into <span class="text-muted small">(boards/veneers)</span></label>
+        <select class="form-select form-select-sm" id="rrec-dest">
+          <option value="WH">WH — main warehouse</option>
+          <option value="WLWH">WLWH</option>
+        </select>
+      </div>
       <div class="col-md-4"><label class="form-label small fw-semibold">Unit Cost <span class="badge bg-success">฿ THB</span></label>
         <input type="number" class="form-control form-control-sm" id="rrec-cost" step="0.01" min="0">
       </div>

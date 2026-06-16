@@ -5506,7 +5506,7 @@ def quick_receive_for_pr(*, pr_id: int, received_qty: float, planned_arrival: st
                          lot_code: str = '', unit_cost: float = 0,
                          expiry_date: str = None, supplier: str = '',
                          supplier_lot_ref: str = '', notes: str = '',
-                         received_by: str = '') -> dict:
+                         received_by: str = '', destination: str = 'WH') -> dict:
     """One-shot helper: warehouse receives goods against a PR that had no
     scheduled shipment row. We create the shipment row implicitly with the
     received qty + today's planned_arrival, then immediately call the normal
@@ -5523,7 +5523,7 @@ def quick_receive_for_pr(*, pr_id: int, received_qty: float, planned_arrival: st
         shipment_id=ship['id'], received_qty=float(received_qty),
         lot_code=lot_code, unit_cost=unit_cost, expiry_date=expiry_date,
         supplier=supplier, supplier_lot_ref=supplier_lot_ref, notes=notes,
-        received_by=received_by)
+        received_by=received_by, destination=destination)
 
 
 def split_pr_shipment(*, shipment_id: int, split_qty: float,
@@ -5564,7 +5564,8 @@ def split_pr_shipment(*, shipment_id: int, split_qty: float,
 def receive_pr_shipment(*, shipment_id: int, received_qty: float, lot_code: str = '',
                         unit_cost: float = 0, expiry_date: str = None,
                         supplier: str = '', supplier_lot_ref: str = '',
-                        notes: str = '', received_by: str = '') -> dict:
+                        notes: str = '', received_by: str = '',
+                        destination: str = 'WH') -> dict:
     """Warehouse marks a planned shipment as received → creates a material_lot
     for the received qty, auto-attaches any PR-scoped supplier docs to it, and
     bumps current_stock. If less than the planned qty is received the shipment
@@ -5603,10 +5604,17 @@ def receive_pr_shipment(*, shipment_id: int, received_qty: float, lot_code: str 
               (notes or '') + f" [Shipment #{s['sequence']} of PR {pr.get('request_number')}]"))
         lot_id = cur.lastrowid
 
-        # Bump warehouse stock
+        # Bump stock at the chosen location. WLWH is only valid for boards /
+        # veneers; anything else falls back to WH (current_stock).
         try:
+            dest = (destination or 'WH').strip().upper()
+            col = 'current_stock'
+            if dest == 'WLWH':
+                mt = conn.execute("SELECT type FROM materials WHERE id=?", (material_id,)).fetchone()
+                if mt and mt[0] in ('core_board', 'veneer_sheet'):
+                    col = 'wlwh_stock'
             conn.execute(
-                "UPDATE materials SET current_stock = COALESCE(current_stock,0) + ? WHERE id=?",
+                f"UPDATE materials SET {col} = COALESCE({col},0) + ? WHERE id=?",
                 (float(received_qty), material_id))
         except Exception:
             pass

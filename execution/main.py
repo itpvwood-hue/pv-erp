@@ -2998,6 +2998,7 @@ class ReceiveIn(BaseModel):
     supplier: Optional[str] = ''
     supplier_lot_ref: Optional[str] = ''
     notes: Optional[str] = ''
+    destination: Optional[str] = 'WH'   # WH | WLWH (boards/veneers only)
 
 @app.post("/api/shipments/{shipment_id}/receive")
 def receive_shipment_ep(shipment_id: int, body: ReceiveIn, user: dict = Depends(require_auth)):
@@ -3007,7 +3008,7 @@ def receive_shipment_ep(shipment_id: int, body: ReceiveIn, user: dict = Depends(
             lot_code=body.lot_code or '', unit_cost=body.unit_cost or 0,
             expiry_date=body.expiry_date, supplier=body.supplier or '',
             supplier_lot_ref=body.supplier_lot_ref or '', notes=body.notes or '',
-            received_by=user.get('username') or '')
+            received_by=user.get('username') or '', destination=body.destination or 'WH')
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3022,6 +3023,7 @@ class QuickReceiveIn(BaseModel):
     supplier: Optional[str] = ''
     supplier_lot_ref: Optional[str] = ''
     notes: Optional[str] = ''
+    destination: Optional[str] = 'WH'   # WH | WLWH (boards/veneers only)
 
 @app.post("/api/purchase-requests/{pr_id}/quick-receive")
 def quick_receive_ep(pr_id: int, body: QuickReceiveIn, user: dict = Depends(require_auth)):
@@ -3035,7 +3037,8 @@ def quick_receive_ep(pr_id: int, body: QuickReceiveIn, user: dict = Depends(requ
             carrier=body.carrier or '', lot_code=body.lot_code or '',
             unit_cost=body.unit_cost or 0, expiry_date=body.expiry_date,
             supplier=body.supplier or '', supplier_lot_ref=body.supplier_lot_ref or '',
-            notes=body.notes or '', received_by=user.get('username') or '')
+            notes=body.notes or '', received_by=user.get('username') or '',
+            destination=body.destination or 'WH')
     except ValueError as e:
         raise HTTPException(400, str(e))
 

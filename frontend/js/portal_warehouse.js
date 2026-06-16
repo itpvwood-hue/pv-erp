@@ -532,6 +532,10 @@ function rrecOpenReceive(r){
     document.getElementById('rrec-qty-hint').textContent =
       `Remaining on this shipment: ${_rrecNum(remaining)} ${r.uom||''}. Enter less for a partial receipt.`;
   }
+  // Destination (WH/WLWH) only for boards & veneers
+  const isBV = (r.material_type==='core_board'||r.material_type==='veneer_sheet');
+  const dw=document.getElementById('rrec-dest-wrap'); if(dw) dw.style.display = isBV?'':'none';
+  const ds=document.getElementById('rrec-dest'); if(ds) ds.value='WH';
   new bootstrap.Modal(document.getElementById('rrecReceiveModal')).show();
 }
 async function rrecSubmit(){
@@ -543,6 +547,8 @@ async function rrecSubmit(){
     expiry_date:  document.getElementById('rrec-expiry').value||null,
     supplier_lot_ref: document.getElementById('rrec-supref').value,
     notes:        document.getElementById('rrec-notes').value,
+    destination:  (document.getElementById('rrec-dest-wrap')?.style.display!=='none'
+                    ? (document.getElementById('rrec-dest')?.value||'WH') : 'WH'),
   };
   if(body.received_qty<=0){ alert('Quantity must be greater than zero'); return; }
   try{
