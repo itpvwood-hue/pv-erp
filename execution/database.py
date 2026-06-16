@@ -1593,12 +1593,16 @@ def get_material(mid):
 
 def create_material(data):
     conn = get_db()
+    # `code` was missing from the INSERT, so UI-created materials had no SKU
+    # code — invisible to BOMs, FIFO and the FC-stock CSV (all match by code).
+    # Empty string → NULL, mirroring update_material.
+    new_code = (data.get('code') or '').strip() or None
     cur = conn.execute(
         """INSERT INTO materials
-           (name,type,unit,current_stock,reorder_point,unit_cost,supplier,
+           (code,name,type,unit,current_stock,reorder_point,unit_cost,supplier,
             thickness_mm,width_mm,length_mm,auto_glue_code)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (data['name'], data['type'], data['unit'],
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (new_code, data['name'], data['type'], data['unit'],
          data.get('current_stock', 0), data.get('reorder_point', 0),
          data.get('unit_cost', 0), data.get('supplier', ''),
          data.get('thickness_mm'), data.get('width_mm'), data.get('length_mm'),

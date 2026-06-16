@@ -2374,7 +2374,7 @@ async def upload_fc_stock(file: UploadFile = File(...), mode: str = "add",
         except ValueError:
             errors.append(f"Row {i}: invalid fc_stock value '{row.get('fc_stock')}'"); continue
 
-            mat = conn.execute("SELECT id FROM materials WHERE code=? AND type IN ('veneer_sheet','core_board')",
+        mat = conn.execute("SELECT id FROM materials WHERE code=? AND type IN ('veneer_sheet','core_board')",
                            (code,)).fetchone()
         if not mat:
             errors.append(f"Row {i}: code '{code}' not found or not a veneer/board"); continue
