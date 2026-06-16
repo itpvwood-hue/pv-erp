@@ -1373,13 +1373,19 @@ def consumables_template():
 def wip_template():
     """Opening work-in-progress template — one in-flight job per row, placed at
     its current station. sku_code must match an existing finished-good SKU;
-    line is the manufacturing line; current_station is the department it's at."""
+    line is the manufacturing line; current_station is the department it's at.
+
+    Finished goods: set current_station=fg_warehouse. Two optional columns
+    apply only to FG rows — `pcs` (actual pieces; wins over pallets×pcs/pallet)
+    and `location` (FG or WLWH overflow). They're ignored for in-flight rows."""
     rows = [
-        "sku_code,line,quantity,current_station,batch_ref,po_ref",
-        "3ENR24NF1,P01,120,laminating,WIP-A12,POD250389",
-        "3ENR28NF1,P01,80,sanding,WIP-A13,",
-        "3ENR30NF1,P02,200,grading,WIP-B07,POD20056",
-        "3ENR32NF1,P37,60,packing,WIP-C01,",
+        "sku_code,line,quantity,current_station,batch_ref,po_ref,pcs,location",
+        "3ENR24NF1,P01,120,laminating,WIP-A12,POD250389,,",
+        "3ENR28NF1,P01,80,sanding,WIP-A13,,,",
+        "3ENR30NF1,P02,200,grading,WIP-B07,POD20056,,",
+        "3ENR32NF1,P37,60,packing,WIP-C01,,,",
+        "3ENR24NF1,P01,40,fg_warehouse,FG-2001,POD250389,2000,FG",
+        "3ENR28NF1,P02,15,fg_warehouse,FG-2002,,720,WLWH",
     ]
     return _csv_response(rows, "opening_wip_template.csv")
 
@@ -1400,7 +1406,8 @@ async def upload_wip(file: UploadFile = File(...), mode: str = "validate"):
                  for k, v in r.items()} for r in rows_csv]
     # drop fully-blank rows (Excel trailing artifact)
     rows_csv = [r for r in rows_csv if any(r.get(k) for k in
-                ('sku_code', 'line', 'quantity', 'current_station', 'batch_ref', 'po_ref'))]
+                ('sku_code', 'line', 'quantity', 'current_station', 'batch_ref',
+                 'po_ref', 'pcs', 'location'))]
     return import_wip_batches(rows_csv, commit=(mode == 'commit'),
                               created_by='wip_import')
 

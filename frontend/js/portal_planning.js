@@ -9243,6 +9243,8 @@ function _wipRender(res){
       <td class="small">${r.line||'—'}</td>
       <td class="small">${r.current_station||'—'}</td>
       <td class="small text-end">${r.quantity||'—'}</td>
+      <td class="small text-end">${r.pcs||''}</td>
+      <td class="small">${r.location?`<span class="badge ${r.location==='WLWH'?'bg-info-subtle text-info-emphasis':'bg-secondary-subtle text-secondary-emphasis'}">${r.location}</span>`:''}</td>
       <td class="small">${r.batch_ref||''}</td>
       <td>${status}${errs?'<div class="small mt-1">'+errs+'</div>':''}${sug?'<div class="small mt-1">'+sug+'</div>':''}</td>
     </tr>`;
@@ -9250,7 +9252,7 @@ function _wipRender(res){
   document.getElementById('wip-results').innerHTML = `
     <div class="table-responsive"><table class="table table-sm table-hover align-middle">
       <thead class="table-light"><tr>
-        <th>#</th><th>SKU</th><th>Line</th><th>Station</th><th class="text-end">Qty</th><th>Ref</th><th>Status</th>
+        <th>#</th><th>SKU</th><th>Line</th><th>Station</th><th class="text-end">Pallets</th><th class="text-end">Pcs</th><th>Loc</th><th>Ref</th><th>Status</th>
       </tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 }
 async function wipValidate(){

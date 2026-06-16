@@ -2712,12 +2712,41 @@ def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -
         if po_ref and po_id is None:
             suggestions['po_ref'] = f"(no sales PO '{po_ref}' — batch will import unlinked)"
 
+        # Finished-goods rows (current_station == fg_warehouse) may carry two
+        # optional columns: `pcs` (actual pieces — wins over pallets×pcs/pallet)
+        # and `location` (FG | WLWH overflow). They're ignored for non-FG rows.
+        is_fg   = (stn == 'fg_warehouse')
+        pcs_raw = (raw.get('pcs') or '').strip()
+        loc_raw = (raw.get('location') or '').strip().upper()
+        pcs_val = None
+        if pcs_raw:
+            try:
+                pcs_val = int(float(pcs_raw))
+                if pcs_val < 0:
+                    errors.append("pcs must be zero or positive")
+            except (TypeError, ValueError):
+                errors.append(f"pcs '{pcs_raw}' is not a number")
+        fg_location = 'FG'
+        if loc_raw:
+            if loc_raw not in ('FG', 'WLWH'):
+                errors.append("location must be FG or WLWH")
+            else:
+                fg_location = loc_raw
+            if not is_fg:
+                suggestions['location'] = "(location only applies to fg_warehouse rows — ignored)"
+        if pcs_raw and not is_fg:
+            suggestions['pcs'] = "(pcs only applies to fg_warehouse rows — ignored)"
+
         report.append({
             "row": i, "sku_code": sku, "line": line, "current_station": stn,
             "quantity": qty if qty is not None else qty_raw,
+            "pcs": (pcs_val if pcs_val is not None else pcs_raw) if is_fg else "",
+            "location": fg_location if is_fg else "",
             "batch_ref": batch_ref, "po_ref": po_ref,
             "ok": not errors, "errors": errors, "suggestions": suggestions,
             "_product_id": valid_skus.get(sku), "_po_id": po_id,
+            "_pcs": pcs_val if is_fg else None,
+            "_fg_location": fg_location if is_fg else None,
         })
 
     valid_rows = [r for r in report if r["ok"]]
@@ -2741,6 +2770,21 @@ def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -
                 if r['current_station'] != 'fc':
                     move_batch(rel['batch_id'], r['current_station'], r['quantity'],
                                notes="Opening WIP placement", moved_by=created_by)
+                # Opening FG must stay counted as stock. move_batch auto-marks
+                # any batch reaching fg_warehouse as 'completed', which the FG
+                # stock view excludes — so re-activate it, and record actual pcs
+                # + physical location (FG / WLWH).
+                if r['current_station'] == 'fg_warehouse':
+                    fixc = get_db()
+                    try:
+                        fixc.execute("UPDATE batches SET status='active', fg_location=? WHERE id=?",
+                                     (r.get('_fg_location') or 'FG', rel['batch_id']))
+                        if r.get('_pcs') is not None:
+                            fixc.execute("UPDATE batches SET pcs_actual=? WHERE id=?",
+                                         (r['_pcs'], rel['batch_id']))
+                        fixc.commit()
+                    finally:
+                        fixc.close()
                 r['created_batch'] = rel['batch_number']
                 created.append(r)
             except Exception as e:
@@ -2750,6 +2794,7 @@ def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -
     # strip internal keys before returning
     for r in report:
         r.pop('_product_id', None); r.pop('_po_id', None)
+        r.pop('_pcs', None); r.pop('_fg_location', None)
 
     return {
         "mode": "commit" if commit else "validate",
