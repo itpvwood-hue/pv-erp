@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.25"
-BUILD_DATE = "2026-06-12"
+VERSION    = "2.21.26"
+BUILD_DATE = "2026-06-16"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.26", "2026-06-16", "Full TH/ZH translations linked. Regenerated the I18N dict in frontend/js/i18n.js from the reviewed translations workbook (108 -> 903 entries, all keyed by the exact English source string, no blanks, none of the old hand-written keys dropped). The i18n engine already auto-translates static UI by exact-match lookup, so populating the dict IS the link - no code changes needed. Added scripts/gen_i18n.py to re-run the import whenever the workbook is updated."),
     ("2.21.25", "2026-06-12", "WLWH Phase 3: receive-to-location. The Raw Material Receiving modal now offers a 'Receive into: WH / WLWH' choice for boards & veneers (hidden for other types). receive_pr_shipment / quick_receive_for_pr take a destination param and bump current_stock (WH) or wlwh_stock (WLWH); the material lot is still created the same way (FIFO), only the bucket differs. WLWH is guarded to boards/veneers only - a consumable received 'to WLWH' falls back to WH. Endpoints' ReceiveIn/QuickReceiveIn gained an optional destination (default WH). Verified: board received 40->WLWH / 25->WH; consumable WLWH attempt -> WH. Next: (4) FG->WLWH."),
     ("2.21.24", "2026-06-12", "WLWH Phase 2: WH<->WLWH stock movements + clearer location UX. (UX) Raw Materials board/veneer rows now use explicit Location | Qty column pairs (a 2nd pair appears when stock is split across WH and WLWH) instead of the inline 'WH ###'; consumables keep a single Stock number (no location). (Movement) New wh_stock_transfers log + wh_move_stock(material, from, to, qty) — WH staff self-service move of boards/veneers between WH and WLWH; validates the source bucket, shifts qty, logs it. Endpoints POST /api/warehouse/move-stock (WAREHOUSE/MANAGERIAL) + GET /api/warehouse/move-log. A Move (<->) button on each board/veneer row opens a from/to/qty modal showing available stock. Verified: move 30 WH->WLWH (100->70 / 0->30), over-move blocked, logged. Next: (3) receive-to-location, (4) FG->WLWH."),
     ("2.21.23", "2026-06-12", "WLWH multi-location stock — Phase 1 of 4. New materials.wlwh_stock column: a second physical storage location for boards + veneers, alongside current_stock (WH) and fc_stock (FC). Raw Materials board/veneer rows now show the per-location breakdown (WH headline + 'WLWH n / FC n'). Migration is idempotent. Next phases: (2) WH<->WLWH internal movement requests (WH self-service), (3) receive-to-location (WH or WLWH), (4) FG -> WLWH movement."),
