@@ -1357,6 +1357,17 @@ def init_db():
     except Exception:
         pass
 
+    # ── Seed the default BOM group (bom_lines.group_id is NOT NULL with an FK
+    #    to bom_groups; the BOM Builder writes every line under 'Core Materials',
+    #    so it must always exist or saves fail with a FK error). Idempotent. ──
+    try:
+        if not conn.execute("SELECT 1 FROM bom_groups WHERE name='Core Materials'").fetchone():
+            conn.execute("INSERT INTO bom_groups (name, calc_method, sort_order) "
+                         "VALUES ('Core Materials','per_pallet',0)")
+            conn.commit()
+    except Exception:
+        pass
+
     # ── Seed actual PV Wood glue recipes (idempotent: keyed by recipe_code) ──
     _seed_real_glue_recipes(conn)
     # ── Seed lines, departments, line flow (idempotent) ─────────────
@@ -4232,13 +4243,32 @@ def save_bom_for_sku(data):
                face_glue_code, face_glue_usage_g,
                back_glue_code, back_glue_usage_g,
                packing_sku_code
+
+    Thin wrapper so the connection is ALWAYS released. Previously a mid-save
+    error (e.g. a bad FK) left the write connection open and holding the SQLite
+    lock, which wedged later writers with 'database is locked'.
     """
     conn = get_db()
+    try:
+        return _save_bom_for_sku_impl(conn, data)
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def _save_bom_for_sku_impl(conn, data):
     code = data['sku_code'].strip().upper()
 
-    # Group id for Core Materials
+    # Group id for Core Materials. bom_lines.group_id is NOT NULL with an FK to
+    # bom_groups, so a hardcoded fallback id can break on a fresh DB where the
+    # group was never seeded (FOREIGN KEY constraint failed). Create it on demand.
     grp = conn.execute("SELECT id FROM bom_groups WHERE name='Core Materials'").fetchone()
-    grp_id = grp[0] if grp else 1
+    if grp:
+        grp_id = grp[0]
+    else:
+        grp_id = conn.execute(
+            "INSERT INTO bom_groups (name, calc_method, sort_order) VALUES ('Core Materials','per_pallet',0)"
+        ).lastrowid
 
     # Resolve packing_sku_id
     packing_id = None
@@ -4805,8 +4835,19 @@ def save_glue_recipe(data: dict) -> dict:
     `material_links` is a dict mapping ingredient key → materials.id so
     the glue-mix shortfall check can resolve catalog stock without fuzzy
     name-matching. Valid keys: e0_glue, latex_g312, flour, yellow_pigment,
-    hardener, red_pigment, black_pigment, titanium."""
+    hardener, red_pigment, black_pigment, titanium.
+
+    Wrapper ensures the connection is always released — a failed write (e.g. a
+    duplicate recipe_code) used to leak the open connection and lock the DB."""
     conn = get_db()
+    try:
+        return _save_glue_recipe_impl(conn, data)
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def _save_glue_recipe_impl(conn, data):
     rid = data.get('id')
     # Normalise the material_links payload: keep only known keys, int values
     _VALID_INGREDIENTS = {'e0_glue','latex_g312','flour','yellow_pigment',
