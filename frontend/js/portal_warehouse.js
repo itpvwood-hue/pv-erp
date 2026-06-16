@@ -1712,22 +1712,77 @@ function fgwRenderStock(){
   );
   const tbody = document.getElementById('fgw-stock-tbody');
   if(!rows.length){
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No FG stock currently in warehouse. Batches arrive here from packing.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No FG stock currently in warehouse. Batches arrive here from packing.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
     const dims = (r.thickness_mm && r.width_mm && r.length_mm)
       ? `${r.thickness_mm}×${r.width_mm}×${r.length_mm}` : '—';
+    const fgP   = Number(r.fg_pallets||0), wlP = Number(r.wlwh_pallets||0);
+    const wlBadge = wlP>0 ? `<span class="badge bg-info-subtle text-info-emphasis">${fmt(wlP)} plt</span>` : '<span class="text-muted">—</span>';
+    // Page is warehouse-scoped; backend require_role enforces the actual move.
+    const moveBtn = `<button class="btn btn-xs btn-outline-primary" onclick="fgMoveOpen('${(r.sku_code||'').replace(/'/g,"\\'")}')" title="Move pallets between FG and WLWH"><i class="bi bi-arrow-left-right me-1"></i>Move</button>`;
     return `<tr>
       <td><code class="text-success fw-semibold">${r.sku_code||''}</code></td>
       <td class="small">${r.product_name||'—'}</td>
       <td class="text-center small text-muted">${dims}</td>
       <td class="text-end fw-bold text-success">${fmt(r.in_stock_pcs)} pcs</td>
       <td class="text-end">${fmt(r.in_stock_pallets)}</td>
-      <td class="text-end small text-muted">${fmt(r.pallet_qty)}</td>
+      <td class="text-end small">${fgP>0?fmt(fgP)+' plt':'<span class="text-muted">—</span>'}</td>
+      <td class="text-end small">${wlBadge}</td>
       <td class="text-end small">${r.batch_count}</td>
+      <td class="text-end">${moveBtn}</td>
     </tr>`;
   }).join('');
+}
+
+// ── FG <-> WLWH move dialog ──────────────────────────────────
+let _fgMoveSku = null, _fgMoveBatches = [];
+async function fgMoveOpen(sku){
+  _fgMoveSku = sku;
+  document.getElementById('fgmove-sku').textContent = sku;
+  document.getElementById('fgmove-dest').value = 'WLWH';
+  const body = document.getElementById('fgmove-tbody');
+  body.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading batches…</td></tr>';
+  new bootstrap.Modal(document.getElementById('fgMoveModal')).show();
+  try {
+    _fgMoveBatches = await api('/api/fg-warehouse/batches?sku='+encodeURIComponent(sku));
+  } catch(e){ toast('Failed to load batches: '+e.message,'danger'); return; }
+  fgMoveRenderBatches();
+}
+function fgMoveRenderBatches(){
+  const dest = document.getElementById('fgmove-dest').value;
+  // Only batches NOT already at the destination can move there.
+  const rows = (_fgMoveBatches||[]).filter(b => (b.fg_location||'FG') !== dest);
+  const body = document.getElementById('fgmove-tbody');
+  if(!rows.length){
+    body.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-3">No batches available to move to ${dest}.</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map(b => `<tr>
+      <td><input type="checkbox" class="form-check-input fgmove-chk" value="${b.id}"></td>
+      <td><code class="small">${b.batch_number||''}</code></td>
+      <td class="text-center"><span class="badge ${ (b.fg_location||'FG')==='WLWH' ? 'bg-info-subtle text-info-emphasis' : 'bg-secondary-subtle text-secondary-emphasis'}">${b.fg_location||'FG'}</span></td>
+      <td class="text-end">${fmt(b.pallets)}</td>
+      <td class="text-end">${fmt(b.pcs)} pcs</td>
+      <td class="small text-muted">${(b.created_at||'').slice(0,10)}</td>
+    </tr>`).join('');
+}
+function fgMoveToggleAll(cb){ document.querySelectorAll('.fgmove-chk').forEach(c=>c.checked=cb.checked); }
+async function fgMoveSubmit(){
+  const dest = document.getElementById('fgmove-dest').value;
+  const ids = Array.from(document.querySelectorAll('.fgmove-chk:checked')).map(c=>parseInt(c.value));
+  if(!ids.length){ toast('Select at least one batch to move','warning'); return; }
+  const notes = (document.getElementById('fgmove-notes').value||'').trim();
+  const btn = document.getElementById('fgmove-submit'); btn.disabled = true;
+  try {
+    const r = await api('/api/fg-warehouse/move-location', {method:'POST',
+      body: JSON.stringify({batch_ids: ids, to_location: dest, notes})});
+    toast(`Moved ${r.count} batch${r.count===1?'':'es'} to ${dest}`,'success');
+    bootstrap.Modal.getInstance(document.getElementById('fgMoveModal')).hide();
+    loadFgWarehouse();
+  } catch(e){ toast('Move failed: '+e.message,'danger'); }
+  finally { btn.disabled = false; }
 }
 
 // ── Tab 2: Open POs ──────────────────────────────────────

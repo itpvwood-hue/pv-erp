@@ -78,6 +78,7 @@ from database import (
     get_all_purchase_orders, get_purchase_order, create_purchase_order, update_purchase_order, delete_purchase_order,
     get_customers, create_customer, update_customer, get_customer_orders,
     wh_move_stock, get_wh_transfer_log,
+    list_fg_batches, move_fg_batches, get_fg_location_log,
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
     get_all_batches, get_batch, move_batch, split_batch, split_batch_by_pcs,
@@ -2463,6 +2464,30 @@ def warehouse_move_stock(body: WhMoveIn,
 def warehouse_move_log(material_id: Optional[int] = None, limit: int = 50,
                        user: dict = Depends(require_auth)):
     return get_wh_transfer_log(material_id=material_id, limit=limit)
+
+# ── FG warehouse <-> WLWH location moves (Phase 4) ───────────
+class FgMoveIn(BaseModel):
+    batch_ids: List[int]
+    to_location: str
+    notes: str = ""
+
+@app.get("/api/fg-warehouse/batches")
+def fg_warehouse_batches(sku: Optional[str] = None, location: Optional[str] = None,
+                         user: dict = Depends(require_auth)):
+    return list_fg_batches(sku=sku, location=location)
+
+@app.post("/api/fg-warehouse/move-location", status_code=201)
+def fg_warehouse_move_location(body: FgMoveIn,
+                               user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
+    try:
+        return move_fg_batches(body.batch_ids, body.to_location,
+                               moved_by=(user.get('username') or ''), notes=body.notes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/fg-warehouse/move-log")
+def fg_warehouse_move_log(limit: int = 50, user: dict = Depends(require_auth)):
+    return get_fg_location_log(limit=limit)
 
 # ── ACCOUNTING — read-only data hub ──────────────────────────
 @app.get("/api/accounting/summary")

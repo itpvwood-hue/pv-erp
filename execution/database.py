@@ -156,6 +156,18 @@ def init_db():
             created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (material_id) REFERENCES materials(id)
         );
+        CREATE TABLE IF NOT EXISTS fg_location_moves (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id      INTEGER NOT NULL,
+            from_location TEXT NOT NULL,
+            to_location   TEXT NOT NULL,
+            pallets       INTEGER DEFAULT 0,
+            pcs           INTEGER DEFAULT 0,
+            moved_by      TEXT DEFAULT '',
+            notes         TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (batch_id) REFERENCES batches(id)
+        );
         CREATE TABLE IF NOT EXISTS po_lines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             po_id INTEGER NOT NULL,
@@ -1017,6 +1029,10 @@ def init_db():
         # WLWH — a second physical storage location (boards + veneers), alongside
         # current_stock (WH) and fc_stock (FC). WH staff move stock between them.
         "ALTER TABLE materials ADD COLUMN wlwh_stock REAL DEFAULT 0",
+        # WLWH for finished goods: FG batches at the FG warehouse may physically
+        # sit at the main FG warehouse ('FG') or at WLWH overflow storage ('WLWH').
+        # The batch stays FG inventory either way — this is just where it is.
+        "ALTER TABLE batches ADD COLUMN fg_location TEXT DEFAULT 'FG'",
         # Regrade cost audit: source cost carried in, and target cost before/after
         # the weighted-average blend.
         "ALTER TABLE veneer_regrade_log ADD COLUMN from_unit_cost REAL",
@@ -2183,6 +2199,95 @@ def get_wh_transfer_log(material_id: int = None, limit: int = 50) -> list:
     conn.close(); return rows
 
 
+# ═══════════════════════════════════════════════════════════════
+# FG WAREHOUSE <-> WLWH location moves — Phase 4
+# Finished-goods batches live at the FG warehouse; WH staff can park whole
+# batches at WLWH overflow storage and bring them back. The batch never
+# leaves FG inventory (department stays 'fg_warehouse') — only fg_location
+# changes, so FG counts and PO fulfillment are unaffected.
+# ═══════════════════════════════════════════════════════════════
+_FG_LOCATIONS = ('FG', 'WLWH')
+
+def list_fg_batches(sku: str = None, location: str = None) -> list:
+    """FG-warehouse batches (one row per batch) with their physical location,
+    pcs and pallet count. Used by the move dialog to pick batches."""
+    conn = get_db()
+    q = """
+        SELECT b.id, b.batch_number, b.quantity AS pallets,
+               COALESCE(b.fg_location, 'FG') AS fg_location,
+               b.created_at,
+               COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) AS pcs,
+               p.sku AS sku_code, p.name AS product_name,
+               pur.po_number, pur.customer
+        FROM batches b
+        JOIN production_orders po ON po.id = b.prod_order_id
+        JOIN products p ON p.id = po.product_id
+        LEFT JOIN purchase_orders pur ON pur.id = po.po_id
+        LEFT JOIN skus sk ON sk.code = p.sku
+        WHERE b.current_department = 'fg_warehouse' AND b.status != 'completed'
+    """
+    params = []
+    if sku:
+        q += " AND p.sku = ?"; params.append(sku)
+    if location:
+        q += " AND COALESCE(b.fg_location,'FG') = ?"; params.append(location.strip().upper())
+    q += " ORDER BY b.created_at, b.id"
+    rows = rows_to_list(conn.execute(q, params).fetchall())
+    conn.close(); return rows
+
+def move_fg_batches(batch_ids, to_location: str, moved_by: str = '', notes: str = '') -> dict:
+    """Move one or more whole FG batches to a location ('FG' or 'WLWH').
+    Each batch must currently be at the FG warehouse and not already at the
+    target location. All-or-nothing within a single commit."""
+    to_loc = (to_location or '').strip().upper()
+    if to_loc not in _FG_LOCATIONS:
+        raise ValueError("Location must be FG or WLWH")
+    if isinstance(batch_ids, (int, str)):
+        batch_ids = [batch_ids]
+    ids = [int(b) for b in batch_ids if str(b).strip()]
+    if not ids:
+        raise ValueError("Select at least one batch to move")
+    conn = get_db()
+    try:
+        moved = []
+        for bid in ids:
+            b = row_to_dict(conn.execute(
+                "SELECT id, batch_number, quantity, pcs_actual, current_department, "
+                "COALESCE(fg_location,'FG') AS fg_location FROM batches WHERE id=?",
+                (bid,)).fetchone())
+            if not b:
+                raise ValueError(f"Batch {bid} not found")
+            if b['current_department'] != 'fg_warehouse':
+                raise ValueError(f"Batch {b['batch_number']} is not at the FG warehouse")
+            frm = b['fg_location']
+            if frm == to_loc:
+                raise ValueError(f"Batch {b['batch_number']} is already at {to_loc}")
+            pcs = int(b['pcs_actual'] or 0)
+            conn.execute("UPDATE batches SET fg_location=? WHERE id=?", (to_loc, bid))
+            conn.execute("""INSERT INTO fg_location_moves
+                            (batch_id, from_location, to_location, pallets, pcs, moved_by, notes)
+                            VALUES (?,?,?,?,?,?,?)""",
+                         (bid, frm, to_loc, int(b['quantity'] or 0), pcs, moved_by, notes))
+            moved.append({"batch_id": bid, "batch_number": b['batch_number'],
+                          "from_location": frm, "to_location": to_loc,
+                          "pallets": int(b['quantity'] or 0), "pcs": pcs})
+        conn.commit()
+        return {"ok": True, "moved": moved, "count": len(moved)}
+    finally:
+        conn.close()
+
+def get_fg_location_log(limit: int = 50) -> list:
+    conn = get_db()
+    rows = rows_to_list(conn.execute("""
+        SELECT fm.*, b.batch_number, p.sku AS sku_code, p.name AS product_name
+        FROM fg_location_moves fm
+        JOIN batches b ON b.id = fm.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
+        JOIN products p ON p.id = po.product_id
+        ORDER BY fm.created_at DESC, fm.id DESC LIMIT ?""", (int(limit),)).fetchall())
+    conn.close(); return rows
+
+
 def get_customer_orders(cid: int) -> dict:
     """A customer's 'filing': their record + every sales order placed for them."""
     conn = get_db()
@@ -3324,7 +3429,13 @@ def get_fg_warehouse_dashboard():
                sk.thickness_mm, sk.width_mm, sk.length_mm,
                COUNT(b.id) as batch_count,
                SUM(COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1))) as in_stock_pcs,
-               SUM(b.quantity) as in_stock_pallets
+               SUM(b.quantity) as in_stock_pallets,
+               SUM(CASE WHEN COALESCE(b.fg_location,'FG')='WLWH'
+                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) ELSE 0 END) as wlwh_pcs,
+               SUM(CASE WHEN COALESCE(b.fg_location,'FG')='WLWH' THEN b.quantity ELSE 0 END) as wlwh_pallets,
+               SUM(CASE WHEN COALESCE(b.fg_location,'FG')<>'WLWH'
+                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) ELSE 0 END) as fg_pcs,
+               SUM(CASE WHEN COALESCE(b.fg_location,'FG')<>'WLWH' THEN b.quantity ELSE 0 END) as fg_pallets
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
         JOIN products p ON p.id = po.product_id
