@@ -161,12 +161,24 @@ const PORTAL_FOR_ROLE = {
   MANAGERIAL:          ['planning', 'warehouse', 'accounting', 'admin'],
 };
 const _portalLoadCache = {};   // name -> Promise
+let _appVerToken = null;        // cache-bust token = app version
 
-function loadPortalScript(name){
+// Fetch the running app version once, to tag portal-script URLs. A new version
+// => a new ?v= query => a guaranteed-fresh fetch after every deploy, so
+// operators never run stale portal JS (belt-and-suspenders with the server's
+// no-cache header on /static/*.js).
+async function _portalVerToken(){
+  if(_appVerToken !== null) return _appVerToken;
+  try { const r = await fetch('/api/version'); const d = await r.json(); _appVerToken = d.version || ''; }
+  catch { _appVerToken = ''; }
+  return _appVerToken;
+}
+
+function loadPortalScript(name, ver){
   if(_portalLoadCache[name]) return _portalLoadCache[name];
   _portalLoadCache[name] = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = '/static/js/portal_' + name + '.js';
+    s.src = '/static/js/portal_' + name + '.js' + (ver ? ('?v=' + encodeURIComponent(ver)) : '');
     s.onload  = () => resolve(name);
     s.onerror = () => reject(new Error('Failed to load portal_' + name + '.js'));
     document.head.appendChild(s);
@@ -175,9 +187,10 @@ function loadPortalScript(name){
 }
 
 async function loadPortalsForRole(role){
+  const ver  = await _portalVerToken();
   const list = PORTAL_FOR_ROLE[role] || ['warehouse'];
   // Parallel — they don't depend on each other.
-  return Promise.all(list.map(loadPortalScript));
+  return Promise.all(list.map(n => loadPortalScript(n, ver)));
 }
 
 async function applySession(user, depts){

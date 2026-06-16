@@ -3637,7 +3637,21 @@ def get_login_log_route(limit: int = 200, user: dict = Depends(require_role(Role
 
 # ── Static / SPA ──────────────────────────────────────────────
 if os.path.exists(FRONTEND_DIR):
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+    # Our own JS/CSS must REVALIDATE on every load, not be heuristically cached
+    # by the browser. Without this, Starlette's StaticFiles sends no
+    # Cache-Control, so browsers cache app scripts for ~minutes-to-hours and
+    # operators keep running OLD code after we deploy a fix (this is what made
+    # shipped bug-fixes appear to "still persist"). `no-cache` = always send a
+    # conditional request; the ETag/Last-Modified yields a cheap 304 when the
+    # file is unchanged and a fresh 200 the moment it changes.
+    class _RevalidatingStatic(StaticFiles):
+        async def get_response(self, path, scope):
+            resp = await super().get_response(path, scope)
+            if path.lower().endswith(('.js', '.css')):
+                resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+            return resp
+
+    app.mount("/static", _RevalidatingStatic(directory=FRONTEND_DIR), name="static")
 
     # Single-page app HTML must never be cached — otherwise users see stale JS
     # after we ship updates. CDN assets (bootstrap etc) stay cacheable.

@@ -1948,14 +1948,23 @@ async function loadCompoundTab(type){
 // window._gmRecipes assignment creates an unrelated global and the modal's
 // lookup still hits an empty array, falling back to the "New Recipe" path.
 async function bomGlueEdit(recipeId){
+  let rs;
   try {
-    const rs = await api('/api/glue-recipes');
-    _gmRecipes = rs || [];
+    rs = await api('/api/glue-recipes') || [];
   } catch(e){
     toast('Failed to load recipes: '+(e.message||e), 'danger');
     return;
   }
-  if(typeof gmOpenRecipe === 'function') await gmOpenRecipe(recipeId);
+  _gmRecipes = rs;
+  // Hand the OBJECT to the editor rather than relying on it re-finding the row
+  // in the cache. String-safe match avoids number/string id mismatches that
+  // used to silently drop into a blank "New Recipe" modal.
+  const r = rs.find(x => String(x.id) === String(recipeId));
+  if(!r){
+    toast(`Glue recipe #${recipeId} not found — cannot edit`, 'danger');
+    return;
+  }
+  if(typeof gmOpenRecipe === 'function') await gmOpenRecipe(r);
 }
 async function bomGlueDelete(recipeId, code){
   if(!confirm(`Delete glue recipe "${code}"?\n\nThis cannot be undone. Any FG BOM lines pointing at this recipe will lose their cost.`)) return;
@@ -4695,9 +4704,27 @@ function _gmShowSelectedMat(ingKey){
   lbl.innerHTML = `<span class="badge ${badgeColor} me-1" style="font-size:.6rem">${cat}</span><span class="fw-semibold">${m.code||''}</span> <span class="text-muted">${m.name||''}</span>`;
 }
 
-async function gmOpenRecipe(id){
+async function gmOpenRecipe(idOrRecipe){
   await _gmEnsureCatalog();
-  const r=id?_gmRecipes.find(x=>x.id===id):null;
+  // Accept a recipe object (preferred — no lookup needed), an id, or nothing
+  // (=> blank New Recipe form). When given an id, match string-safely and
+  // refetch once on a cache miss so a stale/empty cache can't silently turn an
+  // edit into a "New Recipe".
+  let r = null;
+  if(idOrRecipe && typeof idOrRecipe === 'object'){
+    r = idOrRecipe;
+  } else if(idOrRecipe != null && idOrRecipe !== ''){
+    const wanted = String(idOrRecipe);
+    r = (_gmRecipes||[]).find(x => String(x.id) === wanted);
+    if(!r){
+      try { _gmRecipes = await api('/api/glue-recipes') || []; } catch {}
+      r = (_gmRecipes||[]).find(x => String(x.id) === wanted);
+    }
+    if(!r){
+      toast(`Glue recipe #${wanted} not found — cannot edit`, 'danger');
+      return;
+    }
+  }
   document.getElementById('gm-edit-id').value=r?.id||'';
   document.getElementById('gm-edit-code').value=r?.recipe_code||'';
   document.getElementById('gm-edit-name').value=r?.name||'';
