@@ -7569,6 +7569,10 @@ function fcRenderGrid(){
                     onclick="fcOpenRegradeModal(${m.id},'prep')">Regrade</button>` : ''}
                   ${m.fc_stock>0 ? `
                   <button class="btn btn-outline-danger btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
+                    title="Flag as non-conforming (rejected when sorting)"
+                    onclick="ncgFlagOpen(${m.id}, fcLoadStock)"><i class="bi bi-exclamation-octagon"></i></button>` : ''}
+                  ${m.fc_stock>0 ? `
+                  <button class="btn btn-outline-danger btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
                     title="Request WH to pick up and return to WH stock"
                     onclick="fcOpenReturnModal(${m.id})">↑WH</button>` : ''}
                   <button class="btn btn-outline-${color} btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"

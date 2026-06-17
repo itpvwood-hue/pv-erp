@@ -167,3 +167,61 @@ function escapeHtml(s){
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
   ));
 }
+
+// ════════════════════════════════════════════════════════════
+// Flag NCG (non-conforming goods) — shared by Warehouse + FC views.
+// Removes qty from the chosen stock bucket and raises a QA/QC review item.
+// ════════════════════════════════════════════════════════════
+let _ncgReasons = null, _ncgRefreshFn = null;
+const _NCG_LOC_LABEL = { FC:'FC station', WH:'Warehouse', WLWH:'WLWH' };
+
+async function ncgFlagOpen(materialId, refreshFn){
+  _ncgRefreshFn = (typeof refreshFn === 'function') ? refreshFn : null;
+  let m;
+  try { m = await api('/api/materials/' + materialId); }
+  catch(e){ toast('Could not load material: ' + e.message, 'danger'); return; }
+  document.getElementById('ncg-mat-id').value = m.id;
+  document.getElementById('ncg-ctx').innerHTML =
+    `<b>${m.code||''} ${m.name||''}</b> · ${(m.unit||'')}`;
+  // Build source options only for buckets that hold stock.
+  const buckets = [['FC', m.fc_stock], ['WH', m.current_stock], ['WLWH', m.wlwh_stock]];
+  const opts = buckets.filter(b => Number(b[1]||0) > 0);
+  const srcSel = document.getElementById('ncg-source');
+  srcSel.innerHTML = (opts.length ? opts : buckets).map(b =>
+    `<option value="${b[0]}" data-avail="${Number(b[1]||0)}">${_NCG_LOC_LABEL[b[0]]} (${Number(b[1]||0).toLocaleString()})</option>`).join('');
+  // Reasons (cached)
+  if(!_ncgReasons){ try { _ncgReasons = await api('/api/ncg/reasons'); } catch { _ncgReasons = ['OTHER']; } }
+  document.getElementById('ncg-reason').innerHTML =
+    _ncgReasons.map(r => `<option value="${r}">${r.replace(/_/g,' ')}</option>`).join('');
+  document.getElementById('ncg-qty').value = '';
+  document.getElementById('ncg-detail').value = '';
+  ncgSourceChanged();
+  new bootstrap.Modal(document.getElementById('ncgFlagModal')).show();
+}
+function ncgSourceChanged(){
+  const sel = document.getElementById('ncg-source');
+  const avail = Number(sel.selectedOptions[0]?.dataset.avail || 0);
+  document.getElementById('ncg-avail').textContent = `(avail ${avail.toLocaleString()})`;
+  document.getElementById('ncg-qty').max = avail;
+}
+async function ncgFlagSubmit(){
+  const sel = document.getElementById('ncg-source');
+  const avail = Number(sel.selectedOptions[0]?.dataset.avail || 0);
+  const qty = parseFloat(document.getElementById('ncg-qty').value);
+  if(!qty || qty <= 0){ toast('Enter a positive qty', 'warning'); return; }
+  if(qty > avail){ toast(`Only ${avail} available at ${sel.value}`, 'warning'); return; }
+  const body = {
+    material_id: Number(document.getElementById('ncg-mat-id').value),
+    qty, source: sel.value,
+    reason_code: document.getElementById('ncg-reason').value,
+    reason_detail: document.getElementById('ncg-detail').value.trim(),
+  };
+  const btn = document.getElementById('ncg-submit'); btn.disabled = true;
+  try {
+    await api('/api/ncg/flag', 'POST', body);
+    bootstrap.Modal.getInstance(document.getElementById('ncgFlagModal')).hide();
+    toast(`Flagged ${qty} as NCG — QA/QC notified`, 'success');
+    if(_ncgRefreshFn) _ncgRefreshFn();
+  } catch(e){ toast('Flag failed: ' + e.message, 'danger'); }
+  finally { btn.disabled = false; }
+}

@@ -3758,6 +3758,30 @@
   </div>
 </div></div></div>
 
+<div class="modal fade" id="ncgFlagModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header py-2"><h6 class="modal-title"><i class="bi bi-exclamation-octagon me-1 text-danger"></i>Flag Non-Conforming Goods</h6>
+    <button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <input type="hidden" id="ncg-mat-id">
+    <div class="alert alert-secondary py-2 small mb-2" id="ncg-ctx"></div>
+    <div class="row g-2">
+      <div class="col-6"><label class="form-label small mb-0">From location</label>
+        <select class="form-select form-select-sm" id="ncg-source" onchange="ncgSourceChanged()"></select></div>
+      <div class="col-6"><label class="form-label small mb-0">Qty <span id="ncg-avail" class="text-muted"></span></label>
+        <input type="number" class="form-control form-control-sm" id="ncg-qty" min="0" step="0.01"></div>
+      <div class="col-12"><label class="form-label small mb-0">Reason</label>
+        <select class="form-select form-select-sm" id="ncg-reason"></select></div>
+      <div class="col-12"><label class="form-label small mb-0">Detail <span class="text-muted">(optional)</span></label>
+        <input class="form-control form-control-sm" id="ncg-detail" placeholder="e.g. forklift scuff on edge"></div>
+    </div>
+    <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>This removes the qty from stock and notifies QA/QC to review it.</div>
+  </div>
+  <div class="modal-footer py-2">
+    <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-sm btn-danger" id="ncg-submit" onclick="ncgFlagSubmit()"><i class="bi bi-exclamation-octagon me-1"></i>Flag NCG</button>
+  </div>
+</div></div></div>
+
 <div class="modal fade" id="fgMoveModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
   <div class="modal-header py-2"><h6 class="modal-title"><i class="bi bi-arrow-left-right me-1"></i>Move FG batches — <code id="fgmove-sku" class="text-success"></code></h6>
     <button class="btn-close" data-bs-dismiss="modal"></button></div>

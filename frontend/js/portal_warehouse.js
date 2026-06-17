@@ -2243,6 +2243,8 @@ function openMatById(id){
 const _editBtn = id=>`<button class="btn btn-xs btn-outline-secondary py-0 px-1" data-bs-toggle="modal" data-bs-target="#materialModal" onclick="openMatById(${id})"><i class="bi bi-pencil"></i></button>`;
 // Move stock between warehouse locations (WH <-> WLWH) — boards/veneers only.
 const _moveBtn = id=>`<button class="btn btn-xs btn-outline-info py-0 px-1 me-1" title="Move stock WH ↔ WLWH" onclick="whMoveOpen(${id})"><i class="bi bi-arrow-left-right"></i></button>`;
+// Flag NCG (handling/storage damage) — boards & veneers only. Refreshes the materials grid.
+const _ncgBtn = id=>`<button class="btn btn-xs btn-outline-danger py-0 px-1 me-1" title="Flag as non-conforming (NCG)" onclick="ncgFlagOpen(${id}, loadMaterials)"><i class="bi bi-exclamation-octagon"></i></button>`;
 function whMoveOpen(id){
   const m=[..._allMaterials].find(x=>x.id===id); if(!m){ toast('Material not found','warning'); return; }
   _whMoveMat=m;
@@ -2319,7 +2321,7 @@ function boardRow(m){
     ${_locStockCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id)+_ncgBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
@@ -2339,7 +2341,7 @@ function veneerRow(m){
     ${_locStockCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id)+_ncgBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
@@ -2354,7 +2356,7 @@ function matRow(m, showType=true){
     ${_stockCell(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
-    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id):''}${_editBtn(m.id)}</td>
+    <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id)+_ncgBtn(m.id):''}${_editBtn(m.id)}</td>
   </tr>`;
 }
 
