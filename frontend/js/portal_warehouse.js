@@ -511,7 +511,15 @@ function rrecOpenReceive(r){
   document.getElementById('rrec-qty').value=remaining||r.planned_qty;
   document.getElementById('rrec-uom').textContent=r.uom||'';
   document.getElementById('rrec-lot').value='';
-  document.getElementById('rrec-cost').value='';
+  // Price is single-sourced from the PO that Purchasing issued — read-only here.
+  const priced = (r.pr_unit_cost!=null && r.pr_unit_cost!=='');
+  const costEl = document.getElementById('rrec-cost');
+  costEl.value = priced ? r.pr_unit_cost : '';
+  costEl.readOnly = true;
+  const costNote = document.getElementById('rrec-cost-note');
+  if(costNote) costNote.innerHTML = priced
+    ? `<i class="bi bi-shield-lock me-1"></i>Set by Purchasing at PO issue (${r.uom||'unit'})`
+    : `<i class="bi bi-exclamation-triangle me-1 text-warning"></i>Not priced by Purchasing yet — receive now, accounting can set price later.`;
   document.getElementById('rrec-expiry').value='';
   document.getElementById('rrec-supref').value=r.supplier_ref||'';
   document.getElementById('rrec-notes').value='';

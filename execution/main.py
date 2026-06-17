@@ -2840,6 +2840,7 @@ async def issue_po_with_doc(
     pr_id: int,
     supplier_po_ref: str = '',
     estimated_arrival: str = '',
+    unit_cost: Optional[float] = None,
     file: Optional[UploadFile] = File(None),
     user: dict = Depends(require_auth),
 ):
@@ -2883,7 +2884,8 @@ async def issue_po_with_doc(
             pr_id, target,
             actor=user.get('username') or '',
             supplier_po_ref=supplier_po_ref or '',
-            estimated_arrival=estimated_arrival or '')
+            estimated_arrival=estimated_arrival or '',
+            unit_cost=unit_cost)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2893,6 +2895,7 @@ async def issue_po_with_doc_multi(
     pr_ids: str = '',                # comma-separated list of PR ids
     supplier_po_ref: str = '',
     estimated_arrival: str = '',
+    unit_costs: str = '',            # per-PR price map "prid:price,prid:price"
     file: Optional[UploadFile] = File(None),
     user: dict = Depends(require_auth),
 ):
@@ -2943,6 +2946,17 @@ async def issue_po_with_doc_multi(
         if primary_doc_id and len(ids) > 1:
             link_document_to_prs(primary_doc_id, [i for i in ids if i != primary['id']])
 
+    # Parse the per-PR price map "prid:price,prid:price" so each line gets its
+    # own agreed price (a bundled PO can cover several different materials).
+    cost_by_pr = {}
+    for chunk in (unit_costs or '').split(','):
+        if ':' in chunk:
+            k, _, v = chunk.partition(':')
+            try:
+                cost_by_pr[int(k.strip())] = float(v.strip())
+            except (TypeError, ValueError):
+                pass
+
     target = 'AWAITING_ARRIVAL' if (estimated_arrival or '').strip() else 'PO_ISSUED'
     results = []
     for p in prs:
@@ -2951,7 +2965,8 @@ async def issue_po_with_doc_multi(
                 p['id'], target,
                 actor=user.get('username') or '',
                 supplier_po_ref=supplier_po_ref or '',
-                estimated_arrival=estimated_arrival or '')
+                estimated_arrival=estimated_arrival or '',
+                unit_cost=cost_by_pr.get(p['id']))
             results.append({**r, 'request_number': p.get('request_number')})
         except Exception as e:
             results.append({'id': p['id'], 'error': str(e)})

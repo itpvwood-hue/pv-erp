@@ -1093,6 +1093,10 @@ def init_db():
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_total_cost   REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_cost_per_kg  REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_components   TEXT",  # JSON: [{material_id, name, kg, price, cost}]
+        # Purchasing enters the agreed unit price when issuing the supplier PO
+        # (Finance/Accounting portal). Received lots inherit it so the Warehouse
+        # never re-keys price — single source of truth, no double entry.
+        "ALTER TABLE purchase_requests ADD COLUMN unit_cost REAL",
         # Exact pcs tracking — overrides quantity*pallet_qty when set (used after pcs-based splits)
         "ALTER TABLE batches ADD COLUMN pcs_actual INTEGER",
         # Machine info enhancements (for Station Log integration)
@@ -5375,7 +5379,8 @@ def list_purchase_requests(status=None, request_type=None) -> list:
 
 def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
                                    supplier_po_ref: str = '',
-                                   estimated_arrival: str = '') -> dict:
+                                   estimated_arrival: str = '',
+                                   unit_cost=None) -> dict:
     # NEW              = Request raised by Planning/Warehouse
     # APPROVED         = Purchasing has reviewed and approved
     # PO_ISSUED        = Purchase order sent to supplier
@@ -5404,6 +5409,13 @@ def update_purchase_request_status(pr_id: int, status: str, actor: str = '',
             sets.append("supplier_po_ref = ?"); params.append(supplier_po_ref)
         if estimated_arrival:
             sets.append("estimated_arrival = ?"); params.append(estimated_arrival)
+        # Purchasing's agreed unit price (set at PO issue). Stored on the PR so
+        # received lots inherit it — Warehouse never re-enters price.
+        if unit_cost is not None and str(unit_cost) != '':
+            try:
+                sets.append("unit_cost = ?"); params.append(float(unit_cost))
+            except (TypeError, ValueError):
+                pass
         params.append(pr_id)
         conn.execute(f"UPDATE purchase_requests SET {', '.join(sets)} WHERE id = ?", params)
         conn.commit()
@@ -5639,7 +5651,7 @@ def list_pr_shipments(pr_id=None, status=None, only_open: bool = False,
     conn = get_db()
     q = """
         SELECT s.*, pr.request_number, pr.qty_requested, pr.status AS pr_status,
-               pr.estimated_arrival AS pr_eta, pr.supplier_po_ref,
+               pr.estimated_arrival AS pr_eta, pr.supplier_po_ref, pr.unit_cost AS pr_unit_cost,
                m.id   AS material_id, m.code AS material_code,
                m.name AS material_name, m.type AS material_type, m.unit AS uom,
                (SELECT COUNT(*) FROM material_documents d
@@ -5672,6 +5684,7 @@ def list_pr_shipments(pr_id=None, status=None, only_open: bool = False,
         prq = """
             SELECT pr.id AS pr_id, pr.request_number, pr.qty_requested, pr.status AS pr_status,
                    pr.estimated_arrival AS pr_eta, pr.supplier_po_ref, pr.suggested_supplier,
+                   pr.unit_cost AS pr_unit_cost,
                    m.id   AS material_id, m.code AS material_code,
                    m.name AS material_name, m.type AS material_type, m.unit AS uom,
                    (SELECT COUNT(*) FROM material_documents d
@@ -5717,6 +5730,7 @@ def list_pr_shipments(pr_id=None, status=None, only_open: bool = False,
                 'pr_status':       pr.get('pr_status'),
                 'pr_eta':          pr.get('pr_eta'),
                 'supplier_po_ref': pr.get('supplier_po_ref'),
+                'pr_unit_cost':    pr.get('pr_unit_cost'),
                 'material_id':     pr.get('material_id'),
                 'material_code':   pr.get('material_code'),
                 'material_name':   pr.get('material_name'),
@@ -5820,6 +5834,12 @@ def receive_pr_shipment(*, shipment_id: int, received_qty: float, lot_code: str 
         pr = dict(pr)
         material_id = pr['material_id']
 
+        # Price is single-sourced from the PR (set by Purchasing at PO issue).
+        # The Warehouse cannot override it; the passed-in unit_cost is only a
+        # fallback for legacy PRs that were never priced.
+        pr_cost = pr.get('unit_cost')
+        lot_unit_cost = float(pr_cost) if pr_cost not in (None, '') else float(unit_cost or 0)
+
         # Auto lot code if not supplied
         if not lot_code:
             lot_code = f"LOT-{pr['request_number'] or pr['id']}-S{s['sequence']}-{datemod.today().strftime('%Y%m%d')}"
@@ -5833,7 +5853,7 @@ def receive_pr_shipment(*, shipment_id: int, received_qty: float, lot_code: str 
         """, (lot_code, material_id, supplier or s.get('carrier') or '',
               supplier_lot_ref or s.get('supplier_ref') or '',
               float(received_qty), float(received_qty),
-              pr.get('uom') or '', float(unit_cost or 0), expiry_date,
+              pr.get('uom') or '', lot_unit_cost, expiry_date,
               s['pr_id'],
               (notes or '') + f" [Shipment #{s['sequence']} of PR {pr.get('request_number')}]"))
         lot_id = cur.lastrowid

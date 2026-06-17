@@ -499,11 +499,18 @@ body{margin:0;font-family:'Segoe UI','Leelawadee UI','Microsoft YaHei',Tahoma,'N
     <div class="alert alert-info py-2 small mb-3" id="ipo-context"></div>
     <input type="hidden" id="ipo-pr-id">
     <div class="row g-2">
-      <div class="col-md-6"><label class="form-label small fw-semibold">Supplier PO Reference</label>
+      <div class="col-md-4"><label class="form-label small fw-semibold">Supplier PO Reference</label>
         <input class="form-control form-control-sm" id="ipo-ref" placeholder="e.g. SUP-2026-001">
       </div>
-      <div class="col-md-6"><label class="form-label small fw-semibold">Estimated Arrival
-        <span class="text-muted">(optional — also flips status to "Awaiting Materials")</span></label>
+      <div class="col-md-4"><label class="form-label small fw-semibold">Unit Price
+        <span class="text-muted">(per <span id="ipo-uom">unit</span>)</span></label>
+        <input type="number" min="0" step="0.0001" class="form-control form-control-sm" id="ipo-price" placeholder="0.00">
+        <div class="form-text small text-info" style="margin-top:2px">
+          <i class="bi bi-shield-lock me-1"></i>Warehouse receives at this price — no re-entry.
+        </div>
+      </div>
+      <div class="col-md-4"><label class="form-label small fw-semibold">Estimated Arrival
+        <span class="text-muted">(optional)</span></label>
         <input type="date" class="form-control form-control-sm" id="ipo-eta">
       </div>
       <div class="col-12">
@@ -871,6 +878,8 @@ async function fprSet(id,status){
     document.getElementById('ipo-ref').value = r.supplier_po_ref || '';
     document.getElementById('ipo-eta').value = '';
     document.getElementById('ipo-file').value = '';
+    document.getElementById('ipo-price').value = (r.unit_cost!=null && r.unit_cost!=='') ? r.unit_cost : '';
+    document.getElementById('ipo-uom').textContent = r.uom || 'unit';
     document.getElementById('ipo-prnum').textContent = r.request_number || ('#'+id);
     document.getElementById('ipo-context').innerHTML =
       `<b>${r.material_code||''} ${r.material_name||''}</b> — ${fmtN(r.qty_requested)} ${r.uom||''}`+
@@ -909,16 +918,22 @@ function ipoPopulateBundle(primary){
   }
   list.innerHTML = eligible.map(r => {
     const sameType = (r.material_type||'').toLowerCase() === (primary.material_type||'').toLowerCase();
-    return `<div class="form-check small">
-      <input class="form-check-input ipo-bundle-cb" type="checkbox"
-             value="${r.id}" id="ipo-bcb-${r.id}" ${sameType?'checked':''}
-             onchange="ipoUpdateBundleCount()">
-      <label class="form-check-label" for="ipo-bcb-${r.id}">
-        <b>${r.request_number||'#'+r.id}</b> · ${r.material_code||''} ${r.material_name||''}
-        · ${fmtN(r.qty_requested)} ${r.uom||''}
-        <span class="badge bg-light text-dark ms-1" style="font-size:.6rem">${r.status}</span>
-        ${sameType?'<span class="badge bg-success ms-1" style="font-size:.6rem">same type</span>':''}
-      </label>
+    const price = (r.unit_cost!=null && r.unit_cost!=='') ? r.unit_cost : '';
+    return `<div class="d-flex align-items-center gap-2 small py-1">
+      <div class="form-check mb-0 flex-grow-1">
+        <input class="form-check-input ipo-bundle-cb" type="checkbox"
+               value="${r.id}" id="ipo-bcb-${r.id}" ${sameType?'checked':''}
+               onchange="ipoUpdateBundleCount()">
+        <label class="form-check-label" for="ipo-bcb-${r.id}">
+          <b>${r.request_number||'#'+r.id}</b> · ${r.material_code||''} ${r.material_name||''}
+          · ${fmtN(r.qty_requested)} ${r.uom||''}
+          <span class="badge bg-light text-dark ms-1" style="font-size:.6rem">${r.status}</span>
+          ${sameType?'<span class="badge bg-success ms-1" style="font-size:.6rem">same type</span>':''}
+        </label>
+      </div>
+      <input type="number" min="0" step="0.0001" class="form-control form-control-sm ipo-bundle-price"
+             data-pr="${r.id}" value="${price}" placeholder="price"
+             style="width:90px" title="Unit price per ${r.uom||'unit'}">
     </div>`;
   }).join('');
   ipoUpdateBundleCount();
@@ -1080,11 +1095,27 @@ async function ipoSubmit(){
   const eta = document.getElementById('ipo-eta').value;
   const file = document.getElementById('ipo-file').files[0];
   if(eta && !/^\d{4}-\d{2}-\d{2}$/.test(eta)){ alert('Invalid date'); return; }
+  // Collect the agreed unit price per PR (primary + each ticked bundle row).
+  const priceByPr = {};
+  const pp = parseFloat(document.getElementById('ipo-price').value);
+  if(!isNaN(pp) && pp>=0) priceByPr[primaryId] = pp;
+  document.querySelectorAll('.ipo-bundle-price').forEach(inp=>{
+    const pid = Number(inp.dataset.pr);
+    if(!extras.includes(pid)) return;            // only priced rows that are ticked
+    const v = parseFloat(inp.value);
+    if(!isNaN(v) && v>=0) priceByPr[pid] = v;
+  });
+  const missing = ids.filter(i => priceByPr[i]===undefined);
+  if(missing.length){
+    if(!confirm(`No price entered for ${missing.length} of ${ids.length} PR(s). Issue anyway? Warehouse will be left to enter price for those.`)) return;
+  }
+  const costStr = Object.entries(priceByPr).map(([k,v])=>k+':'+v).join(',');
   const fd = new FormData();
   if(file) fd.append('file', file);
   const qs = ['pr_ids='+encodeURIComponent(ids.join(','))];
   if(ref) qs.push('supplier_po_ref='+encodeURIComponent(ref));
   if(eta) qs.push('estimated_arrival='+encodeURIComponent(eta));
+  if(costStr) qs.push('unit_costs='+encodeURIComponent(costStr));
   const url = `/api/purchase-requests/issue-po-multi?`+qs.join('&');
   const tok = localStorage.getItem('fin_token')||'';
   try{
