@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QA / QC Portal — PVWood ERP</title>
+<link rel="icon" type="image/svg+xml" href="/static/assets/pvwood-icon.svg">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+:root{--bg:#3a1d1d;--sidebar:#2a1530;--accent:#7c3aed;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Segoe UI','Leelawadee UI','Microsoft YaHei',Tahoma,'Noto Sans Thai','Noto Sans SC',system-ui,sans-serif;background:#f1f5f9;color:#1e293b;}
+#login-overlay{position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#3a1d3d 0%,#1e1b4b 100%);display:flex;align-items:center;justify-content:center;}
+.login-card{width:100%;max-width:380px;padding:20px;}
+#shell{display:flex;height:100vh;overflow:hidden;}
+#sidebar{width:56px;background:var(--sidebar);color:#e2e8f0;display:flex;flex-direction:column;flex-shrink:0;overflow-x:hidden;overflow-y:auto;transition:width .18s ease;}
+#sidebar:hover{width:230px;box-shadow:4px 0 12px rgba(0,0,0,.25);}
+.sb-brand{padding:20px 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;overflow:hidden;}
+.sb-brand h5{margin:0;font-weight:700;color:#fff;font-size:1rem;}
+.sb-brand small{color:#a78bfa;font-size:.72rem;}
+.sb-nav{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 0;}
+.sb-sec{color:#94a3b8;font-size:.65rem;text-transform:uppercase;letter-spacing:1px;padding:14px 16px 4px;font-weight:700;white-space:nowrap;overflow:hidden;}
+.sb-link{display:flex;align-items:center;gap:10px;padding:8px 16px;color:#cbd5e1;text-decoration:none;white-space:nowrap;overflow:hidden;font-size:.83rem;cursor:pointer;border-left:3px solid transparent;transition:all .15s;}
+.sb-link:hover,.sb-link.active{color:#fff;background:rgba(255,255,255,.07);border-left-color:var(--accent);}
+.sb-link i{font-size:1rem;width:18px;text-align:center;}
+.sb-link .badge{margin-left:auto;}
+.sb-user{padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px;}
+.sb-user-info{flex:1;min-width:0;}
+.sb-user-info .name{font-size:.8rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-user-info .role{font-size:.65rem;color:#a78bfa;}
+#sidebar:not(:hover) .sb-brand h5 span,#sidebar:not(:hover) .sb-brand small,#sidebar:not(:hover) .sb-sec,#sidebar:not(:hover) .sb-link span,#sidebar:not(:hover) .sb-user-info{display:none!important;}
+#sidebar:not(:hover) .sb-brand{padding:14px 0;text-align:center;}
+#sidebar:not(:hover) .sb-link{padding:9px 0;justify-content:center;gap:0;}
+#sidebar:not(:hover) .sb-link i{margin:0!important;}
+#sidebar:not(:hover) .sb-link .badge{display:none!important;}
+#sidebar:not(:hover) .sb-user{justify-content:center;padding:8px 0;}
+#sidebar:not(:hover) .sb-user button{display:none!important;}
+#main{flex:1;overflow-y:auto;background:#f1f5f9;}
+.page-header{background:#fff;border-bottom:1px solid #e2e8f0;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+.page-header h4{margin:0;font-size:1rem;font-weight:700;}
+.content{padding:18px 22px;}
+.stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;}
+.stat-card .val{font-size:1.6rem;font-weight:700;line-height:1;}
+.stat-card .lbl{font-size:.72rem;color:#64748b;margin-top:2px;text-transform:uppercase;letter-spacing:.5px;}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;}
+.card-hd{padding:10px 16px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:8px;font-weight:600;font-size:.85rem;background:#f8fafc;}
+.table{margin:0;font-size:.8rem;}
+.table th{background:#f8fafc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#475569;}
+.table td,.table th{padding:.42rem .7rem;vertical-align:middle;}
+.btn-xs{padding:1px 7px;font-size:.72rem;}
+.disp-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-overlay">
+  <div class="login-card">
+    <div class="card shadow-lg border-0">
+      <div class="card-body p-4">
+        <div class="text-center mb-4">
+          <div style="width:52px;height:52px;background:linear-gradient(135deg,#7c3aed,#1e1b4b);border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px">
+            <i class="bi bi-clipboard2-check text-white" style="font-size:1.4rem"></i>
+          </div>
+          <h5 class="fw-bold mb-0">QA / QC Portal</h5>
+          <small class="text-muted">Non-conforming goods &amp; quality review</small>
+        </div>
+        <div id="qc-error" class="alert alert-danger d-none py-2 small">
+          <i class="bi bi-exclamation-triangle-fill me-1"></i><span id="qc-error-msg"></span>
+        </div>
+        <div class="mb-3"><label class="form-label small fw-semibold">Username</label>
+          <input class="form-control" id="qc-username" autocomplete="username"
+                 onkeydown="if(event.key==='Enter')document.getElementById('qc-password').focus()"></div>
+        <div class="mb-4"><label class="form-label small fw-semibold">Password</label>
+          <input type="password" class="form-control" id="qc-password" autocomplete="current-password"
+                 onkeydown="if(event.key==='Enter')qcLogin()"></div>
+        <button class="btn w-100 fw-semibold text-white" style="background:#7c3aed" onclick="qcLogin()" id="qc-login-btn">
+          <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
+        </button>
+        <div class="text-center mt-3">
+          <a href="/" class="small text-muted"><i class="bi bi-arrow-left me-1"></i>Back to main ERP</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SHELL -->
+<div id="shell" style="display:none">
+  <div id="sidebar">
+    <div class="sb-brand"><h5><i class="bi bi-clipboard2-check me-2" style="color:#a78bfa"></i><span>QA / QC</span></h5><small>PVWood ERP</small></div>
+    <nav class="sb-nav">
+      <div class="sb-sec">Overview</div>
+      <a class="sb-link active" data-view="dashboard"><i class="bi bi-speedometer2"></i><span>Dashboard</span></a>
+      <div class="sb-sec">Review Queues</div>
+      <a class="sb-link" data-view="ncg"><i class="bi bi-exclamation-octagon"></i><span>Raw-Material NCG</span><span class="badge bg-danger" id="nav-ncg-badge" style="display:none">0</span></a>
+      <a class="sb-link" data-view="scrap"><i class="bi bi-trash3"></i><span>Production Scrap / LG</span><span class="badge bg-warning text-dark" id="nav-scrap-badge" style="display:none">0</span></a>
+    </nav>
+    <div class="sb-user">
+      <div style="width:32px;height:32px;background:#7c3aed;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0"><i class="bi bi-person"></i></div>
+      <div class="sb-user-info"><div class="name" id="qc-user-name">—</div><div class="role" id="qc-user-role">—</div></div>
+      <button class="btn btn-sm btn-outline-light border-0" onclick="qcLogout()" title="Sign out"><i class="bi bi-box-arrow-right"></i></button>
+    </div>
+  </div>
+
+  <div id="main">
+    <!-- DASHBOARD -->
+    <div class="view" id="view-dashboard">
+      <div class="page-header"><h4><i class="bi bi-speedometer2 me-2"></i>QA / QC Dashboard</h4>
+        <button class="btn btn-sm btn-outline-secondary" onclick="qcLoadDashboard()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button></div>
+      <div class="content">
+        <div class="row g-3" id="qc-kpi-row"></div>
+        <div class="alert alert-light border mt-3 small text-muted">
+          <i class="bi bi-info-circle me-1"></i>Goods flagged NCG by FC sorting or Warehouse handling appear in <b>Raw-Material NCG</b>.
+          Review each, then record how the quantity is handled — <b>dispose</b>, <b>regrade</b> to another grade, or <b>resize</b> — splitting the qty across outcomes as needed.
+        </div>
+      </div>
+    </div>
+
+    <!-- NCG QUEUE -->
+    <div class="view" id="view-ncg" style="display:none">
+      <div class="page-header"><h4><i class="bi bi-exclamation-octagon me-2"></i>Raw-Material NCG</h4>
+        <div class="d-flex gap-2 align-items-center">
+          <select class="form-select form-select-sm" id="ncg-filter" style="width:170px" onchange="qcLoadNcg()">
+            <option value="">Open (pending + review)</option>
+            <option value="PENDING_QC">Pending check</option>
+            <option value="IN_REVIEW">In review</option>
+            <option value="DISPOSITIONED">Dispositioned</option>
+            <option value="ALL">All</option>
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" onclick="qcLoadNcg()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div></div>
+      <div class="content"><div class="card"><div class="table-responsive" style="max-height:74vh;overflow:auto">
+        <table class="table table-hover align-middle"><thead><tr>
+          <th>Flagged</th><th>Material</th><th>Source</th><th>Reason</th>
+          <th class="text-end">Qty</th><th class="text-end">Remaining</th><th class="text-end">฿ Value</th><th>Status</th><th></th>
+        </tr></thead><tbody id="ncg-tbody"></tbody></table>
+      </div></div></div>
+    </div>
+
+    <!-- SCRAP QUEUE -->
+    <div class="view" id="view-scrap" style="display:none">
+      <div class="page-header"><h4><i class="bi bi-trash3 me-2"></i>Production Scrap / LG Bin</h4>
+        <button class="btn btn-sm btn-outline-secondary" onclick="qcLoadScrap()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button></div>
+      <div class="content"><div class="card"><div class="table-responsive" style="max-height:74vh;overflow:auto">
+        <table class="table table-hover align-middle"><thead><tr>
+          <th>When</th><th>Batch</th><th>Dept</th><th>Reason</th><th class="text-end">Pcs</th><th>Disposition</th><th></th>
+        </tr></thead><tbody id="scrap-tbody"></tbody></table>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- DISPOSITION MODAL -->
+<div class="modal fade" id="dispModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title"><i class="bi bi-clipboard2-check me-2"></i>Record QA/QC Disposition</h5>
+    <button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <input type="hidden" id="disp-item-id">
+    <div class="alert alert-secondary py-2 small" id="disp-ctx"></div>
+    <div class="mb-2"><label class="form-label small fw-semibold">QC review notes <span class="text-muted">(saved on first action)</span></label>
+      <input class="form-control form-control-sm" id="disp-review" placeholder="condition assessment…"></div>
+    <hr>
+    <div class="row g-2 align-items-end">
+      <div class="col-md-3"><label class="form-label small fw-semibold">Action</label>
+        <select class="form-select form-select-sm" id="disp-action" onchange="dispToggleTarget()">
+          <option value="DISPOSE">Dispose (write-off)</option>
+          <option value="REGRADE">Regrade</option>
+          <option value="RESIZE">Resize</option>
+        </select></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold">Qty</label>
+        <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="disp-qty"></div>
+      <div class="col-md-4" id="disp-target-wrap" style="display:none"><label class="form-label small fw-semibold">Target material</label>
+        <select class="form-select form-select-sm" id="disp-target"></select></div>
+      <div class="col-md-2" id="disp-yield-wrap" style="display:none"><label class="form-label small fw-semibold">Yield qty</label>
+        <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="disp-yield" placeholder="= qty"></div>
+      <div class="col-md-1"><button class="btn btn-sm btn-primary w-100" onclick="dispApply()" title="Apply this action"><i class="bi bi-plus-lg"></i></button></div>
+      <div class="col-12"><input class="form-control form-control-sm" id="disp-notes" placeholder="notes for this action (optional)"></div>
+    </div>
+    <div class="mt-3"><div class="small fw-semibold text-muted mb-1">Actions recorded</div>
+      <div id="disp-history" class="small"></div></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal" onclick="qcLoadNcg()">Done</button></div>
+</div></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const QC_ROLES_ALLOWED = new Set(['QA_QC','MANAGERIAL']);
+const ROLE_LABEL={QA_QC:'QA / QC',MANAGERIAL:'Managerial'};
+const fmtN = v => v==null||v===''?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+const dt = s => (s||'').slice(0,16).replace('T',' ');
+let _matCache = [];
+
+async function qapi(path, opts={}){
+  const token = localStorage.getItem('qc_token') || '';
+  const headers = Object.assign({'Content-Type':'application/json','X-Auth-Token':token}, opts.headers||{});
+  const r = await fetch(path, Object.assign({headers}, opts));
+  if(r.status===401){ qcLogout(); throw new Error('Session expired'); }
+  if(!r.ok){ const e = await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||r.statusText); }
+  return r.json();
+}
+function qcShowError(m){ document.getElementById('qc-error-msg').textContent=m; document.getElementById('qc-error').classList.remove('d-none'); }
+async function qcLogin(){
+  const btn=document.getElementById('qc-login-btn');
+  const u=document.getElementById('qc-username').value.trim(); const p=document.getElementById('qc-password').value;
+  if(!u||!p){ qcShowError('Username and password required'); return; }
+  btn.disabled=true; document.getElementById('qc-error').classList.add('d-none');
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    if(!r.ok){ const e=await r.json().catch(()=>({detail:'Login failed'})); qcShowError(e.detail); return; }
+    const data=await r.json();
+    if(!QC_ROLES_ALLOWED.has(data.user.role)){
+      qcShowError('Access denied. QA/QC portal requires QA_QC or MANAGERIAL role. Your role: '+(ROLE_LABEL[data.user.role]||data.user.role));
+      fetch('/api/auth/logout',{method:'POST',headers:{'X-Auth-Token':data.token}}).catch(()=>{}); return;
+    }
+    localStorage.setItem('qc_token',data.token); localStorage.setItem('qc_user',JSON.stringify(data.user));
+    qcShowShell(data.user);
+  }catch(e){ qcShowError(e instanceof TypeError?'Cannot reach server':e.message); }
+  finally{ btn.disabled=false; }
+}
+function qcLogout(){
+  const t=localStorage.getItem('qc_token');
+  if(t) fetch('/api/auth/logout',{method:'POST',headers:{'X-Auth-Token':t}}).catch(()=>{});
+  localStorage.removeItem('qc_token'); localStorage.removeItem('qc_user');
+  document.getElementById('shell').style.display='none'; document.getElementById('login-overlay').style.display='flex';
+}
+function qcShowShell(user){
+  document.getElementById('login-overlay').style.display='none';
+  document.getElementById('shell').style.display='flex';
+  document.getElementById('qc-user-name').textContent=user.display_name||user.username;
+  document.getElementById('qc-user-role').textContent=ROLE_LABEL[user.role]||user.role;
+  qcNav('dashboard');
+}
+(async function(){
+  const t=localStorage.getItem('qc_token'); const u=localStorage.getItem('qc_user');
+  if(!t||!u) return;
+  try{
+    const r=await fetch('/api/auth/me',{headers:{'X-Auth-Token':t}});
+    if(!r.ok){ localStorage.removeItem('qc_token'); localStorage.removeItem('qc_user'); return; }
+    const data=await r.json();
+    if(!QC_ROLES_ALLOWED.has(data.role)){ qcLogout(); return; }
+    qcShowShell(data);
+  }catch{}
+})();
+
+function qcNav(view){
+  document.querySelectorAll('.sb-link').forEach(l=>l.classList.toggle('active', l.dataset.view===view));
+  document.querySelectorAll('.view').forEach(v=>v.style.display='none');
+  const el=document.getElementById('view-'+view); if(el) el.style.display='';
+  if(view==='dashboard') qcLoadDashboard();
+  else if(view==='ncg') qcLoadNcg();
+  else if(view==='scrap') qcLoadScrap();
+}
+document.querySelectorAll('.sb-link').forEach(l=>l.addEventListener('click',e=>{ e.preventDefault(); qcNav(l.dataset.view); }));
+
+async function qcRefreshBadges(){
+  try{
+    const s = await qapi('/api/qc/summary');
+    const nb=document.getElementById('nav-ncg-badge'); nb.textContent=s.ncg_pending; nb.style.display=s.ncg_pending?'':'none';
+    const sb=document.getElementById('nav-scrap-badge'); sb.textContent=s.scrap_pending; sb.style.display=s.scrap_pending?'':'none';
+    return s;
+  }catch{ return {}; }
+}
+async function qcLoadDashboard(){
+  const s = await qcRefreshBadges();
+  document.getElementById('qc-kpi-row').innerHTML = [
+    {l:'NCG awaiting check', v:s.ncg_pending||0, bg:'danger', ico:'bi-exclamation-octagon'},
+    {l:'Scrap awaiting review', v:s.scrap_pending||0, bg:'warning', ico:'bi-trash3'},
+    {l:'Value held in NCG', v:'฿'+fmtN(s.value_in_ncg||0), bg:'secondary', ico:'bi-hourglass-split'},
+    {l:'Value recovered', v:'฿'+fmtN(s.value_recovered||0), bg:'success', ico:'bi-recycle'},
+  ].map(c=>`<div class="col-md-3 col-6"><div class="stat-card" style="border-left:4px solid var(--bs-${c.bg})">
+    <div class="lbl"><i class="bi ${c.ico} me-1"></i>${c.l}</div><div class="val text-${c.bg}">${c.v}</div></div></div>`).join('');
+}
+
+const NCG_STAT={PENDING_QC:['danger','Pending check'],IN_REVIEW:['info','In review'],DISPOSITIONED:['success','Dispositioned']};
+async function qcLoadNcg(){
+  qcRefreshBadges();
+  const f=document.getElementById('ncg-filter').value;
+  let items = await qapi('/api/ncg'+(f && f!=='ALL' ? '?status='+f : '')).catch(()=>[]);
+  if(f===''){ items = items.filter(i=>i.status!=='DISPOSITIONED'); }
+  const tb=document.getElementById('ncg-tbody');
+  if(!items.length){ tb.innerHTML='<tr><td colspan="9" class="text-center text-muted py-4">No NCG items.</td></tr>'; return; }
+  tb.innerHTML = items.map(i=>{
+    const st=NCG_STAT[i.status]||['secondary',i.status];
+    const val=(Number(i.remaining_qty)||0)*(Number(i.unit_cost)||0);
+    const canAct = i.status!=='DISPOSITIONED';
+    const disp = (i.dispositions||[]).map(d=>`<span class="badge bg-light text-dark border me-1" title="${d.notes||''}">${d.disposition} ${fmtN(d.qty)}${d.target_code?'→'+d.target_code:''}</span>`).join('');
+    return `<tr>
+      <td class="small text-muted">${dt(i.flagged_at)}<br>${i.flagged_by||''}</td>
+      <td><code>${i.material_code||''}</code><br><span class="small">${i.material_name||''}</span></td>
+      <td><span class="badge bg-dark-subtle text-dark">${i.source}</span></td>
+      <td class="small">${i.reason_code}${i.reason_detail?'<br><span class="text-muted">'+i.reason_detail+'</span>':''}</td>
+      <td class="text-end">${fmtN(i.qty)} ${i.uom||''}</td>
+      <td class="text-end ${i.remaining_qty>0?'fw-bold':''}">${fmtN(i.remaining_qty)}</td>
+      <td class="text-end">฿${fmtN(val)}</td>
+      <td><span class="badge bg-${st[0]}">${st[1]}</span>${disp?'<div class="mt-1">'+disp+'</div>':''}</td>
+      <td>${canAct?`<button class="btn btn-xs btn-primary" onclick='qcOpenDisp(${JSON.stringify(i).replace(/'/g,"&apos;")})'>Review</button>`:''}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function _ensureMats(){
+  if(_matCache.length) return _matCache;
+  _matCache = (await qapi('/api/materials').catch(()=>[])).filter(m=>['veneer_sheet','core_board'].includes(m.type));
+  return _matCache;
+}
+async function qcOpenDisp(item){
+  document.getElementById('disp-item-id').value=item.id;
+  document.getElementById('disp-ctx').innerHTML=`<b>${item.material_code||''} ${item.material_name||''}</b> · source <b>${item.source}</b> · reason <b>${item.reason_code}</b><br>Flagged qty <b>${fmtN(item.qty)} ${item.uom||''}</b> · <b>${fmtN(item.remaining_qty)}</b> remaining to disposition.`;
+  document.getElementById('disp-review').value=item.review_notes||'';
+  document.getElementById('disp-action').value='DISPOSE';
+  document.getElementById('disp-qty').value=item.remaining_qty;
+  document.getElementById('disp-yield').value=''; document.getElementById('disp-notes').value='';
+  const mats=await _ensureMats();
+  document.getElementById('disp-target').innerHTML='<option value="">— select —</option>'+
+    mats.filter(m=>m.id!==item.material_id).map(m=>`<option value="${m.id}">[${m.code}] ${m.name}</option>`).join('');
+  dispToggleTarget();
+  _dispRenderHistory(item);
+  // Save review note on open (marks IN_REVIEW)
+  qapi(`/api/ncg/${item.id}/review`,{method:'POST',body:JSON.stringify({review_notes:item.review_notes||''})}).catch(()=>{});
+  new bootstrap.Modal(document.getElementById('dispModal')).show();
+}
+function dispToggleTarget(){
+  const a=document.getElementById('disp-action').value;
+  document.getElementById('disp-target-wrap').style.display = (a==='DISPOSE')?'none':'';
+  document.getElementById('disp-yield-wrap').style.display = (a==='RESIZE')?'':'none';
+}
+function _dispRenderHistory(item){
+  const h=document.getElementById('disp-history');
+  const ds=item.dispositions||[];
+  h.innerHTML = ds.length ? ds.map(d=>`<div class="badge bg-light text-dark border me-1 mb-1">${d.disposition} ${fmtN(d.qty)}${d.target_code?' → '+d.target_code:''}${d.value_recovered?' · ฿'+fmtN(d.value_recovered):''}</div>`).join('')
+    : '<span class="text-muted">none yet</span>';
+}
+async function dispApply(){
+  const id=document.getElementById('disp-item-id').value;
+  const action=document.getElementById('disp-action').value;
+  const qty=parseFloat(document.getElementById('disp-qty').value);
+  const review=document.getElementById('disp-review').value;
+  if(!qty||qty<=0){ alert('Enter a positive qty'); return; }
+  const body={disposition:action, qty, notes:document.getElementById('disp-notes').value};
+  if(action!=='DISPOSE'){
+    const t=parseInt(document.getElementById('disp-target').value);
+    if(!t){ alert('Pick a target material'); return; }
+    body.target_material_id=t;
+  }
+  if(action==='RESIZE'){ const y=parseFloat(document.getElementById('disp-yield').value); if(!isNaN(y)&&y>0) body.yield_qty=y; }
+  try{
+    // persist any edited review note first
+    await qapi(`/api/ncg/${id}/review`,{method:'POST',body:JSON.stringify({review_notes:review})});
+    const r=await qapi(`/api/ncg/${id}/disposition`,{method:'POST',body:JSON.stringify(body)});
+    // reload the single item to refresh history + remaining
+    const items=await qapi('/api/ncg?status=ALL');
+    const it=items.find(x=>x.id===Number(id));
+    if(it){ _dispRenderHistory(it); document.getElementById('disp-qty').value=it.remaining_qty; document.getElementById('disp-ctx').innerHTML=`<b>${it.material_code||''} ${it.material_name||''}</b> · <b>${fmtN(it.remaining_qty)}</b> remaining.`; }
+    document.getElementById('disp-notes').value='';
+    if(r.status==='DISPOSITIONED'){ bootstrap.Modal.getInstance(document.getElementById('dispModal')).hide(); qcLoadNcg(); }
+  }catch(e){ alert('Failed: '+e.message); }
+}
+
+const SCRAP_DISP=['PENDING_REVIEW','REWORK','DOWNGRADE','DISPOSE','RECYCLE'];
+async function qcLoadScrap(){
+  qcRefreshBadges();
+  const rows = await qapi('/api/scrap?disposition=PENDING_REVIEW').catch(()=>[]);
+  const tb=document.getElementById('scrap-tbody');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="7" class="text-center text-muted py-4">No scrap awaiting review.</td></tr>'; return; }
+  tb.innerHTML = rows.map(r=>`<tr>
+    <td class="small text-muted">${dt(r.created_at)}</td>
+    <td><code>${r.batch_number||''}</code></td>
+    <td class="small">${r.dept||''}</td>
+    <td class="small">${r.reason_code||''}${r.reason_detail?'<br><span class="text-muted">'+r.reason_detail+'</span>':''}</td>
+    <td class="text-end">${fmtN(r.pcs_scrapped)}</td>
+    <td><select class="form-select form-select-sm" id="scrap-disp-${r.id}" style="width:140px">
+        ${SCRAP_DISP.map(d=>`<option value="${d}">${d}</option>`).join('')}</select></td>
+    <td><button class="btn btn-xs btn-primary" onclick="scrapSet(${r.id})">Save</button></td>
+  </tr>`).join('');
+}
+async function scrapSet(id){
+  const disp=document.getElementById('scrap-disp-'+id).value;
+  try{ await qapi(`/api/scrap/${id}/disposition`,{method:'PATCH',body:JSON.stringify({disposition:disp})}); qcLoadScrap(); }
+  catch(e){ alert('Failed: '+e.message); }
+}
+</script>
+</body>
+</html>

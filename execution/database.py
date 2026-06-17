@@ -6426,7 +6426,7 @@ def list_ncg_items(status: str = None) -> list:
                FROM ncg_items n JOIN materials m ON m.id = n.material_id
                WHERE 1=1"""
         params = []
-        if status:
+        if status and status.upper() != 'ALL':
             q += " AND n.status = ?"; params.append(status)
         q += " ORDER BY CASE n.status WHEN 'PENDING_QC' THEN 0 WHEN 'IN_REVIEW' THEN 1 ELSE 2 END, n.flagged_at DESC LIMIT 500"
         items = rows_to_list(conn.execute(q, params).fetchall())

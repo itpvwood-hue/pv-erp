@@ -3761,6 +3761,10 @@ if os.path.exists(FRONTEND_DIR):
     def serve_finance():
         return FileResponse(os.path.join(FRONTEND_DIR, "finance.html"), headers=_NO_CACHE)
 
+    @app.get("/qaqc")
+    def serve_qaqc():
+        return FileResponse(os.path.join(FRONTEND_DIR, "qaqc.html"), headers=_NO_CACHE)
+
     @app.get("/warehouse")
     def serve_warehouse():
         # Warehouse portal — serves the same SPA bundle but the front-end
