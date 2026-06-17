@@ -123,6 +123,8 @@ from database import (
     list_refuel_windows, upsert_refuel_window, delete_refuel_window,
     list_oil_drum_materials,
     create_scrap_entry, list_scrap_entries, set_scrap_disposition,
+    flag_material_ncg, list_ncg_items, review_ncg_item, add_ncg_disposition,
+    get_qc_summary, NCG_REASONS,
     return_material_to_fc,
     # Material lots (FIFO) & documents & traceability
     create_material_lot, list_material_lots, fifo_consume_lots,
@@ -1929,6 +1931,7 @@ class Role:
     DEPARTMENT_LEADER   = 'DEPARTMENT_LEADER'
     WAREHOUSE           = 'WAREHOUSE'
     FINANCE             = 'FINANCE'   # Finance / Accounting + Purchasing portal (finance.html)
+    QA_QC               = 'QA_QC'     # Quality / NCG review portal (qaqc.html)
     ALL = (MANAGERIAL, PRODUCTION_PLANNING, DEPARTMENT_LEADER, WAREHOUSE)
 
 def require_role(*roles):
@@ -3303,6 +3306,71 @@ def set_scrap_disp_ep(scrap_id: int, body: ScrapDispIn,
             reviewer=user.get('username') or '', notes=body.notes or '')
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ════════════════════════════════════════════════════════════════
+# RAW-MATERIAL NCG + QA/QC review
+# ════════════════════════════════════════════════════════════════
+class NcgFlagIn(BaseModel):
+    material_id: int
+    qty: float
+    source: str               # FC | WH | WLWH
+    reason_code: str
+    reason_detail: Optional[str] = ''
+
+class NcgReviewIn(BaseModel):
+    review_notes: Optional[str] = ''
+
+class NcgDispositionIn(BaseModel):
+    disposition: str          # DISPOSE | REGRADE | RESIZE
+    qty: float
+    target_material_id: Optional[int] = None
+    yield_qty: Optional[float] = None
+    notes: Optional[str] = ''
+
+@app.get("/api/ncg/reasons")
+def ncg_reasons_ep(user: dict = Depends(require_auth)):
+    return NCG_REASONS
+
+@app.get("/api/ncg")
+def list_ncg_ep(status: Optional[str] = None, user: dict = Depends(require_auth)):
+    return list_ncg_items(status=status)
+
+@app.post("/api/ncg/flag", status_code=201)
+def flag_ncg_ep(body: NcgFlagIn, user: dict = Depends(require_auth)):
+    """Flag raw-material stock as NCG (from FC sorting or WH handling). Deducts
+    the qty from the source bucket and raises a QA/QC review item."""
+    try:
+        return flag_material_ncg(
+            material_id=body.material_id, qty=body.qty, source=body.source,
+            reason_code=body.reason_code, reason_detail=body.reason_detail or '',
+            flagged_by=user.get('username') or '')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/ncg/{item_id}/review")
+def review_ncg_ep(item_id: int, body: NcgReviewIn,
+                  user: dict = Depends(require_role(Role.QA_QC, Role.MANAGERIAL))):
+    try:
+        return review_ncg_item(item_id, reviewer=user.get('username') or '',
+                               review_notes=body.review_notes or '')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/ncg/{item_id}/disposition", status_code=201)
+def disposition_ncg_ep(item_id: int, body: NcgDispositionIn,
+                       user: dict = Depends(require_role(Role.QA_QC, Role.MANAGERIAL))):
+    try:
+        return add_ncg_disposition(
+            ncg_item_id=item_id, disposition=body.disposition, qty=body.qty,
+            target_material_id=body.target_material_id, yield_qty=body.yield_qty,
+            notes=body.notes or '', created_by=user.get('username') or '')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/qc/summary")
+def qc_summary_ep(user: dict = Depends(require_auth)):
+    return get_qc_summary()
 
 
 # ════════════════════════════════════════════════════════════════

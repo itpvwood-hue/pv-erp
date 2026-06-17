@@ -571,6 +571,50 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scrap_disp ON scrap_log(disposition)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scrap_dept ON scrap_log(dept)")
 
+    # ── Raw-material NCG (non-conforming goods): veneers/boards rejected from
+    #    FC sorting or WH handling/storage. Stock-based (material + qty), unlike
+    #    the batch-based scrap_log. QA/QC reviews these, then records one or more
+    #    dispositions (dispose / regrade / resize) until the qty is fully cleared.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ncg_items (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id     INTEGER NOT NULL,
+            qty             REAL NOT NULL,
+            remaining_qty   REAL NOT NULL,
+            uom             TEXT DEFAULT '',
+            unit_cost       REAL DEFAULT 0,
+            source          TEXT NOT NULL,              -- FC | WH | WLWH
+            reason_code     TEXT NOT NULL,
+            reason_detail   TEXT DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'PENDING_QC',  -- PENDING_QC | IN_REVIEW | DISPOSITIONED
+            flagged_by      TEXT DEFAULT '',
+            flagged_at      TEXT DEFAULT (datetime('now')),
+            reviewed_by     TEXT,
+            reviewed_at     TEXT,
+            review_notes    TEXT DEFAULT '',
+            created_at      TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ncg_status ON ncg_items(status)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ncg_dispositions (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            ncg_item_id        INTEGER NOT NULL,
+            disposition        TEXT NOT NULL,           -- DISPOSE | REGRADE | RESIZE
+            qty                REAL NOT NULL,
+            target_material_id INTEGER,                 -- regrade/resize destination (NULL for dispose)
+            yield_qty          REAL,                    -- resize may yield a different qty than consumed
+            value_recovered    REAL DEFAULT 0,
+            notes              TEXT DEFAULT '',
+            created_by         TEXT DEFAULT '',
+            created_at         TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (ncg_item_id) REFERENCES ncg_items(id),
+            FOREIGN KEY (target_material_id) REFERENCES materials(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ncg_disp_item ON ncg_dispositions(ncg_item_id)")
+
     # ── Forklifts & oil-request log (registered by station leaders) ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS forklifts (
@@ -704,7 +748,7 @@ def init_db():
             password_hash TEXT NOT NULL,
             role         TEXT NOT NULL CHECK(role IN (
                             'MANAGERIAL','PRODUCTION_PLANNING',
-                            'DEPARTMENT_LEADER','WAREHOUSE','FINANCE')),
+                            'DEPARTMENT_LEADER','WAREHOUSE','FINANCE','QA_QC')),
             display_name TEXT NOT NULL,
             active       INTEGER DEFAULT 1,
             created_at   TEXT DEFAULT CURRENT_TIMESTAMP
@@ -1368,7 +1412,7 @@ def init_db():
     try:
         urow = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
-        if urow and urow[0] and 'FINANCE' not in urow[0]:
+        if urow and urow[0] and ('FINANCE' not in urow[0] or 'QA_QC' not in urow[0]):
             conn.commit()  # flush any pending work before the rebuild
             conn.executescript("""
                 PRAGMA foreign_keys=OFF;
@@ -1379,7 +1423,7 @@ def init_db():
                     password_hash TEXT NOT NULL,
                     role          TEXT NOT NULL CHECK(role IN (
                                     'MANAGERIAL','PRODUCTION_PLANNING',
-                                    'DEPARTMENT_LEADER','WAREHOUSE','FINANCE')),
+                                    'DEPARTMENT_LEADER','WAREHOUSE','FINANCE','QA_QC')),
                     display_name  TEXT NOT NULL,
                     active        INTEGER DEFAULT 1,
                     created_at    TEXT DEFAULT CURRENT_TIMESTAMP
@@ -6315,6 +6359,184 @@ def set_scrap_disposition(scrap_id: int, disposition: str, reviewer: str,
             (disposition, reviewer, notes, scrap_id))
         conn.commit()
         return {'ok': True, 'id': scrap_id, 'disposition': disposition}
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════
+# RAW-MATERIAL NCG (non-conforming goods) — QA/QC workflow
+# Veneers/boards condemned from FC sorting or WH handling/storage. Flagging
+# deducts the qty from the source stock bucket into an NCG holding record;
+# QA/QC then reviews and records one or more dispositions until cleared.
+# ════════════════════════════════════════════════════════════════
+_NCG_LOC_COL = {'FC': 'fc_stock', 'WH': 'current_stock', 'WLWH': 'wlwh_stock'}
+
+NCG_REASONS = [
+    'HANDLING_DAMAGE', 'STORAGE_DAMAGE', 'MOISTURE', 'WARP', 'CRACK',
+    'DELAMINATION', 'COLOUR_DEFECT', 'WRONG_SPEC', 'INSECT_MOULD', 'OTHER',
+]
+
+def flag_material_ncg(*, material_id: int, qty: float, source: str,
+                      reason_code: str, reason_detail: str = '',
+                      flagged_by: str = '') -> dict:
+    """Move `qty` of a material out of its source bucket (FC/WH/WLWH) into an
+    NCG holding record awaiting QA/QC review. Validates available stock."""
+    src = (source or '').strip().upper()
+    if src not in _NCG_LOC_COL:
+        raise ValueError("source must be FC, WH or WLWH")
+    if not (reason_code or '').strip():
+        raise ValueError("reason_code is required")
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        raise ValueError("qty must be a number")
+    if qty <= 0:
+        raise ValueError("qty must be positive")
+    col = _NCG_LOC_COL[src]
+    conn = get_db()
+    try:
+        m = conn.execute(
+            f"SELECT id, unit, COALESCE(unit_cost, price, 0) AS uc, COALESCE({col},0) AS avail "
+            f"FROM materials WHERE id=?", (material_id,)).fetchone()
+        if not m:
+            raise ValueError("Material not found")
+        m = dict(m)
+        if qty > float(m['avail']) + 1e-9:
+            raise ValueError(f"Insufficient {src} stock: only {m['avail']:g} available")
+        # Deduct from source bucket (column from the fixed map, not user input)
+        conn.execute(f"UPDATE materials SET {col} = MAX(0, {col} - ?) WHERE id=?",
+                     (qty, material_id))
+        cur = conn.execute("""INSERT INTO ncg_items
+            (material_id, qty, remaining_qty, uom, unit_cost, source,
+             reason_code, reason_detail, flagged_by)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            (material_id, qty, qty, m.get('unit') or '', float(m['uc']), src,
+             reason_code, reason_detail, flagged_by))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid, 'material_id': material_id,
+                'qty': qty, 'source': src}
+    finally:
+        conn.close()
+
+def list_ncg_items(status: str = None) -> list:
+    conn = get_db()
+    try:
+        q = """SELECT n.*, m.code AS material_code, m.name AS material_name,
+                      m.type AS material_type
+               FROM ncg_items n JOIN materials m ON m.id = n.material_id
+               WHERE 1=1"""
+        params = []
+        if status:
+            q += " AND n.status = ?"; params.append(status)
+        q += " ORDER BY CASE n.status WHEN 'PENDING_QC' THEN 0 WHEN 'IN_REVIEW' THEN 1 ELSE 2 END, n.flagged_at DESC LIMIT 500"
+        items = rows_to_list(conn.execute(q, params).fetchall())
+        # attach dispositions
+        for it in items:
+            it['dispositions'] = rows_to_list(conn.execute(
+                """SELECT d.*, tm.code AS target_code, tm.name AS target_name
+                   FROM ncg_dispositions d
+                   LEFT JOIN materials tm ON tm.id = d.target_material_id
+                   WHERE d.ncg_item_id = ? ORDER BY d.created_at""", (it['id'],)).fetchall())
+        return items
+    finally:
+        conn.close()
+
+def review_ncg_item(item_id: int, reviewer: str, review_notes: str = '') -> dict:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT status FROM ncg_items WHERE id=?", (item_id,)).fetchone()
+        if not row:
+            raise ValueError("NCG item not found")
+        new_status = 'IN_REVIEW' if row[0] == 'PENDING_QC' else row[0]
+        conn.execute("""UPDATE ncg_items
+            SET status = ?, reviewed_by = ?, reviewed_at = datetime('now'),
+                review_notes = ?
+            WHERE id = ?""", (new_status, reviewer, review_notes, item_id))
+        conn.commit()
+        return {'ok': True, 'id': item_id, 'status': new_status}
+    finally:
+        conn.close()
+
+def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
+                        target_material_id: int = None, yield_qty: float = None,
+                        notes: str = '', created_by: str = '') -> dict:
+    """Record a disposition for part (or all) of an NCG item. DISPOSE writes the
+    qty off; REGRADE/RESIZE move it into a target material's stock at the same
+    physical location (resize may yield a different qty). Decrements the item's
+    remaining qty and marks it DISPOSITIONED once fully cleared."""
+    disp = (disposition or '').strip().upper()
+    if disp not in ('DISPOSE', 'REGRADE', 'RESIZE'):
+        raise ValueError("disposition must be DISPOSE, REGRADE or RESIZE")
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        raise ValueError("qty must be a number")
+    if qty <= 0:
+        raise ValueError("qty must be positive")
+    if disp in ('REGRADE', 'RESIZE') and not target_material_id:
+        raise ValueError(f"{disp} requires a target material")
+    conn = get_db()
+    try:
+        it = conn.execute("SELECT * FROM ncg_items WHERE id=?", (ncg_item_id,)).fetchone()
+        if not it:
+            raise ValueError("NCG item not found")
+        it = dict(it)
+        if qty > float(it['remaining_qty']) + 1e-9:
+            raise ValueError(f"Only {it['remaining_qty']:g} remaining to disposition")
+
+        value_recovered = 0.0
+        applied_yield = None
+        if disp in ('REGRADE', 'RESIZE'):
+            tcol = _NCG_LOC_COL.get(it['source'], 'current_stock')
+            tgt = conn.execute(
+                "SELECT id, COALESCE(unit_cost, price, 0) AS uc FROM materials WHERE id=?",
+                (target_material_id,)).fetchone()
+            if not tgt:
+                raise ValueError("Target material not found")
+            add_qty = float(yield_qty) if (disp == 'RESIZE' and yield_qty not in (None, '')) else qty
+            applied_yield = add_qty
+            conn.execute(f"UPDATE materials SET {tcol} = COALESCE({tcol},0) + ? WHERE id=?",
+                         (add_qty, target_material_id))
+            value_recovered = add_qty * float(tgt['uc'])
+
+        conn.execute("""INSERT INTO ncg_dispositions
+            (ncg_item_id, disposition, qty, target_material_id, yield_qty,
+             value_recovered, notes, created_by)
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (ncg_item_id, disp, qty, target_material_id, applied_yield,
+             value_recovered, notes, created_by))
+
+        new_remaining = round(float(it['remaining_qty']) - qty, 6)
+        new_status = 'DISPOSITIONED' if new_remaining <= 1e-6 else (it['status'] if it['status'] != 'PENDING_QC' else 'IN_REVIEW')
+        conn.execute("UPDATE ncg_items SET remaining_qty=?, status=? WHERE id=?",
+                     (max(0.0, new_remaining), new_status, ncg_item_id))
+        conn.commit()
+        return {'ok': True, 'ncg_item_id': ncg_item_id, 'disposition': disp,
+                'qty': qty, 'remaining_qty': max(0.0, new_remaining),
+                'status': new_status, 'value_recovered': value_recovered}
+    finally:
+        conn.close()
+
+def get_qc_summary() -> dict:
+    """Counts for the QA/QC dashboard + badge: pending raw-material NCG and
+    pending production scrap (the two queues QA/QC consolidates)."""
+    conn = get_db()
+    try:
+        ncg_pending = conn.execute(
+            "SELECT COUNT(*) FROM ncg_items WHERE status IN ('PENDING_QC','IN_REVIEW')").fetchone()[0]
+        scrap_pending = conn.execute(
+            "SELECT COUNT(*) FROM scrap_log WHERE disposition='PENDING_REVIEW'").fetchone()[0]
+        value_in_ncg = conn.execute(
+            "SELECT COALESCE(SUM(remaining_qty*unit_cost),0) FROM ncg_items WHERE status!='DISPOSITIONED'").fetchone()[0]
+        value_recovered = conn.execute(
+            "SELECT COALESCE(SUM(value_recovered),0) FROM ncg_dispositions").fetchone()[0]
+        return {
+            'ncg_pending': ncg_pending,
+            'scrap_pending': scrap_pending,
+            'total_pending': ncg_pending + scrap_pending,
+            'value_in_ncg': round(float(value_in_ncg or 0), 2),
+            'value_recovered': round(float(value_recovered or 0), 2),
+        }
     finally:
         conn.close()
 
