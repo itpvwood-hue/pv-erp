@@ -67,6 +67,7 @@ from database import (
     save_ncg_issues, get_ncg_issues, get_batch_full_history,
     # Core
     get_all_materials, get_material, create_material, update_material, delete_material, bulk_upsert_material,
+    delete_fg_bom,
     get_all_products, get_product, create_product, update_product, delete_product,
     get_bom_for_product, get_all_bom, create_bom_entry, update_bom_entry, delete_bom_entry, bulk_upsert_bom,
     get_all_machines, get_machine, create_machine, update_machine, delete_machine,
@@ -507,7 +508,18 @@ def edit_material(mid: int, body: MaterialIn):
     return update_material(mid, body.dict())
 
 @app.delete("/api/materials/{mid}")
-def remove_material(mid: int): delete_material(mid); return {"ok":True}
+def remove_material(mid: int):
+    try:
+        return delete_material(mid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.delete("/api/fg-bom/{sku_code}")
+def remove_fg_bom(sku_code: str):
+    try:
+        return delete_fg_bom(sku_code)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 # ── Products ──────────────────────────────────────────────────
 @app.get("/api/products")

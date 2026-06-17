@@ -1809,7 +1809,61 @@ def update_material(mid, data):
     conn.close(); return row_to_dict(row)
 
 def delete_material(mid):
-    conn = get_db(); conn.execute("DELETE FROM materials WHERE id=?",(mid,)); conn.commit(); conn.close()
+    """Delete a material, but refuse (with a clear reason) when it's still
+    referenced by a BOM or received lots — otherwise the FK just 500s."""
+    conn = get_db()
+    try:
+        refs = []
+        n_bom = conn.execute("SELECT COUNT(*) FROM bom_lines WHERE material_id=?", (mid,)).fetchone()[0]
+        if n_bom: refs.append(f"{n_bom} BOM line(s)")
+        n_lot = conn.execute("SELECT COUNT(*) FROM material_lots WHERE material_id=?", (mid,)).fetchone()[0]
+        if n_lot: refs.append(f"{n_lot} received lot(s)")
+        # Linked as a glue ingredient? (material_links is JSON: {ingredient: material_id})
+        n_glue = conn.execute(
+            "SELECT COUNT(*) FROM glue_recipes WHERE material_links LIKE ?",
+            (f'%: {mid}%',)).fetchone()[0]
+        if n_glue: refs.append(f"{n_glue} glue recipe(s)")
+        if refs:
+            raise ValueError("Cannot delete — material is used by " + ", ".join(refs) +
+                             ". Remove those references first.")
+        try:
+            conn.execute("DELETE FROM materials WHERE id=?", (mid,))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            raise ValueError("Cannot delete — material is still referenced elsewhere.")
+        return {"ok": True, "deleted_id": mid}
+    finally:
+        conn.close()
+
+def delete_fg_bom(sku_code: str) -> dict:
+    """Delete an FG SKU's BOM (the BOM Builder recipe) and the SKU itself.
+    Refuses if the SKU is tied to sales/production orders so live work isn't
+    orphaned. bom_lines cascade from skus; products row is removed too."""
+    conn = get_db()
+    try:
+        code = (sku_code or '').strip().upper()
+        sk = conn.execute("SELECT id FROM skus WHERE code=?", (code,)).fetchone()
+        if not sk:
+            raise ValueError("BOM not found")
+        sku_id = sk[0]
+        prod = conn.execute("SELECT id FROM products WHERE sku=?", (code,)).fetchone()
+        if prod:
+            pid = prod[0]
+            n_po = conn.execute("SELECT COUNT(*) FROM po_lines WHERE product_id=?", (pid,)).fetchone()[0]
+            n_prod = conn.execute("SELECT COUNT(*) FROM production_orders WHERE product_id=?", (pid,)).fetchone()[0]
+            refs = []
+            if n_po:   refs.append(f"{n_po} sales-PO line(s)")
+            if n_prod: refs.append(f"{n_prod} production order(s)")
+            if refs:
+                raise ValueError("Cannot delete — SKU is used by " + ", ".join(refs) +
+                                 ". This BOM is in active use.")
+        conn.execute("DELETE FROM bom_lines WHERE sku_id=?", (sku_id,))
+        conn.execute("DELETE FROM skus WHERE id=?", (sku_id,))
+        conn.execute("DELETE FROM products WHERE sku=?", (code,))
+        conn.commit()
+        return {"ok": True, "deleted": code}
+    finally:
+        conn.close()
 
 def bulk_upsert_material(data):
     """
@@ -4004,11 +4058,13 @@ def _recipe_to_summary(conn, recipe_row, with_ingredients: bool = False):
         if kg <= 0: continue
         mat_id = links.get(ing_key)
         mat = None
+        # Raw-material cost lives in unit_cost (set by receiving / edit / regrade);
+        # price is a legacy fallback. Use unit_cost first or the glue cost shows 0.
         if mat_id:
-            mat = conn.execute("SELECT id, code, name, unit, price FROM materials WHERE id=?",
+            mat = conn.execute("SELECT id, code, name, unit, COALESCE(unit_cost, price, 0) AS price FROM materials WHERE id=?",
                                (mat_id,)).fetchone()
         if not mat and fallback_code:
-            mat = conn.execute("SELECT id, code, name, unit, price FROM materials WHERE code=?",
+            mat = conn.execute("SELECT id, code, name, unit, COALESCE(unit_cost, price, 0) AS price FROM materials WHERE code=?",
                                (fallback_code,)).fetchone()
         ratio = (kg / total_kg) if total_kg > 0 else 0
         if mat:
@@ -4190,7 +4246,7 @@ def _glue_recipe_cost_per_kg(conn, recipe_id: int) -> float | None:
         if not col: continue
         kg = float(r.get(col) or 0)
         if kg <= 0: continue
-        m = conn.execute("SELECT price FROM materials WHERE id=?", (mat_id,)).fetchone()
+        m = conn.execute("SELECT COALESCE(unit_cost, price, 0) FROM materials WHERE id=?", (mat_id,)).fetchone()
         if not m: continue
         total_cost += kg * float(m[0] or 0)
         total_kg   += kg

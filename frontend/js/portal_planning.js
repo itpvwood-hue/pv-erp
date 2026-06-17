@@ -1913,6 +1913,7 @@ function renderBom(rows){
             <span class="badge bg-success-subtle text-success border-success border">฿${(r.cost_per_sheet||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}/sheet</span>
             <span class="badge bg-primary-subtle text-primary border-primary border ms-1">฿${(r.total_cost||0).toLocaleString(undefined,{maximumFractionDigits:0})}/pallet</span>
             <button class="btn btn-sm btn-outline-secondary py-0" onclick="editBomCard('${r.sku_code}')"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-outline-danger py-0" title="Delete BOM" onclick="deleteBomCard('${r.sku_code}')"><i class="bi bi-trash"></i></button>
           </div>
         </div>
         <div class="row g-2">
@@ -1924,6 +1925,15 @@ function renderBom(rows){
         </div>
       </div>
     </div>`).join('');
+}
+
+async function deleteBomCard(skuCode){
+  if(!confirm(`Delete the BOM for ${skuCode}?\n\nThis removes the SKU and its recipe. It is blocked if the SKU has sales or production orders.`)) return;
+  try{
+    await api('/api/fg-bom/'+encodeURIComponent(skuCode),'DELETE');
+    toast('BOM deleted: '+skuCode);
+    loadBom();
+  }catch(e){ toast('Delete failed: '+e.message,'danger'); }
 }
 
 async function editBomCard(skuCode){
