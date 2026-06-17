@@ -6457,13 +6457,43 @@ def review_ncg_item(item_id: int, reviewer: str, review_notes: str = '') -> dict
     finally:
         conn.close()
 
+def _create_ncg_target(conn, source_material_id: int, nt: dict) -> int:
+    """Create (or reuse) a material to receive a resize disposition. Inherits
+    type/unit from the source NCG material; cost starts at 0 and is set by the
+    weighted-average blend the caller applies. Reuses an existing row if the
+    given code already exists."""
+    src = conn.execute("SELECT type, unit FROM materials WHERE id=?",
+                       (source_material_id,)).fetchone()
+    src = dict(src) if src else {}
+    code = (str(nt.get('code') or '')).strip() or None
+    name = (str(nt.get('name') or '')).strip()
+    if not name:
+        raise ValueError("New resized material needs a name")
+    if code:
+        ex = conn.execute("SELECT id FROM materials WHERE code=?", (code,)).fetchone()
+        if ex:
+            return ex[0]
+    def _num(v):
+        try: return float(v) if v not in (None, '') else None
+        except (TypeError, ValueError): return None
+    cur = conn.execute(
+        "INSERT INTO materials (code,name,type,unit,current_stock,unit_cost,"
+        "thickness_mm,width_mm,length_mm) VALUES (?,?,?,?,0,0,?,?,?)",
+        (code, name, nt.get('type') or src.get('type') or 'veneer_sheet',
+         nt.get('unit') or src.get('unit') or 'sheet',
+         _num(nt.get('thickness_mm')), _num(nt.get('width_mm')), _num(nt.get('length_mm'))))
+    return cur.lastrowid
+
 def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
                         target_material_id: int = None, yield_qty: float = None,
+                        new_target: dict = None,
                         notes: str = '', created_by: str = '') -> dict:
     """Record a disposition for part (or all) of an NCG item. DISPOSE writes the
     qty off; REGRADE/RESIZE move it into a target material's stock at the same
-    physical location (resize may yield a different qty). Decrements the item's
-    remaining qty and marks it DISPOSITIONED once fully cleared."""
+    physical location (resize may yield a different qty, and may create a new
+    target material via `new_target`). The NCG cost basis is weighted-averaged
+    into the target's unit_cost. Decrements remaining qty and marks the item
+    DISPOSITIONED once fully cleared."""
     disp = (disposition or '').strip().upper()
     if disp not in ('DISPOSE', 'REGRADE', 'RESIZE'):
         raise ValueError("disposition must be DISPOSE, REGRADE or RESIZE")
@@ -6473,7 +6503,7 @@ def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
         raise ValueError("qty must be a number")
     if qty <= 0:
         raise ValueError("qty must be positive")
-    if disp in ('REGRADE', 'RESIZE') and not target_material_id:
+    if disp in ('REGRADE', 'RESIZE') and not target_material_id and not new_target:
         raise ValueError(f"{disp} requires a target material")
     conn = get_db()
     try:
@@ -6488,16 +6518,34 @@ def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
         applied_yield = None
         if disp in ('REGRADE', 'RESIZE'):
             tcol = _NCG_LOC_COL.get(it['source'], 'current_stock')
+            # Resize to a brand-new size: create the target material on the fly,
+            # inheriting type/unit from the source NCG material.
+            if new_target and not target_material_id:
+                target_material_id = _create_ncg_target(conn, it['material_id'], new_target)
             tgt = conn.execute(
-                "SELECT id, COALESCE(unit_cost, price, 0) AS uc FROM materials WHERE id=?",
-                (target_material_id,)).fetchone()
+                "SELECT id, COALESCE(unit_cost, price, 0) AS uc, "
+                "COALESCE(fc_stock,0)+COALESCE(current_stock,0)+COALESCE(wlwh_stock,0) AS on_hand "
+                "FROM materials WHERE id=?", (target_material_id,)).fetchone()
             if not tgt:
                 raise ValueError("Target material not found")
+            tgt = dict(tgt)
             add_qty = float(yield_qty) if (disp == 'RESIZE' and yield_qty not in (None, '')) else qty
             applied_yield = add_qty
+            # Carry the NCG cost basis into the target via a weighted-average
+            # blend over the target's existing on-hand (mirrors the FC regrade).
+            # incoming_value = the value of the consumed NCG qty; for a resize it
+            # spreads over the (possibly smaller) yield, so the per-unit cost of
+            # the resized pieces reflects the salvaged value.
+            incoming_value = qty * float(it['unit_cost'] or 0)
+            before_total = float(tgt['on_hand'] or 0)
+            new_total = before_total + add_qty
+            if new_total > 0:
+                blended = (before_total * float(tgt['uc']) + incoming_value) / new_total
+                conn.execute("UPDATE materials SET unit_cost=? WHERE id=?",
+                             (round(blended, 6), target_material_id))
             conn.execute(f"UPDATE materials SET {tcol} = COALESCE({tcol},0) + ? WHERE id=?",
                          (add_qty, target_material_id))
-            value_recovered = add_qty * float(tgt['uc'])
+            value_recovered = incoming_value
 
         conn.execute("""INSERT INTO ncg_dispositions
             (ncg_item_id, disposition, qty, target_material_id, yield_qty,

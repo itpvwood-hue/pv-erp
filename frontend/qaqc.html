@@ -172,10 +172,24 @@ body{margin:0;font-family:'Segoe UI','Leelawadee UI','Microsoft YaHei',Tahoma,'N
       <div class="col-md-2"><label class="form-label small fw-semibold">Qty</label>
         <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="disp-qty"></div>
       <div class="col-md-4" id="disp-target-wrap" style="display:none"><label class="form-label small fw-semibold">Target material</label>
-        <select class="form-select form-select-sm" id="disp-target"></select></div>
+        <select class="form-select form-select-sm" id="disp-target"></select>
+        <div class="form-check form-check-inline mt-1" id="disp-newchk-wrap" style="display:none">
+          <input class="form-check-input" type="checkbox" id="disp-newchk" onchange="dispToggleTarget()">
+          <label class="form-check-label small" for="disp-newchk">Resize into a new SKU</label>
+        </div></div>
       <div class="col-md-2" id="disp-yield-wrap" style="display:none"><label class="form-label small fw-semibold">Yield qty</label>
         <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="disp-yield" placeholder="= qty"></div>
       <div class="col-md-1"><button class="btn btn-sm btn-primary w-100" onclick="dispApply()" title="Apply this action"><i class="bi bi-plus-lg"></i></button></div>
+      <div class="col-12" id="disp-newtarget-wrap" style="display:none">
+        <div class="border rounded p-2 bg-light"><div class="small fw-semibold text-muted mb-1">New resized material <span class="fw-normal">(type &amp; unit inherit from the source)</span></div>
+          <div class="row g-2">
+            <div class="col-md-3"><input class="form-control form-control-sm" id="nt-code" placeholder="Code *"></div>
+            <div class="col-md-5"><input class="form-control form-control-sm" id="nt-name" placeholder="Name *"></div>
+            <div class="col-md-1"><input type="number" step="0.01" class="form-control form-control-sm" id="nt-thick" placeholder="Thk"></div>
+            <div class="col-md-1"><input type="number" step="1" class="form-control form-control-sm" id="nt-width" placeholder="W"></div>
+            <div class="col-md-1"><input type="number" step="1" class="form-control form-control-sm" id="nt-length" placeholder="L"></div>
+          </div></div>
+      </div>
       <div class="col-12"><input class="form-control form-control-sm" id="disp-notes" placeholder="notes for this action (optional)"></div>
     </div>
     <div class="mt-3"><div class="small fw-semibold text-muted mb-1">Actions recorded</div>
@@ -312,6 +326,8 @@ async function qcOpenDisp(item){
   document.getElementById('disp-action').value='DISPOSE';
   document.getElementById('disp-qty').value=item.remaining_qty;
   document.getElementById('disp-yield').value=''; document.getElementById('disp-notes').value='';
+  document.getElementById('disp-newchk').checked=false;
+  ['nt-code','nt-name','nt-thick','nt-width','nt-length'].forEach(id=>document.getElementById(id).value='');
   const mats=await _ensureMats();
   document.getElementById('disp-target').innerHTML='<option value="">— select —</option>'+
     mats.filter(m=>m.id!==item.material_id).map(m=>`<option value="${m.id}">[${m.code}] ${m.name}</option>`).join('');
@@ -323,8 +339,15 @@ async function qcOpenDisp(item){
 }
 function dispToggleTarget(){
   const a=document.getElementById('disp-action').value;
+  const isResize=(a==='RESIZE');
   document.getElementById('disp-target-wrap').style.display = (a==='DISPOSE')?'none':'';
-  document.getElementById('disp-yield-wrap').style.display = (a==='RESIZE')?'':'none';
+  document.getElementById('disp-yield-wrap').style.display = isResize?'':'none';
+  // "Resize into a new SKU" toggle only for RESIZE
+  document.getElementById('disp-newchk-wrap').style.display = isResize?'':'none';
+  if(!isResize) document.getElementById('disp-newchk').checked=false;
+  const useNew = isResize && document.getElementById('disp-newchk').checked;
+  document.getElementById('disp-newtarget-wrap').style.display = useNew?'':'none';
+  document.getElementById('disp-target').disabled = useNew;
 }
 function _dispRenderHistory(item){
   const h=document.getElementById('disp-history');
@@ -339,10 +362,21 @@ async function dispApply(){
   const review=document.getElementById('disp-review').value;
   if(!qty||qty<=0){ alert('Enter a positive qty'); return; }
   const body={disposition:action, qty, notes:document.getElementById('disp-notes').value};
+  const useNew = action==='RESIZE' && document.getElementById('disp-newchk').checked;
   if(action!=='DISPOSE'){
-    const t=parseInt(document.getElementById('disp-target').value);
-    if(!t){ alert('Pick a target material'); return; }
-    body.target_material_id=t;
+    if(useNew){
+      const code=document.getElementById('nt-code').value.trim();
+      const name=document.getElementById('nt-name').value.trim();
+      if(!name){ alert('New material needs a name'); return; }
+      body.new_target={ code, name,
+        thickness_mm:document.getElementById('nt-thick').value||null,
+        width_mm:document.getElementById('nt-width').value||null,
+        length_mm:document.getElementById('nt-length').value||null };
+    } else {
+      const t=parseInt(document.getElementById('disp-target').value);
+      if(!t){ alert('Pick a target material'); return; }
+      body.target_material_id=t;
+    }
   }
   if(action==='RESIZE'){ const y=parseFloat(document.getElementById('disp-yield').value); if(!isNaN(y)&&y>0) body.yield_qty=y; }
   try{

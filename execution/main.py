@@ -3326,6 +3326,7 @@ class NcgDispositionIn(BaseModel):
     qty: float
     target_material_id: Optional[int] = None
     yield_qty: Optional[float] = None
+    new_target: Optional[dict] = None   # {code,name,type,unit,thickness_mm,width_mm,length_mm} to resize into a new SKU
     notes: Optional[str] = ''
 
 @app.get("/api/ncg/reasons")
@@ -3364,6 +3365,7 @@ def disposition_ncg_ep(item_id: int, body: NcgDispositionIn,
         return add_ncg_disposition(
             ncg_item_id=item_id, disposition=body.disposition, qty=body.qty,
             target_material_id=body.target_material_id, yield_qty=body.yield_qty,
+            new_target=body.new_target,
             notes=body.notes or '', created_by=user.get('username') or '')
     except ValueError as e:
         raise HTTPException(400, str(e))
