@@ -2289,7 +2289,7 @@ def wh_move_stock(material_id: int, from_location: str, to_location: str,
         # column names come from the fixed _WH_LOC_COL map (not user input)
         conn.execute(f"UPDATE materials SET {from_col}=MAX(0,{from_col}-?), {to_col}={to_col}+? WHERE id=?",
                      (qty, qty, material_id))
-        conn.execute("""INSERT INTO wh_stock_transfers
+        cur = conn.execute("""INSERT INTO wh_stock_transfers
                         (material_id, from_location, to_location, qty, moved_by, notes)
                         VALUES (?,?,?,?,?,?)""",
                      (material_id, from_loc, to_loc, qty, moved_by, notes))
@@ -2297,7 +2297,14 @@ def wh_move_stock(material_id: int, from_location: str, to_location: str,
         return {"ok": True, "material_id": material_id, "from_location": from_loc,
                 "to_location": to_loc, "qty": qty,
                 "new_from_qty": max(0.0, avail - qty),
-                "new_to_qty": float(m.get(to_col) or 0) + qty}
+                "new_to_qty": float(m.get(to_col) or 0) + qty,
+                "undo": {
+                    "increments": [
+                        {"table": "materials", "col": from_col, "delta": qty, "where": {"id": material_id}},
+                        {"table": "materials", "col": to_col, "delta": -qty, "where": {"id": material_id}},
+                    ],
+                    "deletes": [{"table": "wh_stock_transfers", "col": "id", "val": cur.lastrowid}],
+                }}
     finally:
         conn.close()
 
@@ -2378,15 +2385,25 @@ def move_fg_batches(batch_ids, to_location: str, moved_by: str = '', notes: str 
                 raise ValueError(f"Batch {b['batch_number']} is already at {to_loc}")
             pcs = int(b['pcs_actual'] or 0)
             conn.execute("UPDATE batches SET fg_location=? WHERE id=?", (to_loc, bid))
-            conn.execute("""INSERT INTO fg_location_moves
+            mv = conn.execute("""INSERT INTO fg_location_moves
                             (batch_id, from_location, to_location, pallets, pcs, moved_by, notes)
                             VALUES (?,?,?,?,?,?,?)""",
                          (bid, frm, to_loc, int(b['quantity'] or 0), pcs, moved_by, notes))
             moved.append({"batch_id": bid, "batch_number": b['batch_number'],
                           "from_location": frm, "to_location": to_loc,
-                          "pallets": int(b['quantity'] or 0), "pcs": pcs})
+                          "pallets": int(b['quantity'] or 0), "pcs": pcs,
+                          "_move_id": mv.lastrowid})
+        # Reversal plan: put each batch back at its prior location and delete the
+        # move-log rows. Only revert a batch still sitting at the target location.
+        undo = {"updates": [], "deletes": []}
+        for mvd in moved:
+            undo["updates"].append(
+                {"table": "batches", "set": {"fg_location": mvd["from_location"]},
+                 "where": {"id": mvd["batch_id"], "fg_location": mvd["to_location"]}})
+            undo["deletes"].append(
+                {"table": "fg_location_moves", "col": "id", "val": mvd["_move_id"]})
         conn.commit()
-        return {"ok": True, "moved": moved, "count": len(moved)}
+        return {"ok": True, "moved": moved, "count": len(moved), "undo": undo}
     finally:
         conn.close()
 
@@ -5829,11 +5846,18 @@ def quick_receive_for_pr(*, pr_id: int, received_qty: float, planned_arrival: st
         supplier_ref=supplier_ref, carrier=carrier,
         notes=notes or 'Created during walk-in receipt',
         created_by=received_by)
-    return receive_pr_shipment(
+    result = receive_pr_shipment(
         shipment_id=ship['id'], received_qty=float(received_qty),
         lot_code=lot_code, unit_cost=unit_cost, expiry_date=expiry_date,
         supplier=supplier, supplier_lot_ref=supplier_lot_ref, notes=notes,
         received_by=received_by, destination=destination)
+    # This quick-receive created the shipment row, so undo deletes it (rather
+    # than restoring a prior state that never existed).
+    undo = result.get('undo') or {}
+    undo['updates'] = [u for u in undo.get('updates', []) if u.get('table') != 'pr_shipments']
+    undo.setdefault('deletes', []).insert(0, {"table": "pr_shipments", "col": "id", "val": ship['id']})
+    result['undo'] = undo
+    return result
 
 
 def split_pr_shipment(*, shipment_id: int, split_qty: float,
@@ -5973,10 +5997,36 @@ def receive_pr_shipment(*, shipment_id: int, received_qty: float, lot_code: str 
                     "UPDATE purchase_requests SET status='RECEIVED', received_at=datetime('now') WHERE id=?",
                     (s['pr_id'],))
 
+        # Build the reversal plan (for per-user Undo): restore the shipment's
+        # prior received_qty/status/lot_id, deduct the stock we added, delete the
+        # lot, and revert the PR status if this receipt flipped it.
+        post_pr_status = conn.execute(
+            "SELECT status FROM purchase_requests WHERE id=?", (s['pr_id'],)).fetchone()[0]
+        undo_plan = {
+            "updates": [
+                {"table": "pr_shipments",
+                 "set": {"received_qty": float(s.get('received_qty') or 0),
+                         "status": s['status'], "lot_id": s.get('lot_id')},
+                 "where": {"id": shipment_id}},
+            ],
+            "increments": [
+                {"table": "materials", "col": col, "delta": -float(received_qty),
+                 "where": {"id": material_id}},
+            ],
+            "deletes": [
+                {"table": "material_lots", "col": "id", "val": lot_id},
+            ],
+        }
+        if post_pr_status != pr.get('status'):
+            undo_plan["updates"].append(
+                {"table": "purchase_requests", "set": {"status": pr.get('status')},
+                 "where": {"id": s['pr_id'], "status": post_pr_status}})
+
         conn.commit()
         return {
             'ok': True, 'shipment_id': shipment_id, 'lot_id': lot_id,
             'shipment_status': new_status, 'lot_code': lot_code,
+            'undo': undo_plan,
         }
     finally:
         conn.close()
@@ -6617,6 +6667,10 @@ _UNDO_TABLES = {
     'laminating_log', 'cold_press_log', 'repair_log', 'sanding_log',
     'hot_press_log', 'grading_log', 'glue_mix_log', 'glue_mix_batches',
     'packing_log', 'production_logs', 'prod_batch', 'orders',
+    # Warehouse actions (Undo Phase 2)
+    'materials', 'material_lots', 'pr_shipments', 'purchase_requests',
+    'wh_stock_transfers', 'fg_location_moves', 'batches',
+    'fc_transfer_requests', 'consumable_request', 'dept_cost_ledger',
 }
 
 def record_action(*, user, action_type: str, summary: str = '', undo_spec: dict = None):
@@ -8924,7 +8978,7 @@ def fulfill_consumable_request(request_id: str, qty_to_fulfill: float, fulfilled
     month_year = datemod.today().strftime('%Y-%m')
     unit_cost  = mat['unit_cost']
     total_cost = qty_to_fulfill * unit_cost
-    conn.execute(
+    ledger = conn.execute(
         """INSERT INTO dept_cost_ledger
            (department,line_id,month_year,material_id,qty,unit_cost,total_cost,request_id)
            VALUES (?,?,?,?,?,?,?,?)""",
@@ -8943,7 +8997,20 @@ def fulfill_consumable_request(request_id: str, qty_to_fulfill: float, fulfilled
            WHERE cr.request_id=?""",
         (request_id,)
     ).fetchone()
-    conn.close(); return row_to_dict(row)
+    out = row_to_dict(row)
+    # Reversal plan: put the request back to its prior fulfilment, return the
+    # issued qty to WH stock, and remove the cost-ledger entry.
+    out['undo'] = {
+        "updates": [{"table": "consumable_request",
+                     "set": {"qty_fulfilled": req['qty_fulfilled'], "status": req['status'],
+                             "fulfilled_by": req.get('fulfilled_by'),
+                             "fulfilled_at": req.get('fulfilled_at')},
+                     "where": {"request_id": request_id}}],
+        "increments": [{"table": "materials", "col": "current_stock",
+                        "delta": float(qty_to_fulfill), "where": {"id": req['material_id']}}],
+        "deletes": [{"table": "dept_cost_ledger", "col": "id", "val": ledger.lastrowid}],
+    }
+    conn.close(); return out
 
 def cancel_consumable_request(request_id: str) -> dict:
     conn = get_db()
@@ -9216,7 +9283,23 @@ def fulfill_fc_transfer_request(request_id: str, qty_to_fulfill: float, fulfille
     )
     conn.commit()
     row = conn.execute(_fctr_row_query() + " WHERE tr.request_id=?", (request_id,)).fetchone()
-    conn.close(); return row_to_dict(row)
+    out = row_to_dict(row)
+    mid = req['material_id']; q = float(qty_to_fulfill)
+    if direction == 'inbound':
+        incs = [{"table": "materials", "col": "current_stock", "delta": q, "where": {"id": mid}},
+                {"table": "materials", "col": "fc_stock", "delta": -q, "where": {"id": mid}}]
+    else:
+        incs = [{"table": "materials", "col": "fc_stock", "delta": q, "where": {"id": mid}},
+                {"table": "materials", "col": "current_stock", "delta": -q, "where": {"id": mid}}]
+    out['undo'] = {
+        "updates": [{"table": "fc_transfer_requests",
+                     "set": {"qty_fulfilled": req['qty_fulfilled'], "status": req['status'],
+                             "fulfilled_by": req.get('fulfilled_by'),
+                             "fulfilled_at": req.get('fulfilled_at')},
+                     "where": {"request_id": request_id}}],
+        "increments": incs,
+    }
+    conn.close(); return out
 
 
 def cancel_fc_transfer_request(request_id: str) -> dict:

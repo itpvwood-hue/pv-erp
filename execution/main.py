@@ -1815,6 +1815,18 @@ def _status_revert(batch_id, prev_status, cur_status):
     return {"table": "prod_batch", "set": {"status": prev_status},
             "where": {"batch_id": batch_id, "status": cur_status}}
 
+def _record_undo(user, action_type, summary, result):
+    """Record the reversal plan a warehouse function returned in result['undo'],
+    then strip it from the response sent to the client."""
+    try:
+        if isinstance(result, dict) and result.get('undo'):
+            record_action(user=user, action_type=action_type, summary=summary,
+                          undo_spec=result['undo'])
+            result = {k: v for k, v in result.items() if k != 'undo'}
+    except Exception:
+        pass
+    return result
+
 @app.post("/api/production/glue-mix", status_code=201)
 def post_glue_mix(body: GlueMixIn, x_auth_token: str = Header(None)):
     d = body.dict(); mid = log_glue_mix(d)
@@ -2343,7 +2355,9 @@ def list_reqs(status: Optional[str] = None, department: Optional[str] = None,
 def fulfill_req(request_id: str, body: FulfillIn,
                 user: dict = Depends(require_role(Role.WAREHOUSE))):
     try:
-        return fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
+        r = fulfill_consumable_request(request_id, body.qty_fulfilled, user['user_id'])
+        return _record_undo(user, 'fulfill-consumable',
+                            f"Fulfil {body.qty_fulfilled} · {r.get('material_name','')}", r)
     except ValueError as e:
         # Insufficient-stock guard (and 'request not found') surface as a
         # 400 with the human message instead of a generic 500.
@@ -2513,8 +2527,10 @@ class WhMoveIn(BaseModel):
 def warehouse_move_stock(body: WhMoveIn,
                          user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
     try:
-        return wh_move_stock(body.material_id, body.from_location, body.to_location,
-                             body.qty, moved_by=(user.get('username') or ''), notes=body.notes)
+        r = wh_move_stock(body.material_id, body.from_location, body.to_location,
+                          body.qty, moved_by=(user.get('username') or ''), notes=body.notes)
+        return _record_undo(user, 'wh-move',
+                            f"Move {body.qty} {body.from_location}→{body.to_location}", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -2538,8 +2554,10 @@ def fg_warehouse_batches(sku: Optional[str] = None, location: Optional[str] = No
 def fg_warehouse_move_location(body: FgMoveIn,
                                user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
     try:
-        return move_fg_batches(body.batch_ids, body.to_location,
-                               moved_by=(user.get('username') or ''), notes=body.notes)
+        r = move_fg_batches(body.batch_ids, body.to_location,
+                            moved_by=(user.get('username') or ''), notes=body.notes)
+        return _record_undo(user, 'fg-move',
+                            f"Move {r.get('count',0)} FG batch(es) → {body.to_location}", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3101,12 +3119,14 @@ class ReceiveIn(BaseModel):
 @app.post("/api/shipments/{shipment_id}/receive")
 def receive_shipment_ep(shipment_id: int, body: ReceiveIn, user: dict = Depends(require_auth)):
     try:
-        return receive_pr_shipment(
+        r = receive_pr_shipment(
             shipment_id=shipment_id, received_qty=body.received_qty,
             lot_code=body.lot_code or '', unit_cost=body.unit_cost or 0,
             expiry_date=body.expiry_date, supplier=body.supplier or '',
             supplier_lot_ref=body.supplier_lot_ref or '', notes=body.notes or '',
             received_by=user.get('username') or '', destination=body.destination or 'WH')
+        return _record_undo(user, 'receive',
+                            f"Receive {body.received_qty} → {body.destination or 'WH'} (lot {r.get('lot_code','')})", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3129,7 +3149,7 @@ def quick_receive_ep(pr_id: int, body: QuickReceiveIn, user: dict = Depends(requ
     shipment + lot atomically. Used by Warehouse when goods arrive without
     Purchasing having planned a delivery."""
     try:
-        return quick_receive_for_pr(
+        r = quick_receive_for_pr(
             pr_id=pr_id, received_qty=body.received_qty,
             planned_arrival=body.planned_arrival, supplier_ref=body.supplier_ref or '',
             carrier=body.carrier or '', lot_code=body.lot_code or '',
@@ -3137,6 +3157,8 @@ def quick_receive_ep(pr_id: int, body: QuickReceiveIn, user: dict = Depends(requ
             supplier=body.supplier or '', supplier_lot_ref=body.supplier_lot_ref or '',
             notes=body.notes or '', received_by=user.get('username') or '',
             destination=body.destination or 'WH')
+        return _record_undo(user, 'receive',
+                            f"Receive {body.received_qty} → {body.destination or 'WH'} (lot {r.get('lot_code','')})", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3733,7 +3755,9 @@ def create_fc_return(body: FcTransferRequestIn, user: dict = Depends(require_aut
 def fulfill_fc_transfer(request_id: str, body: FulfillIn,
                         user: dict = Depends(require_role(Role.WAREHOUSE))):
     try:
-        return fulfill_fc_transfer_request(request_id, body.qty_fulfilled, user['user_id'])
+        r = fulfill_fc_transfer_request(request_id, body.qty_fulfilled, user['user_id'])
+        return _record_undo(user, 'fulfill-fc-transfer',
+                            f"Fulfil FC transfer {body.qty_fulfilled}", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
