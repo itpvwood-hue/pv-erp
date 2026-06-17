@@ -2027,6 +2027,28 @@ def factory_assistant_chat(body: FactoryAssistantBody,
     return _fa_chat(body.messages or [], session_id=body.session_id,
                     user_id=user.get('user_id'))
 
+@app.get("/api/factory-assistant/sessions")
+def factory_assistant_sessions(user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """The signed-in manager's saved chat sessions (for the history sidebar)."""
+    from database import fa_list_sessions
+    return fa_list_sessions(user.get('user_id'))
+
+@app.get("/api/factory-assistant/history/{session_id}")
+def factory_assistant_history(session_id: str,
+                              user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """Full transcript of one past session so it can be reopened + continued."""
+    from database import fa_get_session_history
+    return fa_get_session_history(session_id, user.get('user_id'))
+
+@app.delete("/api/factory-assistant/sessions/{session_id}")
+def factory_assistant_delete_session(session_id: str,
+                                     user: dict = Depends(require_role(Role.MANAGERIAL))):
+    from database import fa_delete_session
+    try:
+        return fa_delete_session(session_id, user.get('user_id'))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 class FAKnowledgeIn(BaseModel):
     category: str
     title: str

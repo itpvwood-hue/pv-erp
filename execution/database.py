@@ -9210,6 +9210,57 @@ def fa_get_recent_messages(session_id: str, limit: int = 20) -> list:
     return list(reversed(rows_to_list(rows)))   # oldest -> newest
 
 
+def fa_list_sessions(user_id: str, limit: int = 100) -> list:
+    """A user's saved chat sessions, most-recent activity first. Title is taken
+    from the session's first user message so past chats are recognisable."""
+    if not user_id:
+        return []
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT c.session_id,
+               MIN(c.created_at) AS started_at,
+               MAX(c.created_at) AS last_at,
+               COUNT(*)          AS msg_count,
+               (SELECT content FROM fa_conversations c2
+                 WHERE c2.session_id = c.session_id AND c2.role='user'
+                 ORDER BY c2.created_at ASC, c2.rowid ASC LIMIT 1) AS title
+        FROM fa_conversations c
+        WHERE c.user_id = ?
+        GROUP BY c.session_id
+        ORDER BY last_at DESC
+        LIMIT ?""", (user_id, int(limit))).fetchall()
+    conn.close()
+    return rows_to_list(rows)
+
+
+def fa_get_session_history(session_id: str, user_id: str) -> list:
+    """All messages (role, content, time) for one session, scoped to the user
+    so a session id can't be used to read someone else's chat."""
+    if not session_id or not user_id:
+        return []
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT role, content, created_at FROM fa_conversations
+        WHERE session_id=? AND user_id=? ORDER BY created_at ASC, rowid ASC""",
+        (session_id, user_id)).fetchall()
+    conn.close()
+    return rows_to_list(rows)
+
+
+def fa_delete_session(session_id: str, user_id: str) -> dict:
+    """Delete a whole chat session (only the caller's own)."""
+    if not session_id or not user_id:
+        raise ValueError("session_id required")
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM fa_conversations WHERE session_id=? AND user_id=?",
+                           (session_id, user_id))
+        conn.commit()
+        return {"ok": True, "deleted": cur.rowcount}
+    finally:
+        conn.close()
+
+
 # Words too generic to be useful for knowledge keyword-matching.
 _FA_STOPWORDS = {
     'the','a','an','and','or','of','to','in','on','for','is','are','was','were',

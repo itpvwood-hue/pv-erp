@@ -1899,24 +1899,37 @@
       <h4 class="mb-0"><i class="bi bi-cpu me-2 text-success"></i>Factory Assistant</h4>
       <small class="text-muted">Ask about production, materials, costs, forecasts. Read-only DB access; can produce Excel reports.</small>
     </div>
-    <button class="btn btn-sm btn-outline-secondary" onclick="faReset()" title="Clear conversation"><i class="bi bi-arrow-counterclockwise me-1"></i>New chat</button>
+    <button class="btn btn-sm btn-success" onclick="faNewChat()" title="Start a new conversation"><i class="bi bi-plus-lg me-1"></i>New chat</button>
   </div>
 
-  <!-- Chat transcript -->
-  <div class="card mb-3">
-    <div class="card-body" id="fa-chat" style="min-height:260px;max-height:60vh;overflow-y:auto"></div>
-  </div>
-
-  <!-- Prompt input -->
-  <div class="card">
-    <div class="card-body p-2">
-      <div class="d-flex gap-2 align-items-end">
-        <textarea class="form-control" id="fa-input" rows="2" placeholder="e.g. Which 10 materials had the biggest stock drop last month? Export to Excel." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();faSend();}"></textarea>
-        <button class="btn btn-success" id="fa-send-btn" onclick="faSend()"><i class="bi bi-send me-1"></i>Send</button>
+  <div class="row g-3">
+    <!-- Saved chats sidebar -->
+    <div class="col-lg-3 col-md-4">
+      <div class="card h-100">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+          <span class="fw-semibold small"><i class="bi bi-chat-left-text me-1"></i>Your Chats</span>
+          <button class="btn btn-xs btn-outline-secondary py-0 px-1" onclick="faLoadSessions()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div id="fa-sessions" style="max-height:62vh;overflow-y:auto"></div>
       </div>
-      <div class="form-text small mt-1">
-        <i class="bi bi-info-circle me-1"></i>
-        Tools available to the assistant: <code>query_database</code> · <code>list_tables</code> · <code>describe_table</code> · <code>read_server_log</code> · <code>export_to_excel</code>. Conversation history is sent each turn so follow-up questions work.
+    </div>
+
+    <!-- Chat + input -->
+    <div class="col-lg-9 col-md-8">
+      <div class="card mb-3">
+        <div class="card-body" id="fa-chat" style="min-height:260px;max-height:54vh;overflow-y:auto"></div>
+      </div>
+      <div class="card">
+        <div class="card-body p-2">
+          <div class="d-flex gap-2 align-items-end">
+            <textarea class="form-control" id="fa-input" rows="2" placeholder="e.g. Which 10 materials had the biggest stock drop last month? Export to Excel." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();faSend();}"></textarea>
+            <button class="btn btn-success" id="fa-send-btn" onclick="faSend()"><i class="bi bi-send me-1"></i>Send</button>
+          </div>
+          <div class="form-text small mt-1">
+            <i class="bi bi-info-circle me-1"></i>
+            Chats are saved — pick one on the left to revisit or continue it. Tools: <code>query_database</code> · <code>export_to_excel</code> and more.
+          </div>
+        </div>
       </div>
     </div>
   </div>

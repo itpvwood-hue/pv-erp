@@ -21,33 +21,108 @@
 // the niche BOM Intelligence + Capacity Planning chat boxes — same idea,
 // real tools, single canonical page.
 let _faHistory = [];   // [{role: 'user'|'assistant', content: string}]
-// Conversation session id — persisted for the life of this browser session so
-// the assistant's memory (fa_conversations) ties turns together server-side.
-let _faSessionId = (function(){
-  let s = sessionStorage.getItem('fa_session_id');
-  if(!s){
-    s = (crypto.randomUUID ? crypto.randomUUID() : 'fa-'+Date.now()+'-'+Math.random().toString(36).slice(2));
-    sessionStorage.setItem('fa_session_id', s);
-  }
-  return s;
-})();
+// Current conversation session id — persisted in localStorage so the chat
+// survives reloads + navigation; the backend keys saved turns (fa_conversations)
+// by it. The sidebar lists every saved session so past chats can be reopened.
+const _faNewId = () => (crypto.randomUUID ? crypto.randomUUID() : 'fa-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+let _faSessionId = localStorage.getItem('fa_session_id') || _faNewId();
+localStorage.setItem('fa_session_id', _faSessionId);
+let _faSessions = [];
+let _faRestored = false;
 
-function faInit(){
-  if(_faHistory.length === 0){
-    document.getElementById('fa-chat').innerHTML =
-      '<div class="text-muted small fst-italic">Ask anything about production, inventory, costs, or forecasts. The assistant can run SELECT queries, read server logs, and produce Excel reports.</div>';
-  }
-  faLoadKnowledge();   // refresh the Knowledge Base panel when the page opens
+function _faShowWelcome(){
+  document.getElementById('fa-chat').innerHTML =
+    '<div class="text-muted small fst-italic">Ask anything about production, inventory, costs, or forecasts. The assistant can run SELECT queries, read server logs, and produce Excel reports. Your chats are saved on the left — reopen one any time to continue it.</div>';
 }
 
-function faReset(){
+async function faInit(){
+  faLoadKnowledge();          // refresh the Knowledge Base panel
+  await faLoadSessions();     // populate the saved-chats sidebar
+  // Restore the active session's transcript once (survives reload/navigation).
+  if(!_faRestored){
+    _faRestored = true;
+    if(_faSessions.some(s => s.session_id === _faSessionId)){
+      await faOpenSession(_faSessionId);
+    } else if(_faHistory.length === 0){
+      _faShowWelcome();
+    }
+  }
+}
+
+function faNewChat(){
   _faHistory = [];
-  // New conversation = new session id (so memory starts a fresh thread).
-  _faSessionId = (crypto.randomUUID ? crypto.randomUUID() : 'fa-'+Date.now()+'-'+Math.random().toString(36).slice(2));
-  sessionStorage.setItem('fa_session_id', _faSessionId);
+  _faSessionId = _faNewId();
+  localStorage.setItem('fa_session_id', _faSessionId);
   document.getElementById('fa-chat').innerHTML = '';
   document.getElementById('fa-exports-tray').innerHTML = '';
-  faInit();
+  _faShowWelcome();
+  faRenderSessions();   // de-highlight the previous session
+  document.getElementById('fa-input')?.focus();
+}
+function faReset(){ faNewChat(); }   // backward-compat alias
+
+async function faLoadSessions(){
+  try { _faSessions = await api('/api/factory-assistant/sessions') || []; }
+  catch { _faSessions = []; }
+  faRenderSessions();
+}
+function _faRelTime(s){
+  if(!s) return '';
+  const d = new Date(String(s).replace(' ','T') + 'Z');
+  const diff = (Date.now() - d.getTime())/1000;
+  if(isNaN(diff)) return '';
+  if(diff < 60)    return 'just now';
+  if(diff < 3600)  return Math.floor(diff/60)+'m ago';
+  if(diff < 86400) return Math.floor(diff/3600)+'h ago';
+  return Math.floor(diff/86400)+'d ago';
+}
+function faRenderSessions(){
+  const el = document.getElementById('fa-sessions'); if(!el) return;
+  if(!_faSessions.length){ el.innerHTML = '<div class="text-muted small p-3">No saved chats yet. Ask a question to start one.</div>'; return; }
+  el.innerHTML = _faSessions.map(s=>{
+    const active = s.session_id === _faSessionId;
+    const title = (s.title || 'New chat').replace(/\s+/g,' ').trim();
+    const short = title.length > 46 ? title.slice(0,46)+'…' : title;
+    return `<div class="px-2 py-2 border-bottom ${active?'bg-success-subtle':''}" style="cursor:pointer"
+              onclick="faOpenSession('${s.session_id}')">
+        <div class="d-flex justify-content-between align-items-start">
+          <div class="small fw-semibold" style="overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(title)}">${escapeHtml(short)}</div>
+          <button class="btn btn-sm btn-link text-danger p-0 ms-1" style="line-height:1" title="Delete chat"
+                  onclick="event.stopPropagation();faDeleteSession('${s.session_id}')"><i class="bi bi-trash"></i></button>
+        </div>
+        <div class="text-muted" style="font-size:.68rem">${_faRelTime(s.last_at)} · ${s.msg_count} msg${s.msg_count==1?'':'s'}</div>
+      </div>`;
+  }).join('');
+}
+function _faRenderBubble(role, content){
+  const el = document.getElementById('fa-chat');
+  const cls  = role === 'user' ? 'ai-msg user' : 'ai-msg ai';
+  const icon = role === 'user' ? '<i class="bi bi-person-circle me-2 text-success"></i>'
+                               : '<i class="bi bi-cpu me-2 text-success"></i>';
+  const div = document.createElement('div'); div.className = cls;
+  div.innerHTML = icon + (role === 'user' ? escapeHtml(content) : marked.parse(content||''));
+  el.appendChild(div); el.scrollTop = el.scrollHeight;
+}
+async function faOpenSession(sid){
+  if(!sid) return;
+  let msgs = [];
+  try { msgs = await api('/api/factory-assistant/history/'+encodeURIComponent(sid)) || []; }
+  catch(e){ toast('Could not load chat: '+e.message,'danger'); return; }
+  _faSessionId = sid;
+  localStorage.setItem('fa_session_id', sid);
+  _faHistory = msgs.map(m => ({role: m.role, content: m.content}));
+  document.getElementById('fa-chat').innerHTML = '';
+  document.getElementById('fa-exports-tray').innerHTML = '';
+  if(!msgs.length) _faShowWelcome();
+  else msgs.forEach(m => _faRenderBubble(m.role, m.content));
+  faRenderSessions();
+}
+async function faDeleteSession(sid){
+  if(!confirm('Delete this chat? This cannot be undone.')) return;
+  try { await api('/api/factory-assistant/sessions/'+encodeURIComponent(sid),'DELETE'); }
+  catch(e){ toast('Delete failed: '+e.message,'danger'); return; }
+  if(sid === _faSessionId) faNewChat();
+  faLoadSessions();
 }
 
 function faSamplePrompt(text){
@@ -93,9 +168,14 @@ async function faSend(){
     loadingDiv.remove();
     const replyDiv = _faAppendMessage('assistant', r.reply || '(no reply)', true);
     _faHistory.push({role: 'assistant', content: r.reply || ''});
+    // Keep the session id the server settled on (it mints one for a brand-new
+    // chat if the client somehow sent none).
+    if(r.session_id){ _faSessionId = r.session_id; localStorage.setItem('fa_session_id', _faSessionId); }
     // The assistant may have recorded a new insight via save_knowledge —
-    // refresh the panel so the manager sees it.
+    // refresh the panel so the manager sees it. Also refresh the saved-chats
+    // sidebar so a new conversation shows up (and timestamps update).
     faLoadKnowledge();
+    faLoadSessions();
     if(r.tool_calls){
       const meta = document.createElement('div');
       meta.className = 'small text-muted mt-1';
