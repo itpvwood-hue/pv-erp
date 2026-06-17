@@ -225,3 +225,31 @@ async function ncgFlagSubmit(){
   } catch(e){ toast('Flag failed: ' + e.message, 'danger'); }
   finally { btn.disabled = false; }
 }
+
+// ════════════════════════════════════════════════════════════
+// Undo my last action — floating button (#undo-fab). Per-user,
+// single-level. Confirms with the action summary before reversing,
+// then refreshes the current page.
+// ════════════════════════════════════════════════════════════
+function undoFabShow(){
+  const b = document.getElementById('undo-fab');
+  if(b) b.style.display = '';
+}
+function _currentPage(){
+  const a = document.querySelector('.nav-link.active[data-page]');
+  return a ? a.dataset.page : null;
+}
+async function undoLast(){
+  let preview;
+  try { preview = await api('/api/undo/last'); }
+  catch(e){ toast('Undo unavailable: ' + e.message, 'danger'); return; }
+  const act = preview && preview.action;
+  if(!act){ toast('Nothing to undo', 'info'); return; }
+  if(!confirm(`Undo your last action?\n\n${act.summary || act.action_type}\n(${(act.created_at||'').slice(0,16).replace('T',' ')})`)) return;
+  try {
+    const r = await api('/api/undo/last', 'POST', {});
+    toast('Undone: ' + (r.summary || r.action_type), 'success');
+    const pg = _currentPage();
+    if(pg && typeof navigateTo === 'function') navigateTo(pg);   // refresh current view
+  } catch(e){ toast('Undo failed: ' + e.message, 'danger'); }
+}

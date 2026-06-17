@@ -615,6 +615,24 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ncg_disp_item ON ncg_dispositions(ncg_item_id)")
 
+    # ── Action log: records reversible user actions so a per-user "Undo my last
+    #    action" button can run the matching reversal. undo_spec is a small JSON
+    #    reversal plan (updates / increments / deletes over whitelisted tables).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS action_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT,
+            username    TEXT,
+            action_type TEXT NOT NULL,
+            summary     TEXT DEFAULT '',
+            undo_spec   TEXT NOT NULL DEFAULT '{}',
+            created_at  TEXT DEFAULT (datetime('now')),
+            undone_at   TEXT,
+            undone_by   TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_action_log_user ON action_log(user_id, undone_at, id)")
+
     # ── Forklifts & oil-request log (registered by station leaders) ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS forklifts (
@@ -6585,6 +6603,90 @@ def get_qc_summary() -> dict:
             'value_in_ncg': round(float(value_in_ncg or 0), 2),
             'value_recovered': round(float(value_recovered or 0), 2),
         }
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════
+# ACTION LOG + UNDO — per-user "undo my last action"
+# Each instrumented action records an undo_spec (a tiny reversal plan over
+# whitelisted tables). undo_last_action runs it for the caller's most recent
+# un-undone action. Single-level, per-user.
+# ════════════════════════════════════════════════════════════════
+_UNDO_TABLES = {
+    'laminating_log', 'cold_press_log', 'repair_log', 'sanding_log',
+    'hot_press_log', 'grading_log', 'glue_mix_log', 'glue_mix_batches',
+    'packing_log', 'production_logs', 'prod_batch', 'orders',
+}
+
+def record_action(*, user, action_type: str, summary: str = '', undo_spec: dict = None):
+    """Record a reversible action for the given user. No user => not undoable."""
+    if not user or not (user.get('user_id') or user.get('username')):
+        return None
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO action_log (user_id, username, action_type, summary, undo_spec) "
+            "VALUES (?,?,?,?,?)",
+            (user.get('user_id') or user.get('username') or '',
+             user.get('username') or '', action_type, summary,
+             json.dumps(undo_spec or {})))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def get_last_action(user_id: str, within_hours: int = 24) -> dict:
+    """The user's most recent un-undone action within the window (for preview)."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, action_type, summary, created_at FROM action_log "
+            "WHERE user_id=? AND undone_at IS NULL AND created_at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id, f'-{int(within_hours)} hours')).fetchone()
+        return row_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+def undo_last_action(user_id: str, undone_by: str = '', within_hours: int = 24) -> dict:
+    """Reverse the caller's most recent un-undone action."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM action_log WHERE user_id=? AND undone_at IS NULL "
+            "AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 1",
+            (user_id, f'-{int(within_hours)} hours')).fetchone()
+        if not row:
+            raise ValueError("Nothing to undo")
+        row = dict(row)
+        spec = json.loads(row['undo_spec'] or '{}')
+
+        def _tbl(t):
+            if t not in _UNDO_TABLES:
+                raise ValueError(f"Action '{row['action_type']}' is not reversible")
+            return t
+
+        # 1. column/status reverts, 2. numeric reversals, 3. row deletes
+        for u in spec.get('updates', []):
+            _tbl(u['table'])
+            sets = ', '.join(f"{k}=?" for k in u['set'])
+            wh = ' AND '.join(f"{k}=?" for k in u['where'])
+            conn.execute(f"UPDATE {u['table']} SET {sets} WHERE {wh}",
+                         (*u['set'].values(), *u['where'].values()))
+        for inc in spec.get('increments', []):
+            _tbl(inc['table'])
+            wh = ' AND '.join(f"{k}=?" for k in inc['where'])
+            conn.execute(f"UPDATE {inc['table']} SET {inc['col']}={inc['col']}+? WHERE {wh}",
+                         (inc['delta'], *inc['where'].values()))
+        for d in spec.get('deletes', []):
+            _tbl(d['table'])
+            conn.execute(f"DELETE FROM {d['table']} WHERE {d['col']}=?", (d['val'],))
+
+        conn.execute("UPDATE action_log SET undone_at=datetime('now'), undone_by=? WHERE id=?",
+                     (undone_by, row['id']))
+        conn.commit()
+        return {'ok': True, 'summary': row['summary'], 'action_type': row['action_type']}
     finally:
         conn.close()
 

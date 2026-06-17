@@ -260,6 +260,14 @@
 <!-- ═══════════ MAIN ═══════════ -->
 <div id="main">
 
+<!-- Floating "Undo my last action" button (shown after login) -->
+<button id="undo-fab" type="button" onclick="undoLast()" title="Undo my last logged action"
+  style="display:none;position:fixed;bottom:20px;right:20px;z-index:1040;border:none;border-radius:24px;
+         padding:9px 16px;background:#f59e0b;color:#1e293b;font-weight:600;font-size:.85rem;
+         box-shadow:0 3px 10px rgba(0,0,0,.25);cursor:pointer">
+  <i class="bi bi-arrow-counterclockwise me-1"></i><span data-i18n="Undo">Undo</span>
+</button>
+
 <!-- ── DASHBOARD ── -->
 <div class="page active" id="page-dashboard">
   <div class="d-flex justify-content-between align-items-center mb-4">

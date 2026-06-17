@@ -202,6 +202,8 @@ async function applySession(user, depts){
   // Update user pill
   document.getElementById('nav-user-name').textContent = user.display_name;
   document.getElementById('nav-user-role').textContent  = ROLE_LABEL[user.role]||user.role;
+  // Reveal the floating "Undo my last action" button now that we're signed in.
+  try { if(typeof undoFabShow === 'function') undoFabShow(); } catch(e){}
   // Apply role-based nav visibility. In warehouse-portal mode the role grant
   // is further intersected with WAREHOUSE_PORTAL_PAGES so the portal stays
   // focused even when a Managerial user signs in to inspect it.

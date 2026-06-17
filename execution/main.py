@@ -125,6 +125,7 @@ from database import (
     create_scrap_entry, list_scrap_entries, set_scrap_disposition,
     flag_material_ncg, list_ncg_items, review_ncg_item, add_ncg_disposition,
     get_qc_summary, NCG_REASONS,
+    record_action, get_last_action, undo_last_action,
     return_material_to_fc,
     # Material lots (FIFO) & documents & traceability
     create_material_lot, list_material_lots, fifo_consume_lots,
@@ -1796,42 +1797,85 @@ def batch_logs(batch_id: str): return get_batch_station_logs(batch_id)
 def advance_batch(batch_id: str, body: BatchAdvanceIn):
     advance_prod_batch_status(batch_id, body.next_status); return {"ok": True}
 
-# Station log endpoints
+# Station log endpoints.
+# These predate require_auth (defined further down), so they resolve the user
+# from the token inline to attribute the action for per-user Undo.
+def _act(token, *, action_type, summary, undo_spec):
+    try:
+        u = get_session_user(token) if token else None
+        record_action(user=u, action_type=action_type, summary=summary, undo_spec=undo_spec)
+    except Exception:
+        pass
+
+def _del(table, col, val):
+    return {"table": table, "col": col, "val": val}
+
+def _status_revert(batch_id, prev_status, cur_status):
+    # forward set status prev->cur; undo restores prev where it's still cur.
+    return {"table": "prod_batch", "set": {"status": prev_status},
+            "where": {"batch_id": batch_id, "status": cur_status}}
+
 @app.post("/api/production/glue-mix", status_code=201)
-def post_glue_mix(body: GlueMixIn):
-    mid = log_glue_mix(body.dict()); return {"mix_id": mid}
+def post_glue_mix(body: GlueMixIn, x_auth_token: str = Header(None)):
+    d = body.dict(); mid = log_glue_mix(d)
+    _act(x_auth_token, action_type='glue-mix', summary=f"Glue mix · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('glue_mix_batches', 'mix_id', mid), _del('glue_mix_log', 'mix_id', mid)]})
+    return {"mix_id": mid}
 
 @app.post("/api/production/laminating", status_code=201)
-def post_laminating(body: LaminatingIn):
-    lid = log_laminating(body.dict()); return {"lam_id": lid}
+def post_laminating(body: LaminatingIn, x_auth_token: str = Header(None)):
+    d = body.dict(); lid = log_laminating(d)
+    _act(x_auth_token, action_type='laminating', summary=f"Laminating log · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('laminating_log', 'lam_id', lid)]})
+    return {"lam_id": lid}
 
 @app.post("/api/production/laminating/advance")
 def advance_lam(batch_id: str):
     advance_laminating(batch_id); return {"ok": True}
 
 @app.post("/api/production/cold-press", status_code=201)
-def post_cold_press(body: ColdPressIn):
-    cid = log_cold_press(body.dict()); return {"cp_id": cid}
+def post_cold_press(body: ColdPressIn, x_auth_token: str = Header(None)):
+    d = body.dict(); cid = log_cold_press(d)
+    _act(x_auth_token, action_type='cold-press', summary=f"Cold press · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('cold_press_log', 'cp_id', cid)],
+                    "updates": [_status_revert(d.get('batch_id'), 'COLD_PRESS', 'REPAIR')]})
+    return {"cp_id": cid}
 
 @app.post("/api/production/repair", status_code=201)
-def post_repair(body: RepairIn):
-    rid = log_repair(body.dict()); return {"repair_id": rid}
+def post_repair(body: RepairIn, x_auth_token: str = Header(None)):
+    d = body.dict(); rid = log_repair(d)
+    _act(x_auth_token, action_type='repair', summary=f"Repair log · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('repair_log', 'repair_id', rid)]})
+    return {"repair_id": rid}
 
 @app.post("/api/production/repair/advance")
 def advance_rep(batch_id: str):
     advance_repair(batch_id); return {"ok": True}
 
 @app.post("/api/production/sanding", status_code=201)
-def post_sanding(body: SandingIn):
-    sid = log_sanding(body.dict()); return {"sand_id": sid}
+def post_sanding(body: SandingIn, x_auth_token: str = Header(None)):
+    d = body.dict(); sid = log_sanding(d)
+    _act(x_auth_token, action_type='sanding', summary=f"Sanding log · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('sanding_log', 'sand_id', sid)],
+                    "updates": [_status_revert(d.get('batch_id'), 'SANDING', 'HOT_PRESS')]})
+    return {"sand_id": sid}
 
 @app.post("/api/production/hot-press", status_code=201)
-def post_hot_press(body: HotPressIn):
-    hid = log_hot_press(body.dict()); return {"hp_id": hid}
+def post_hot_press(body: HotPressIn, x_auth_token: str = Header(None)):
+    d = body.dict(); hid = log_hot_press(d)
+    _act(x_auth_token, action_type='hot-press', summary=f"Hot press · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('hot_press_log', 'hp_id', hid)],
+                    "updates": [_status_revert(d.get('batch_id'), 'HOT_PRESS', 'GRADING')]})
+    return {"hp_id": hid}
 
 @app.post("/api/production/grading", status_code=201)
-def post_grading(body: GradingIn):
-    result = log_grading(body.dict()); return result
+def post_grading(body: GradingIn, x_auth_token: str = Header(None)):
+    d = body.dict(); result = log_grading(d)
+    gid = result.get('grade_id') if isinstance(result, dict) else result
+    _act(x_auth_token, action_type='grading', summary=f"Grading log · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('grading_log', 'grade_id', gid)],
+                    "updates": [_status_revert(d.get('batch_id'), 'GRADING', 'COMPLETE')]})
+    return result
 
 @app.post("/api/production/grading/{grade_id}/ncg-issues", status_code=201)
 def post_ncg_issues(grade_id: str, body: dict):
@@ -1849,8 +1893,11 @@ def prod_batch_full_history(batch_id: str):
     return {"request_id": rid, "ok": True}
 
 @app.post("/api/production/packing", status_code=201)
-def post_packing(body: PackingIn):
-    pid = log_packing(body.dict()); return {"pack_id": pid}
+def post_packing(body: PackingIn, x_auth_token: str = Header(None)):
+    d = body.dict(); pid = log_packing(d)
+    _act(x_auth_token, action_type='packing', summary=f"Packing log · batch {d.get('batch_id')}",
+         undo_spec={"deletes": [_del('packing_log', 'pack_id', pid)]})
+    return {"pack_id": pid}
 
 # Reporting endpoints
 @app.get("/api/reports/daily")
@@ -3373,6 +3420,23 @@ def disposition_ncg_ep(item_id: int, body: NcgDispositionIn,
 @app.get("/api/qc/summary")
 def qc_summary_ep(user: dict = Depends(require_auth)):
     return get_qc_summary()
+
+
+# ════════════════════════════════════════════════════════════════
+# UNDO — reverse my last action
+# ════════════════════════════════════════════════════════════════
+@app.get("/api/undo/last")
+def undo_preview_ep(user: dict = Depends(require_auth)):
+    """What the Undo button would reverse for this user (or null)."""
+    return {"action": get_last_action(user.get('user_id') or user.get('username') or '')}
+
+@app.post("/api/undo/last")
+def undo_last_ep(user: dict = Depends(require_auth)):
+    try:
+        return undo_last_action(user.get('user_id') or user.get('username') or '',
+                                undone_by=user.get('username') or '')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ════════════════════════════════════════════════════════════════
