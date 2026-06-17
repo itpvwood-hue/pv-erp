@@ -1928,6 +1928,7 @@ class Role:
     PRODUCTION_PLANNING = 'PRODUCTION_PLANNING'
     DEPARTMENT_LEADER   = 'DEPARTMENT_LEADER'
     WAREHOUSE           = 'WAREHOUSE'
+    FINANCE             = 'FINANCE'   # Finance / Accounting + Purchasing portal (finance.html)
     ALL = (MANAGERIAL, PRODUCTION_PLANNING, DEPARTMENT_LEADER, WAREHOUSE)
 
 def require_role(*roles):

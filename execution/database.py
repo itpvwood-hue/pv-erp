@@ -704,7 +704,7 @@ def init_db():
             password_hash TEXT NOT NULL,
             role         TEXT NOT NULL CHECK(role IN (
                             'MANAGERIAL','PRODUCTION_PLANNING',
-                            'DEPARTMENT_LEADER','WAREHOUSE')),
+                            'DEPARTMENT_LEADER','WAREHOUSE','FINANCE')),
             display_name TEXT NOT NULL,
             active       INTEGER DEFAULT 1,
             created_at   TEXT DEFAULT CURRENT_TIMESTAMP
@@ -1354,6 +1354,39 @@ def init_db():
                     "INSERT OR IGNORE INTO glue_mix_batches (mix_id, batch_number) VALUES (?,?)",
                     (r['mix_id'], bn))
         conn.commit()
+    except Exception:
+        pass
+
+    # ── Allow the FINANCE role on EXISTING databases. The users.role CHECK
+    #    constraint originally listed only the 4 production roles, so creating
+    #    a Finance-portal user failed with a CHECK violation (500). SQLite can't
+    #    ALTER a CHECK, so rebuild the table once if FINANCE isn't permitted. ──
+    try:
+        urow = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+        if urow and urow[0] and 'FINANCE' not in urow[0]:
+            conn.commit()  # flush any pending work before the rebuild
+            conn.executescript("""
+                PRAGMA foreign_keys=OFF;
+                BEGIN;
+                CREATE TABLE users_new (
+                    user_id       TEXT PRIMARY KEY,
+                    username      TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role          TEXT NOT NULL CHECK(role IN (
+                                    'MANAGERIAL','PRODUCTION_PLANNING',
+                                    'DEPARTMENT_LEADER','WAREHOUSE','FINANCE')),
+                    display_name  TEXT NOT NULL,
+                    active        INTEGER DEFAULT 1,
+                    created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO users_new (user_id,username,password_hash,role,display_name,active,created_at)
+                    SELECT user_id,username,password_hash,role,display_name,active,created_at FROM users;
+                DROP TABLE users;
+                ALTER TABLE users_new RENAME TO users;
+                COMMIT;
+                PRAGMA foreign_keys=ON;
+            """)
     except Exception:
         pass
 
@@ -5164,11 +5197,11 @@ def get_accounting_summary(from_date=None, to_date=None):
     # Total production output (pcs that passed grading)
     total_good = conn.execute("""
         SELECT COALESCE(SUM(pcs_grade_a + pcs_grade_b), 0)
-        FROM grading_log WHERE DATE(created_at) BETWEEN ? AND ?
+        FROM grading_log WHERE DATE(graded_at) BETWEEN ? AND ?
     """, [fd, td]).fetchone()[0]
     total_ncg = conn.execute("""
         SELECT COALESCE(SUM(pcs_ncg + pcs_reject), 0)
-        FROM grading_log WHERE DATE(created_at) BETWEEN ? AND ?
+        FROM grading_log WHERE DATE(graded_at) BETWEEN ? AND ?
     """, [fd, td]).fetchone()[0]
 
     # By-dept cost breakdown (from dept_cost_ledger if present)
