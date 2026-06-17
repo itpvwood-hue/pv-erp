@@ -1155,6 +1155,11 @@ def init_db():
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_total_cost   REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_cost_per_kg  REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_components   TEXT",  # JSON: [{material_id, name, kg, price, cost}]
+        # po_lines gained packing-SKU + pcs/pallet on dev but the columns were
+        # never added to fresh DBs — the PO-lines query and PO-line create/update
+        # reference them, so both 500'd on a freshly-built database.
+        "ALTER TABLE po_lines ADD COLUMN packing_sku_id INTEGER",
+        "ALTER TABLE po_lines ADD COLUMN pcs_per_pallet INTEGER",
         # Purchasing enters the agreed unit price when issuing the supplier PO
         # (Finance/Accounting portal). Received lots inherit it so the Warehouse
         # never re-keys price — single source of truth, no double entry.
@@ -1464,6 +1469,65 @@ def init_db():
             conn.execute("INSERT INTO bom_groups (name, calc_method, sort_order) "
                          "VALUES ('Core Materials','per_pallet',0)")
             conn.commit()
+    except Exception:
+        pass
+
+    # ── Reporting views. Created on dev via a one-off migration but never added
+    #    to init_db, so the Reports pages 500'd on freshly-built databases.
+    #    Idempotent (CREATE VIEW IF NOT EXISTS). ──
+    try:
+        conn.executescript("""
+        CREATE VIEW IF NOT EXISTS v_lam_efficacy AS
+        SELECT l.table_id, pb.line_id, pb.sku_code, pb.production_date, pb.shift,
+               l.emp_code_1, l.emp_code_2, l.pcs_target, l.pcs_actual,
+               ROUND(l.pcs_actual*100.0/NULLIF(l.pcs_target,0),1) AS efficacy_pct
+        FROM laminating_log l JOIN prod_batch pb ON pb.batch_id = l.batch_id;
+
+        CREATE VIEW IF NOT EXISTS v_sanding_defect_rate AS
+        SELECT COALESCE(sl.operator_id, sl.operator_name) AS operator, pb.line_id,
+               COUNT(DISTINCT sl.sand_id) AS runs, SUM(sl.pcs_in) AS total_pcs,
+               SUM(sl.defect_count) AS total_defects,
+               ROUND(SUM(sl.defect_count)*100.0/NULLIF(SUM(sl.pcs_in),0),2) AS defect_rate_pct
+        FROM sanding_log sl JOIN prod_batch pb ON pb.batch_id = sl.batch_id
+        GROUP BY COALESCE(sl.operator_id, sl.operator_name), pb.line_id;
+
+        CREATE VIEW IF NOT EXISTS v_daily_production AS
+        SELECT pb.production_date, pb.line_id, pb.sku_code,
+               COUNT(DISTINCT pb.batch_id) AS batches, SUM(pb.qty_planned) AS qty_planned,
+               SUM(g.pcs_grade_a + g.pcs_grade_b) AS qty_good, SUM(g.pcs_ncg) AS qty_ncg,
+               SUM(g.pcs_reject) AS qty_reject,
+               ROUND(SUM(g.pcs_ncg)*100.0/
+                   NULLIF(SUM(g.pcs_grade_a+g.pcs_grade_b+g.pcs_ncg+g.pcs_reject),0),2) AS ncg_rate_pct
+        FROM prod_batch pb LEFT JOIN grading_log g ON g.batch_id = pb.batch_id
+        GROUP BY pb.production_date, pb.line_id, pb.sku_code;
+
+        CREATE VIEW IF NOT EXISTS v_ncg_by_reason AS
+        SELECT g.ncg_reason_code, nr.description, pb.line_id,
+               COUNT(DISTINCT g.grade_id) AS ncg_batches, SUM(g.pcs_ncg) AS total_ncg_pcs
+        FROM grading_log g JOIN prod_batch pb ON pb.batch_id = g.batch_id
+        JOIN ncg_reason nr ON nr.reason_code = g.ncg_reason_code
+        WHERE g.pcs_ncg > 0 GROUP BY g.ncg_reason_code, pb.line_id;
+
+        CREATE VIEW IF NOT EXISTS v_ncg_backtrack AS
+        SELECT g.grade_id, g.batch_id, pb.sku_code, pb.line_id, pb.production_date, pb.shift,
+               g.pcs_ncg, g.pcs_reject, g.ncg_reason_code, g.graded_at,
+               COALESCE(g.grader_id, g.grader_name) AS grader,
+               GROUP_CONCAT(DISTINCT l.table_id) AS lam_tables,
+               GROUP_CONCAT(DISTINCT l.emp_code_1 || '+' || l.emp_code_2) AS lam_pairs,
+               ROUND(SUM(l.pcs_actual)*1.0/NULLIF(SUM(l.pcs_target),0)*100,1) AS lam_efficacy_pct,
+               GROUP_CONCAT(DISTINCT lm.recipe_code) AS glue_recipes,
+               GROUP_CONCAT(DISTINCT r.emp_code_1 || '+' || r.emp_code_2 || '(' || r.repair_type || ')') AS repair_pairs,
+               sl.operator_name AS sanding_operator, sl.defect_count AS sanding_defects, sl.grit_setting,
+               hp.operator_name AS hotpress_operator, hp.temp_c, hp.pressure_bar AS hp_pressure, hp.press_time_min
+        FROM grading_log g JOIN prod_batch pb ON pb.batch_id = g.batch_id
+        LEFT JOIN laminating_log l ON l.batch_id = g.batch_id
+        LEFT JOIN glue_mix_log lm ON lm.batch_id = g.batch_id
+        LEFT JOIN repair_log r ON r.batch_id = g.batch_id
+        LEFT JOIN sanding_log sl ON sl.batch_id = g.batch_id
+        LEFT JOIN hot_press_log hp ON hp.batch_id = g.batch_id
+        WHERE g.pcs_ncg > 0 OR g.pcs_reject > 0 GROUP BY g.grade_id;
+        """)
+        conn.commit()
     except Exception:
         pass
 
@@ -6391,8 +6455,10 @@ def create_scrap_entry(*, batch_id: int, dept: str, pcs_scrapped: int,
             VALUES (?,?,?,?,?,?,?,?)""",
             (batch_id, bn, (dept or '').lower(), production_line, int(pcs_scrapped),
              reason_code, reason_detail, created_by))
+        sid = cur.lastrowid
         conn.commit()
-        return {'ok': True, 'id': cur.lastrowid, 'batch_number': bn}
+        return {'ok': True, 'id': sid, 'batch_number': bn,
+                'undo': {"deletes": [{"table": "scrap_log", "col": "id", "val": sid}]}}
     finally:
         conn.close()
 
@@ -6480,9 +6546,18 @@ def flag_material_ncg(*, material_id: int, qty: float, source: str,
             VALUES (?,?,?,?,?,?,?,?,?)""",
             (material_id, qty, qty, m.get('unit') or '', float(m['uc']), src,
              reason_code, reason_detail, flagged_by))
+        item_id = cur.lastrowid
         conn.commit()
-        return {'ok': True, 'id': cur.lastrowid, 'material_id': material_id,
-                'qty': qty, 'source': src}
+        # Reversal: return the qty to the source bucket + delete the NCG item.
+        # If QA/QC has already recorded a disposition against it, the FK from
+        # ncg_dispositions blocks the delete and the undo cleanly aborts.
+        undo = {
+            "increments": [{"table": "materials", "col": col, "delta": qty,
+                            "where": {"id": material_id}}],
+            "deletes": [{"table": "ncg_items", "col": "id", "val": item_id}],
+        }
+        return {'ok': True, 'id': item_id, 'material_id': material_id,
+                'qty': qty, 'source': src, 'undo': undo}
     finally:
         conn.close()
 
@@ -6579,6 +6654,9 @@ def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
         if not it:
             raise ValueError("NCG item not found")
         it = dict(it)
+        orig_target = target_material_id     # before a resize may create one
+        prior_remaining = float(it['remaining_qty'])
+        prior_status = it['status']
         if qty > float(it['remaining_qty']) + 1e-9:
             raise ValueError(f"Only {it['remaining_qty']:g} remaining to disposition")
 
@@ -6615,21 +6693,42 @@ def add_ncg_disposition(*, ncg_item_id: int, disposition: str, qty: float,
                          (add_qty, target_material_id))
             value_recovered = incoming_value
 
-        conn.execute("""INSERT INTO ncg_dispositions
+        disp_row = conn.execute("""INSERT INTO ncg_dispositions
             (ncg_item_id, disposition, qty, target_material_id, yield_qty,
              value_recovered, notes, created_by)
             VALUES (?,?,?,?,?,?,?,?)""",
             (ncg_item_id, disp, qty, target_material_id, applied_yield,
              value_recovered, notes, created_by))
+        disp_id = disp_row.lastrowid
 
         new_remaining = round(float(it['remaining_qty']) - qty, 6)
         new_status = 'DISPOSITIONED' if new_remaining <= 1e-6 else (it['status'] if it['status'] != 'PENDING_QC' else 'IN_REVIEW')
         conn.execute("UPDATE ncg_items SET remaining_qty=?, status=? WHERE id=?",
                      (max(0.0, new_remaining), new_status, ncg_item_id))
+
+        # Reversal plan: restore the item's remaining/status, delete the
+        # disposition, and for regrade/resize pull the qty back out of the
+        # target and restore its blended unit_cost (deleting the target SKU if
+        # this resize created it).
+        undo = {
+            "updates": [{"table": "ncg_items",
+                         "set": {"remaining_qty": prior_remaining, "status": prior_status},
+                         "where": {"id": ncg_item_id}}],
+            "increments": [],
+            "deletes": [{"table": "ncg_dispositions", "col": "id", "val": disp_id}],
+        }
+        if disp in ('REGRADE', 'RESIZE'):
+            undo["increments"].append({"table": "materials", "col": tcol,
+                                       "delta": -float(add_qty), "where": {"id": target_material_id}})
+            undo["updates"].append({"table": "materials", "set": {"unit_cost": float(tgt['uc'])},
+                                    "where": {"id": target_material_id}})
+            if new_target and not orig_target:
+                undo["deletes"].append({"table": "materials", "col": "id", "val": target_material_id})
+
         conn.commit()
         return {'ok': True, 'ncg_item_id': ncg_item_id, 'disposition': disp,
                 'qty': qty, 'remaining_qty': max(0.0, new_remaining),
-                'status': new_status, 'value_recovered': value_recovered}
+                'status': new_status, 'value_recovered': value_recovered, 'undo': undo}
     finally:
         conn.close()
 
@@ -6671,6 +6770,8 @@ _UNDO_TABLES = {
     'materials', 'material_lots', 'pr_shipments', 'purchase_requests',
     'wh_stock_transfers', 'fg_location_moves', 'batches',
     'fc_transfer_requests', 'consumable_request', 'dept_cost_ledger',
+    # NCG / scrap / regrade (Undo Phase 3)
+    'ncg_items', 'ncg_dispositions', 'scrap_log', 'veneer_regrade_log',
 }
 
 def record_action(*, user, action_type: str, summary: str = '', undo_spec: dict = None):

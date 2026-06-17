@@ -2078,7 +2078,11 @@ def delete_glue_recipe_ep(rid: int):
     (the bom_lines.glue_recipe_id FK becomes a dangling reference)."""
     conn = get_db()
     try:
-        # NULL out any references first to avoid FK errors
+        # Glue-only BOM lines (no material fallback) would violate the
+        # "material_id IS NOT NULL OR glue_recipe_id IS NOT NULL" CHECK if we
+        # nulled the recipe — delete those lines outright. Lines that also carry
+        # a material keep the material and just lose the recipe link.
+        conn.execute("DELETE FROM bom_lines WHERE glue_recipe_id=? AND material_id IS NULL", (rid,))
         conn.execute("UPDATE bom_lines SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
         conn.execute("UPDATE bom       SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
         conn.execute("DELETE FROM glue_recipes WHERE id=?", (rid,))
@@ -3355,11 +3359,13 @@ def list_scrap_reasons_ep(user: dict = Depends(require_auth)):
 @app.post("/api/scrap")
 def create_scrap_ep(body: ScrapIn, user: dict = Depends(require_auth)):
     try:
-        return create_scrap_entry(
+        r = create_scrap_entry(
             batch_id=body.batch_id, dept=body.dept, pcs_scrapped=body.pcs_scrapped,
             reason_code=body.reason_code, reason_detail=body.reason_detail or '',
             production_line=body.production_line or '',
             created_by=user.get('username') or '')
+        return _record_undo(user, 'scrap',
+                            f"Scrap {body.pcs_scrapped} pcs · {r.get('batch_number','')}", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3411,10 +3417,12 @@ def flag_ncg_ep(body: NcgFlagIn, user: dict = Depends(require_auth)):
     """Flag raw-material stock as NCG (from FC sorting or WH handling). Deducts
     the qty from the source bucket and raises a QA/QC review item."""
     try:
-        return flag_material_ncg(
+        r = flag_material_ncg(
             material_id=body.material_id, qty=body.qty, source=body.source,
             reason_code=body.reason_code, reason_detail=body.reason_detail or '',
             flagged_by=user.get('username') or '')
+        return _record_undo(user, 'ncg-flag',
+                            f"Flag {body.qty} NCG from {body.source}", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3431,11 +3439,13 @@ def review_ncg_ep(item_id: int, body: NcgReviewIn,
 def disposition_ncg_ep(item_id: int, body: NcgDispositionIn,
                        user: dict = Depends(require_role(Role.QA_QC, Role.MANAGERIAL))):
     try:
-        return add_ncg_disposition(
+        r = add_ncg_disposition(
             ncg_item_id=item_id, disposition=body.disposition, qty=body.qty,
             target_material_id=body.target_material_id, yield_qty=body.yield_qty,
             new_target=body.new_target,
             notes=body.notes or '', created_by=user.get('username') or '')
+        return _record_undo(user, 'ncg-disposition',
+                            f"{body.disposition} {body.qty} (NCG #{item_id})", r)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

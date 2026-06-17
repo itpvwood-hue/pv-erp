@@ -2566,7 +2566,10 @@ async function saveMaterial(){
   try{
     if(id) await api(`/api/materials/${id}`,'PUT',body);
     else await api('/api/materials','POST',body);
-    bootstrap.Modal.getInstance(document.getElementById('materialModal')).hide();
+    // getOrCreateInstance (not getInstance) so closing works even when the
+    // modal was opened programmatically — getInstance returns null otherwise
+    // and the .hide() threw, leaving the form stuck open after a save.
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('materialModal')).hide();
     toast('Saved');
     loadMaterials();
     if(_bbLoaded){ _bbLoaded=false; loadBomBuilder(); } // refresh BOM builder material data
