@@ -1008,7 +1008,7 @@
         </div>
         <div class="form-check form-check-inline mb-0">
           <input class="form-check-input" type="radio" name="dt-mode-inventory" id="dt-rep-inventory" value="replace">
-          <label class="form-check-label small" for="dt-rep-inventory"><strong>Replace</strong> <span class="text-muted">(wipe matching codes, re-import)</span></label>
+          <label class="form-check-label small" for="dt-rep-inventory"><strong>Replace (mirror)</strong> <span class="text-muted">(import + delete same-category materials not in the file, if unused)</span></label>
         </div>
       </div>
       <div class="row g-3">
@@ -6029,6 +6029,13 @@ async function _dtDoUpload(type, file, mode, defaultType=''){
   const rid = `dt-result-${type}`;
   const el = document.getElementById(rid);
   const endpoint = type === 'inventory' ? '/api/upload/inventory' : '/api/upload/bom';
+  // Replace = mirror: deletes same-category materials missing from the file
+  // (only the truly unused). Confirm before this destructive step.
+  if(type==='inventory' && mode==='replace'){
+    if(!confirm('REPLACE (mirror) mode:\n\nThis imports the file AND deletes materials of the same category that are NOT in the file and are unused (no BOM, no stock, no received lots).\n\nMaterials still in use are kept. This cannot be undone. Continue?')){
+      el.innerHTML=''; return;
+    }
+  }
   el.innerHTML = '<div class="d-flex align-items-center gap-2 text-muted small"><div class="spinner-border spinner-border-sm"></div>Uploading '+file.name+'…</div>';
   try{
     const fd = new FormData(); fd.append('file', file);
@@ -6039,6 +6046,10 @@ async function _dtDoUpload(type, file, mode, defaultType=''){
     const modeLabel = mode === 'replace' ? 'replaced' : 'imported';
     let h = `<div class="alert alert-success py-2 small"><i class="bi bi-check-circle me-1"></i><strong>${data.processed}</strong> rows ${modeLabel} successfully (mode: ${mode})</div>`;
     if(data.errors?.length) h += `<div class="alert alert-warning py-2 small"><strong>${data.errors.length} row(s) skipped:</strong><br>${data.errors.slice(0,6).map(e=>'• '+e).join('<br>')}${data.errors.length>6?`<br>…and ${data.errors.length-6} more`:''}</div>`;
+    if(typeof data.purged_count === 'number'){
+      h += `<div class="alert alert-${data.purged_count?'info':'light border'} py-2 small"><i class="bi bi-trash me-1"></i><strong>${data.purged_count}</strong> unused material(s) not in the file were deleted${data.purged_count?': '+data.purged.slice(0,12).map(p=>p.code).join(', ')+(data.purged.length>12?` …+${data.purged.length-12}`:''):''}</div>`;
+      if(data.kept_in_use?.length) h += `<div class="alert alert-light border py-2 small"><i class="bi bi-shield-check me-1 text-success"></i><strong>${data.kept_in_use.length}</strong> not in the file but kept (still in use): ${data.kept_in_use.slice(0,12).map(k=>k.code+' ('+k.reason+')').join(', ')}${data.kept_in_use.length>12?` …+${data.kept_in_use.length-12}`:''}</div>`;
+    }
     el.innerHTML = h;
     if(type==='inventory') loadMaterials();
     else if(type==='bom') loadBom();

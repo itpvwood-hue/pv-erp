@@ -1059,15 +1059,6 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
     real_rows = [(i+1, r) for i, r in enumerate(rows_csv) if _has_data(r)]
     blank_skipped = len(rows_csv) - len(real_rows)
 
-    if mode == "replace":
-        conn = get_db()
-        codes = [r['code'] for _, r in real_rows if r.get('code')]
-        if codes:
-            ph = ','.join('?' for _ in codes)
-            conn.execute(f"DELETE FROM materials WHERE code IN ({ph})", codes)
-            conn.commit()
-        conn.close()
-
     results = []; errors = []
     for src_lineno, row in real_rows:
         if not row.get('name'):
@@ -1081,13 +1072,31 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
             results.append(r)
         except Exception as e:
             errors.append(f"Row {src_lineno} ({row.get('name','')[:40]}): {str(e)}")
-    return {
+
+    # Replace = mirror: after importing, purge same-category materials that are
+    # NOT in this file and are truly unused (no BOM, no stock, no lots, no glue
+    # link). Anything still in use is kept and reported. Scope = the categories
+    # actually present in the upload, so e.g. a Veneers file never touches boards.
+    purge = None
+    if mode == "replace" and results:
+        from database import purge_unused_materials
+        scope_types = {r.get('type') for r in results if r.get('type')}
+        keep_codes = {r.get('code') for r in results if r.get('code')}
+        keep_codes |= {row.get('code') for _, row in real_rows if row.get('code')}
+        purge = purge_unused_materials(scope_types, keep_codes)
+
+    out = {
         "processed":      len(results),
         "skipped_blank":  blank_skipped,
         "errors":         errors,
         "results":        results,
         "mode":           mode,
     }
+    if purge is not None:
+        out["purged"]       = purge["deleted"]
+        out["purged_count"] = len(purge["deleted"])
+        out["kept_in_use"]  = purge["kept_in_use"]
+    return out
 
 @app.post("/api/upload/bom")
 async def upload_bom(file: UploadFile = File(...), mode: str = "add"):

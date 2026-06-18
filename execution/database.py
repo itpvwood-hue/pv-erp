@@ -1998,7 +1998,54 @@ def bulk_upsert_material(data):
         mid = cur.lastrowid; action = 'created'
 
     conn.commit(); conn.close()
-    return {'id': mid, 'name': name, 'code': fields['code'], 'action': action}
+    return {'id': mid, 'name': name, 'code': fields['code'],
+            'type': fields['type'], 'action': action}
+
+def purge_unused_materials(scope_types, keep_codes) -> dict:
+    """Mirror-delete: remove materials whose type is in scope_types and whose
+    code is NOT in keep_codes — but ONLY when truly unused (no BOM line, no
+    received lot, no glue-recipe link, and zero stock in every bucket).
+    Materials still in use are kept and reported with the reason."""
+    scope = [t for t in (scope_types or []) if t]
+    if not scope:
+        return {"deleted": [], "kept_in_use": []}
+    keep = {(c or '').strip().upper() for c in (keep_codes or []) if (c or '').strip()}
+    conn = get_db()
+    try:
+        ph = ','.join('?' for _ in scope)
+        cands = rows_to_list(conn.execute(
+            f"""SELECT id, code, name, type,
+                       COALESCE(current_stock,0)+COALESCE(fc_stock,0)+COALESCE(wlwh_stock,0) AS stock
+                FROM materials WHERE type IN ({ph})""", scope).fetchall())
+        deleted, kept = [], []
+        for m in cands:
+            code = (m.get('code') or '').strip()
+            info = {'code': code, 'name': m.get('name'), 'type': m.get('type')}
+            if not code:
+                kept.append({**info, 'reason': 'no code'}); continue
+            if code.upper() in keep:           # present in the uploaded file
+                continue
+            reasons = []
+            if float(m.get('stock') or 0) > 0:
+                reasons.append('has stock')
+            if conn.execute("SELECT 1 FROM bom_lines WHERE material_id=? LIMIT 1", (m['id'],)).fetchone():
+                reasons.append('used in BOM')
+            if conn.execute("SELECT 1 FROM material_lots WHERE material_id=? LIMIT 1", (m['id'],)).fetchone():
+                reasons.append('has lots')
+            if conn.execute("SELECT 1 FROM glue_recipes WHERE material_links LIKE ? LIMIT 1",
+                            (f'%: {m["id"]}%',)).fetchone():
+                reasons.append('glue link')
+            if reasons:
+                kept.append({**info, 'reason': ', '.join(reasons)}); continue
+            try:
+                conn.execute("DELETE FROM materials WHERE id=?", (m['id'],))
+                deleted.append(info)
+            except sqlite3.IntegrityError:
+                kept.append({**info, 'reason': 'referenced'})
+        conn.commit()
+        return {"deleted": deleted, "kept_in_use": kept}
+    finally:
+        conn.close()
 
 # ═══════════════════════════════════════════════════════════════
 # PRODUCTS
