@@ -1677,8 +1677,8 @@ def packing_detail(code: str):
 # down in the file. This endpoint returns the same recipes but each row carries
 # its ingredient breakdown — used by the BOM → Glue Formulas editor.
 @app.get("/api/glue-recipes/with-ingredients")
-def list_glue_recipes_with_ingredients_ep():
-    return get_glue_recipes_with_ingredients()
+def list_glue_recipes_with_ingredients_ep(kind: Optional[str] = None):
+    return get_glue_recipes_with_ingredients(kind=kind)
 
 # ── Packing SKU CRUD ──────────────────────────────────────────────────────────
 
@@ -2095,7 +2095,7 @@ def factory_assistant_export(filename: str,
 
 # ── Glue Recipe CRUD ─────────────────────────────────────────
 @app.get("/api/glue-recipes")
-def list_glue_recipes(): return get_glue_recipes()
+def list_glue_recipes(kind: Optional[str] = None): return get_glue_recipes(kind=kind)
 
 @app.post("/api/glue-recipes", status_code=201)
 def create_glue_recipe_ep(body: dict):

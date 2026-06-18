@@ -1141,6 +1141,11 @@ def init_db():
         # Keys: e0_glue, latex_g312, flour, yellow_pigment, hardener,
         #       red_pigment, black_pigment, titanium
         "ALTER TABLE glue_recipes ADD COLUMN material_links      TEXT DEFAULT '{}'",
+        # Compound kind: 'glue' or 'bleach'. The two share the glue_recipes
+        # table; without this tag the Bleaching tab and Glue tab were the SAME
+        # rows, so deleting a bleach formula also removed the glue one. Existing
+        # rows backfill to 'glue' via the column default.
+        "ALTER TABLE glue_recipes ADD COLUMN kind TEXT DEFAULT 'glue'",
         # Phase A glue cleanup (2026-05-29): BOM/compound lines that used to
         # link a glue placeholder by material_id now also carry a direct link
         # to the recipe. Phase B will drop the material_id placeholder rows.
@@ -4147,13 +4152,17 @@ def get_packing_sku(code):
 
 # ── Compound SKU CRUD ────────────────────────────────────────────────────────
 
-def get_glue_recipes_with_ingredients():
-    """Recipe list with ingredient breakdown, backed by glue_recipes."""
+def get_glue_recipes_with_ingredients(kind: str = None):
+    """Recipe list with ingredient breakdown, backed by glue_recipes. `kind`
+    ('glue'|'bleach') keeps the two compound types in separate tabs."""
     conn = get_db()
     try:
-        rows = conn.execute(
-            "SELECT * FROM glue_recipes WHERE COALESCE(is_active,1)=1 ORDER BY recipe_code"
-        ).fetchall()
+        q = "SELECT * FROM glue_recipes WHERE COALESCE(is_active,1)=1"
+        params = []
+        if kind:
+            q += " AND COALESCE(kind,'glue')=?"; params.append(kind)
+        q += " ORDER BY recipe_code"
+        rows = conn.execute(q, params).fetchall()
         return [_recipe_to_summary(conn, r, with_ingredients=True) for r in rows]
     finally:
         conn.close()
@@ -5059,11 +5068,13 @@ def touch_station_preset(pid: int):
     conn.commit(); conn.close()
 
 
-def get_glue_recipes(active_only=True):
+def get_glue_recipes(active_only=True, kind: str = None):
     conn = get_db()
-    q = "SELECT * FROM glue_recipes"
-    if active_only: q += " WHERE is_active=1"
-    rows = rows_to_list(conn.execute(q + " ORDER BY recipe_code").fetchall())
+    q = "SELECT * FROM glue_recipes WHERE 1=1"
+    params = []
+    if active_only: q += " AND is_active=1"
+    if kind:        q += " AND COALESCE(kind,'glue')=?"; params.append(kind)
+    rows = rows_to_list(conn.execute(q + " ORDER BY recipe_code", params).fetchall())
     conn.close(); return rows
 
 def save_glue_recipe(data: dict) -> dict:
@@ -5125,11 +5136,15 @@ def _save_glue_recipe_impl(conn, data):
     flds['total_kg'] = float(data.get('total_kg') or components_sum)
 
     if rid:
+        # Only change kind on update if the caller explicitly sent one.
+        if data.get('kind'):
+            flds['kind'] = data['kind']
         cols = ', '.join(f'{k}=?' for k in flds.keys())
         conn.execute(f"UPDATE glue_recipes SET {cols} WHERE id=?",
                      (*flds.values(), rid))
     else:
         flds['recipe_code'] = data['recipe_code']
+        flds['kind'] = data.get('kind') or 'glue'   # tag glue vs bleach
         cols = ', '.join(flds.keys()); ph = ', '.join('?' for _ in flds)
         conn.execute(f"INSERT INTO glue_recipes ({cols}) VALUES ({ph})",
                      tuple(flds.values()))

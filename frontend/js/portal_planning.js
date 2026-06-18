@@ -1626,7 +1626,7 @@ async function loadBomBuilder(){
     // Glue picker shows GLUE RECIPES (from glue_recipes), not raw "Glue and
     // Additives" ingredients (materials.type='glue_formula'). The recipe is
     // what the line operator mixes; ingredients are tracked via the recipe.
-    api('/api/glue-recipes').catch(()=>[]),
+    api('/api/glue-recipes?kind=glue').catch(()=>[]),
   ]);
   // Normalise recipes into the same shape the picker expects (code, name).
   const recipeOpts = (recipes||[]).map(r => ({
@@ -1960,7 +1960,7 @@ async function loadCompoundTab(type){
 async function bomGlueEdit(recipeId){
   let rs;
   try {
-    rs = await api('/api/glue-recipes') || [];
+    rs = await api('/api/glue-recipes?kind=glue') || [];
   } catch(e){
     toast('Failed to load recipes: '+(e.message||e), 'danger');
     return;
@@ -1988,9 +1988,10 @@ async function bomGlueDelete(recipeId, code){
 
 async function refreshCompound(type){
   _compoundLoaded[type] = true;
-  // Glue recipes — backed by glue_recipes table since Phase B. The legacy
-  // `type` filter is dropped (server-side already ignored it).
-  const data = await api('/api/glue-recipes/with-ingredients').catch(()=>[]);
+  // Glue and bleach share the glue_recipes table but are tagged by `kind`, so
+  // each tab only sees (and can delete) its own formulas.
+  const kind = (type === 'glue') ? 'glue' : 'bleach';
+  const data = await api('/api/glue-recipes/with-ingredients?kind='+kind).catch(()=>[]);
   _compoundData[type] = data;
   renderCompound(type, data);
 }
@@ -2018,7 +2019,7 @@ function renderCompound(type, data){
     // Need full recipe rows (with veneer_thickness etc.) — fetch from
     // /api/glue-recipes once and cache so the modal can pre-fill correctly
     if(!window._glueRecipesCache){
-      api('/api/glue-recipes').then(rs => { window._glueRecipesCache = rs || []; renderCompound('glue', data); }).catch(()=>{});
+      api('/api/glue-recipes?kind=glue').then(rs => { window._glueRecipesCache = rs || []; renderCompound('glue', data); }).catch(()=>{});
     }
     el.innerHTML = data.map(c => {
       const cost  = c.cost_per_kg_mixed != null ? Number(c.cost_per_kg_mixed) : 0;
@@ -2111,7 +2112,9 @@ async function saveNewCompound(type){
   if(!code){ toast('Code is required','danger'); return; }
   try{
     // Field names map to glue_recipes columns: code → recipe_code, batch_kg → total_kg.
-    await api('/api/glue-recipes','POST',{recipe_code:code, name, total_kg:batch, notes});
+    // Tag by kind so a bleach formula is independent of the glue list.
+    await api('/api/glue-recipes','POST',{recipe_code:code, name, total_kg:batch, notes,
+                                          kind: (type==='glue'?'glue':'bleach')});
     toast('Formula created: '+code);
     const panelId = type==='glue' ? 'glue-builder-panel' : 'bleach-builder-panel';
     bootstrap.Collapse.getInstance(document.getElementById(panelId))?.hide();
@@ -3123,7 +3126,7 @@ async function slLoadBatches(){
       try{ _gmBatchGlueInfo[b.id] = await api(`/api/batches/${b.id}/glue-info`); }catch{}
     }));
     if(!_gmRecipes.length){
-      try{ _gmRecipes = await api('/api/glue-recipes') || []; }catch{}
+      try{ _gmRecipes = await api('/api/glue-recipes?kind=glue') || []; }catch{}
     }
   }
   renderSlBatchList();
@@ -4157,7 +4160,7 @@ let _gmBatchGlueInfo={};     // batch_id -> {glue_code, total_kg, recipe}
 
 async function gmLoad(){
   const [recipes, batches] = await Promise.all([
-    api('/api/glue-recipes').catch(()=>[]),
+    api('/api/glue-recipes?kind=glue').catch(()=>[]),
     api('/api/batches?department=laminating').catch(()=>[])
   ]);
   _gmRecipes=recipes||[];
@@ -4727,7 +4730,7 @@ async function gmOpenRecipe(idOrRecipe){
     const wanted = String(idOrRecipe);
     r = (_gmRecipes||[]).find(x => String(x.id) === wanted);
     if(!r){
-      try { _gmRecipes = await api('/api/glue-recipes') || []; } catch {}
+      try { _gmRecipes = await api('/api/glue-recipes?kind=glue') || []; } catch {}
       r = (_gmRecipes||[]).find(x => String(x.id) === wanted);
     }
     if(!r){
