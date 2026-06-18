@@ -2147,6 +2147,7 @@ function deleteCompoundLine(lineId, compoundId, type){
 // ════════════════════════════════════════════════════════════
 let _packingData = [];
 let _packingLoaded = false;
+let _packMats = [];   // packing consumables for the line-material picker
 
 async function loadPackingTab(){
   if(!_packingLoaded){ await refreshPacking(); }
@@ -2154,9 +2155,29 @@ async function loadPackingTab(){
 
 async function refreshPacking(){
   _packingLoaded = true;
-  const data = await api('/api/packing-skus-full').catch(()=>[]);
+  const [data, mats] = await Promise.all([
+    api('/api/packing-skus-full').catch(()=>[]),
+    api('/api/materials').catch(()=>[]),
+  ]);
+  // Packing BOM lines pull from packing/consumable/other materials so the
+  // user picks instead of typing codes. 'packing' first.
+  const W = { packing:0, adhesive:1, other:2 };
+  _packMats = (mats||[]).filter(m => m.type in W)
+    .sort((a,b)=> (W[a.type]-W[b.type]) || String(a.code||'').localeCompare(String(b.code||'')));
   _packingData = data;
   renderPacking(data);
+}
+
+function _packMatOptions(){
+  if(!_packMats.length)
+    return '<option value="">— no packing materials yet (add in Raw Materials) —</option>';
+  return '<option value="">— select material —</option>' + _packMats.map(m =>
+    `<option value="${m.code||''}" data-unit="${m.unit||''}">[${m.code||''}] ${escapeHtml(m.name||'')}${m.unit?' ('+m.unit+')':''}</option>`).join('');
+}
+function _packPickUnit(pid){
+  const sel = document.getElementById('pl-mat-'+pid);
+  const u = sel && sel.selectedOptions[0] && sel.selectedOptions[0].dataset.unit;
+  if(u){ const ue = document.getElementById('pl-unit-'+pid); if(ue) ue.value = u; }
 }
 
 function filterPacking(q){
@@ -2209,7 +2230,7 @@ function renderPacking(data){
               ${linesHtml}
               <tr class="table-light">
                 <td><input type="number" class="form-control form-control-sm" id="pl-seq-${p.id}" value="${nextSeq}" style="width:50px"></td>
-                <td><input class="form-control form-control-sm" id="pl-mat-${p.id}" placeholder="Material code" style="min-width:120px"></td>
+                <td><select class="form-select form-select-sm" id="pl-mat-${p.id}" style="min-width:160px" onchange="_packPickUnit(${p.id})">${_packMatOptions()}</select></td>
                 <td><input type="number" class="form-control form-control-sm" id="pl-qty-${p.id}" value="1" step="0.01" style="width:70px"></td>
                 <td><input class="form-control form-control-sm" id="pl-unit-${p.id}" value="pallet" style="width:75px"></td>
                 <td></td>
@@ -2257,7 +2278,7 @@ async function addPackingLine(packingId){
   const code = document.getElementById('pl-mat-'+packingId).value.trim();
   const qty  = parseFloat(document.getElementById('pl-qty-'+packingId).value)||1;
   const unit = document.getElementById('pl-unit-'+packingId).value.trim()||'pallet';
-  if(!code){ toast('Material code required','danger'); return; }
+  if(!code){ toast('Select a packing material first','warning'); return; }
   try{
     await api('/api/packing-skus/'+packingId+'/lines','POST',{material_code:code,qty,qty_unit:unit,seq});
     toast('Material added');
