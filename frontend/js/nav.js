@@ -54,7 +54,10 @@ function navigateTo(page){
 // Add new pages here — that's the only place.
 // PAGE_LOADERS starts empty; main inline script + per-portal modules
 // register their pages via Object.assign(PAGE_LOADERS, { … }).
-const PAGE_LOADERS = {};
+// Mirror onto window so a bare `PAGE_LOADERS` reference resolves even if a
+// stale/out-of-order script can't see this script's lexical `const` binding
+// (which surfaced as "PAGE_LOADERS is not defined" after a cached deploy).
+const PAGE_LOADERS = (window.PAGE_LOADERS = window.PAGE_LOADERS || {});
 
 function loadPage(p){
   const fn = PAGE_LOADERS[p];

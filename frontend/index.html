@@ -5874,7 +5874,7 @@ const LINE_FLOW={
 // populated by the per-portal files (portal_warehouse.js, portal_planning.js,
 // portal_accounting.js, portal_admin.js). Only the truly cross-cutting
 // fallbacks live here:
-Object.assign(PAGE_LOADERS, {
+Object.assign(window.PAGE_LOADERS = (window.PAGE_LOADERS || {}), {
   // 'reports' just sets today's date in the date picker before the daily
   // report card renders; the heavy lifting (generateReport) is in
   // portal_planning.js.
