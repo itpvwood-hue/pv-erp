@@ -198,6 +198,10 @@
     <i class="bi bi-truck me-1"></i><span data-i18n="Raw Material Receiving">Raw Material Receiving</span>
     <span class="badge bg-warning text-dark ms-auto d-none" id="nav-raw-recv-badge" style="font-size:.65rem">0</span>
   </a>
+  <a class="nav-link" data-page="wh-move-fulfill" id="nav-wh-move-fulfill" href="#">
+    <i class="bi bi-arrow-left-right me-1"></i><span data-i18n="Movement Fulfilment">Movement Fulfilment</span>
+    <span class="badge bg-warning text-dark ms-auto d-none" id="nav-whmf-badge" style="font-size:.65rem">0</span>
+  </a>
   <a class="nav-link" data-page="forklift-refuel" id="nav-forklift-refuel" href="#">
     <i class="bi bi-droplet-half me-1"></i><span data-i18n="Forklift Refueling">Forklift Refueling</span>
     <span class="badge bg-danger ms-auto d-none" id="nav-forklift-refuel-badge" style="font-size:.65rem">0</span>
@@ -3772,10 +3776,11 @@
       <input type="number" class="form-control form-control-sm" id="whmove-qty" min="0" step="0.01"></div>
     <div class="mt-2"><label class="form-label small mb-0">Notes</label>
       <input class="form-control form-control-sm" id="whmove-notes" placeholder="optional"></div>
+    <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>This raises a request. Stock moves only once a warehouse employee fulfils it under <b>Movement Fulfilment</b>.</div>
   </div>
   <div class="modal-footer py-2">
     <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
-    <button class="btn btn-sm btn-info" onclick="whMoveSubmit()"><i class="bi bi-arrow-left-right me-1"></i>Move</button>
+    <button class="btn btn-sm btn-info" onclick="whMoveSubmit()"><i class="bi bi-send me-1"></i>Request Move</button>
   </div>
 </div></div></div>
 
@@ -4103,6 +4108,22 @@
 </div>
 
 <!-- ══ WAREHOUSE DASHBOARD ══════════════════════════════════ -->
+<div class="page" id="page-wh-move-fulfill">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h4 class="mb-0"><i class="bi bi-arrow-left-right me-2 text-success"></i><span data-i18n="Movement Fulfilment">Movement Fulfilment</span></h4>
+      <small class="text-muted">Pending WH ↔ WLWH stock movements. Stock only moves once you fulfil a request.</small>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" onclick="loadWhMoveFulfill()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+  </div>
+  <div class="card"><div class="table-responsive" style="max-height:74vh;overflow:auto">
+    <table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr>
+      <th>Requested</th><th>Material</th><th class="text-center">Move</th><th class="text-end">Qty</th>
+      <th class="text-end">Available</th><th>Notes</th><th></th>
+    </tr></thead><tbody id="whmf-tbody"></tbody></table>
+  </div></div>
+</div>
+
 <div class="page" id="page-wh-dashboard">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
@@ -6048,7 +6069,7 @@ const ROLE_PAGES = {
     'prod-logs','reports',
     'station-log','glue-mix-station','station-tools','prod-reports','employees',
     'dept-costs','material-shortfalls','fc-hub','raw-receiving','forklift-refuel',
-    'forklift-dash','forklift-report','scrap-bin',
+    'forklift-dash','forklift-report','scrap-bin','wh-move-fulfill',
   ]),
   PRODUCTION_PLANNING: new Set([
     'dashboard','customers','order-intake','line-board','prod-flow',
@@ -6070,7 +6091,7 @@ const ROLE_PAGES = {
     'wh-dashboard','wh-low-stock','wh-open-prs',
     'materials','dept-fg_warehouse',
     'warehouse-queue','dept-costs','station-log',
-    'raw-receiving','forklift-refuel','forklift-dash','scrap-bin',
+    'raw-receiving','wh-move-fulfill','forklift-refuel','forklift-dash','scrap-bin',
   ]),
 };
 

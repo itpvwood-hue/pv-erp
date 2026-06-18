@@ -79,6 +79,7 @@ from database import (
     get_all_purchase_orders, get_purchase_order, create_purchase_order, update_purchase_order, delete_purchase_order,
     get_customers, create_customer, update_customer, get_customer_orders,
     wh_move_stock, get_wh_transfer_log,
+    create_wh_move_request, list_wh_move_requests, fulfill_wh_move_request, cancel_wh_move_request,
     list_fg_batches, move_fg_batches, get_fg_location_log,
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
@@ -2576,6 +2577,41 @@ def warehouse_move_stock(body: WhMoveIn,
 def warehouse_move_log(material_id: Optional[int] = None, limit: int = 50,
                        user: dict = Depends(require_auth)):
     return get_wh_transfer_log(material_id=material_id, limit=limit)
+
+# ── WH <-> WLWH move requests (request → fulfil) ─────────────
+@app.post("/api/warehouse/move-requests", status_code=201)
+def create_move_request_ep(body: WhMoveIn,
+                           user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
+    """Raise a WH↔WLWH movement request. No stock moves until it's fulfilled."""
+    try:
+        return create_wh_move_request(body.material_id, body.from_location, body.to_location,
+                                      body.qty, requested_by=(user.get('username') or ''),
+                                      notes=body.notes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/warehouse/move-requests")
+def list_move_requests_ep(status: Optional[str] = None, user: dict = Depends(require_auth)):
+    return list_wh_move_requests(status=status)
+
+@app.post("/api/warehouse/move-requests/{request_id}/fulfill", status_code=201)
+def fulfill_move_request_ep(request_id: int,
+                            user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
+    """Warehouse employee fulfils a pending move — only now does stock shift."""
+    try:
+        r = fulfill_wh_move_request(request_id, fulfilled_by=(user.get('username') or ''))
+        return _record_undo(user, 'wh-move-fulfil',
+                            f"Fulfil move {r['qty']} {r['from_location']}→{r['to_location']}", r)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/warehouse/move-requests/{request_id}/cancel")
+def cancel_move_request_ep(request_id: int,
+                           user: dict = Depends(require_role(Role.WAREHOUSE, Role.MANAGERIAL))):
+    try:
+        return cancel_wh_move_request(request_id, cancelled_by=(user.get('username') or ''))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 # ── FG warehouse <-> WLWH location moves (Phase 4) ───────────
 class FgMoveIn(BaseModel):

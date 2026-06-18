@@ -146,6 +146,7 @@ const WAREHOUSE_PORTAL_PAGES = new Set([
   'materials',          // Raw Materials
   'warehouse-queue',    // Raw Material Requests from production line
   'raw-receiving',      // Receiving inbound shipments
+  'wh-move-fulfill',    // WH<->WLWH movement fulfilment
   'dept-fg_warehouse',  // FG Warehouse
 ]);
 

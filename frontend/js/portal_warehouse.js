@@ -2257,7 +2257,7 @@ async function deleteMaterial(id){
 function whMoveOpen(id){
   const m=[..._allMaterials].find(x=>x.id===id); if(!m){ toast('Material not found','warning'); return; }
   _whMoveMat=m;
-  document.getElementById('whmove-title').textContent=`Move stock — ${m.code||''} ${m.name||''}`;
+  document.getElementById('whmove-title').textContent=`Request move — ${m.code||''} ${m.name||''}`;
   document.getElementById('whmove-id').value=m.id;
   document.getElementById('whmove-unit').textContent=m.unit||'';
   document.getElementById('whmove-from').value='WH';
@@ -2285,11 +2285,58 @@ async function whMoveSubmit(){
   if(from===to){ toast('From and To must differ','warning'); return; }
   if(qty<=0){ toast('Enter a quantity','warning'); return; }
   try{
-    await api('/api/warehouse/move-stock','POST',{material_id:id, from_location:from, to_location:to, qty, notes});
+    // Raise a request — stock only moves when a warehouse employee fulfils it.
+    await api('/api/warehouse/move-requests','POST',{material_id:id, from_location:from, to_location:to, qty, notes});
     bootstrap.Modal.getInstance(document.getElementById('whMoveModal')).hide();
-    toast(`Moved ${fmt(qty)} from ${from} to ${to}`);
-    loadMaterials();
+    toast(`Move requested: ${fmt(qty)} ${from}→${to}. Awaiting fulfilment.`,'success');
+    if(typeof whMoveFulfilBadge==='function') whMoveFulfilBadge();
   }catch(e){ toast(e.message,'danger'); }
+}
+
+// ── Movement Fulfilment dashboard (WH employees fulfil pending moves) ──
+let _whMoveReqs = [];
+async function loadWhMoveFulfill(){
+  const tb=document.getElementById('whmf-tbody');
+  if(tb) tb.innerHTML='<tr><td colspan="7" class="text-center text-muted py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</td></tr>';
+  try{ _whMoveReqs = await api('/api/warehouse/move-requests?status=PENDING'); }
+  catch(e){ if(tb) tb.innerHTML=`<tr><td colspan="7" class="text-danger text-center py-3">${e.message}</td></tr>`; return; }
+  whMoveFulfilBadge();
+  if(!tb) return;
+  if(!_whMoveReqs.length){ tb.innerHTML='<tr><td colspan="7" class="text-center text-muted py-4">No pending movement requests.</td></tr>'; return; }
+  tb.innerHTML=_whMoveReqs.map(r=>{
+    const avail = r.from_location==='WH' ? r.wh_stock : r.wlwh_stock;
+    const short = Number(avail) < Number(r.qty);
+    return `<tr>
+      <td class="small text-muted">${(r.requested_at||'').slice(0,16).replace('T',' ')}<br>${r.requested_by||''}</td>
+      <td><code>${r.material_code||''}</code><br><span class="small">${r.material_name||''}</span></td>
+      <td class="text-center"><span class="badge bg-secondary-subtle text-secondary-emphasis">${r.from_location}</span> <i class="bi bi-arrow-right"></i> <span class="badge bg-info-subtle text-info-emphasis">${r.to_location}</span></td>
+      <td class="text-end fw-bold">${fmt(r.qty)} ${r.unit||''}</td>
+      <td class="text-end ${short?'text-danger fw-bold':'text-muted'}">${fmt(avail)} <span class="small">at ${r.from_location}</span>${short?'<br><span class="small">⚠ short</span>':''}</td>
+      <td class="small">${r.notes||''}</td>
+      <td class="text-nowrap">
+        <button class="btn btn-xs btn-success" onclick="whFulfillMove(${r.id})"><i class="bi bi-check2 me-1"></i>Fulfil</button>
+        <button class="btn btn-xs btn-outline-danger ms-1" onclick="whCancelMove(${r.id})" title="Cancel request"><i class="bi bi-x"></i></button>
+      </td></tr>`;
+  }).join('');
+}
+async function whFulfillMove(id){
+  const r=_whMoveReqs.find(x=>x.id===id);
+  if(r && !confirm(`Fulfil this move?\n\n${r.material_code} — ${fmt(r.qty)} ${r.unit||''} from ${r.from_location} to ${r.to_location}.\nStock will move now.`)) return;
+  try{ await api(`/api/warehouse/move-requests/${id}/fulfill`,'POST',{}); toast('Move fulfilled — stock updated','success'); loadWhMoveFulfill(); }
+  catch(e){ toast('Fulfil failed: '+e.message,'danger'); }
+}
+async function whCancelMove(id){
+  if(!confirm('Cancel this movement request? No stock moves.')) return;
+  try{ await api(`/api/warehouse/move-requests/${id}/cancel`,'POST',{}); toast('Request cancelled'); loadWhMoveFulfill(); }
+  catch(e){ toast('Cancel failed: '+e.message,'danger'); }
+}
+async function whMoveFulfilBadge(){
+  try{
+    const rows = _whMoveReqs.length ? _whMoveReqs : await api('/api/warehouse/move-requests?status=PENDING').catch(()=>[]);
+    const n = rows.length;
+    const b=document.getElementById('nav-whmf-badge');
+    if(b){ b.textContent=n; b.classList.toggle('d-none', n===0); }
+  }catch{}
 }
 let _whMoveMat=null;
 // Single-location stock cell (consumables / generic) — just the number.
@@ -2590,6 +2637,7 @@ async function saveMaterial(){
 // equivalent entries in the main inline script's Object.assign call.
 Object.assign(PAGE_LOADERS, {
   'wh-dashboard':    whDashLoad,
+  'wh-move-fulfill': loadWhMoveFulfill,
   'wh-low-stock':    whLowStockLoad,
   'wh-open-prs':     whOpenPRsLoad,
   'raw-receiving':   rrecLoad,

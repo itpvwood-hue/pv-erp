@@ -156,6 +156,20 @@ def init_db():
             created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (material_id) REFERENCES materials(id)
         );
+        CREATE TABLE IF NOT EXISTS wh_move_requests (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id   INTEGER NOT NULL,
+            from_location TEXT NOT NULL,
+            to_location   TEXT NOT NULL,
+            qty           REAL NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | FULFILLED | CANCELLED
+            notes         TEXT DEFAULT '',
+            requested_by  TEXT DEFAULT '',
+            requested_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            fulfilled_by  TEXT,
+            fulfilled_at  TEXT,
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        );
         CREATE TABLE IF NOT EXISTS fg_location_moves (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             batch_id      INTEGER NOT NULL,
@@ -2441,6 +2455,106 @@ def get_wh_transfer_log(material_id: int = None, limit: int = 50) -> list:
     q += " ORDER BY t.created_at DESC, t.id DESC LIMIT ?"; params.append(int(limit))
     rows = rows_to_list(conn.execute(q, params).fetchall())
     conn.close(); return rows
+
+
+# ═══════════════════════════════════════════════════════════════
+# WH <-> WLWH MOVE REQUESTS — request/fulfil workflow
+# A move is requested first (no stock change); a warehouse employee fulfils it
+# from the Movement Fulfilment dashboard, and only THEN does stock actually
+# shift between WH and WLWH (validated against live stock at fulfil time).
+# ═══════════════════════════════════════════════════════════════
+def create_wh_move_request(material_id: int, from_location: str, to_location: str,
+                           qty, requested_by: str = '', notes: str = '') -> dict:
+    from_loc = (from_location or '').strip().upper()
+    to_loc   = (to_location or '').strip().upper()
+    if from_loc not in _WH_LOC_COL or to_loc not in _WH_LOC_COL:
+        raise ValueError("Location must be WH or WLWH")
+    if from_loc == to_loc:
+        raise ValueError("From and To locations must be different")
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        raise ValueError("Quantity must be a number")
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    conn = get_db()
+    try:
+        m = row_to_dict(conn.execute("SELECT * FROM materials WHERE id=?", (material_id,)).fetchone())
+        if not m:
+            raise ValueError("Material not found")
+        cur = conn.execute("""INSERT INTO wh_move_requests
+                (material_id, from_location, to_location, qty, status, requested_by, notes)
+                VALUES (?,?,?,?,'PENDING',?,?)""",
+            (material_id, from_loc, to_loc, qty, requested_by, notes))
+        conn.commit()
+        return {"ok": True, "id": cur.lastrowid, "material_id": material_id,
+                "from_location": from_loc, "to_location": to_loc, "qty": qty,
+                "status": "PENDING"}
+    finally:
+        conn.close()
+
+def list_wh_move_requests(status: str = None, limit: int = 200) -> list:
+    conn = get_db()
+    q = """SELECT r.*, m.code AS material_code, m.name AS material_name, m.type AS material_type,
+                  m.unit, COALESCE(m.current_stock,0) AS wh_stock, COALESCE(m.wlwh_stock,0) AS wlwh_stock
+           FROM wh_move_requests r JOIN materials m ON m.id = r.material_id WHERE 1=1"""
+    params = []
+    if status:
+        q += " AND r.status = ?"; params.append(status)
+    q += (" ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END, "
+          "r.requested_at DESC, r.id DESC LIMIT ?"); params.append(int(limit))
+    rows = rows_to_list(conn.execute(q, params).fetchall())
+    conn.close(); return rows
+
+def fulfill_wh_move_request(request_id: int, fulfilled_by: str = '') -> dict:
+    """Move the stock for a PENDING request, then mark it FULFILLED. Stock is
+    validated against the live source bucket here, not at request time."""
+    conn = get_db()
+    try:
+        r = row_to_dict(conn.execute("SELECT * FROM wh_move_requests WHERE id=?", (request_id,)).fetchone())
+        if not r:
+            raise ValueError("Move request not found")
+        if r['status'] != 'PENDING':
+            raise ValueError(f"Request is already {r['status']}")
+    finally:
+        conn.close()
+    # Perform the actual move (validates source stock, logs to wh_stock_transfers,
+    # returns a bucket-reversal undo plan). Raises if stock is now insufficient.
+    mv = wh_move_stock(r['material_id'], r['from_location'], r['to_location'],
+                       r['qty'], moved_by=fulfilled_by, notes=(r.get('notes') or ''))
+    conn = get_db()
+    try:
+        conn.execute("""UPDATE wh_move_requests
+            SET status='FULFILLED', fulfilled_by=?, fulfilled_at=datetime('now')
+            WHERE id=?""", (fulfilled_by, request_id))
+        conn.commit()
+    finally:
+        conn.close()
+    # Undo = reverse the stock move AND put the request back to PENDING.
+    undo = dict(mv.get('undo') or {})
+    undo.setdefault('updates', []).append(
+        {"table": "wh_move_requests",
+         "set": {"status": "PENDING", "fulfilled_by": None, "fulfilled_at": None},
+         "where": {"id": request_id, "status": "FULFILLED"}})
+    return {"ok": True, "id": request_id, "status": "FULFILLED",
+            "from_location": r['from_location'], "to_location": r['to_location'],
+            "qty": r['qty'], "undo": undo}
+
+def cancel_wh_move_request(request_id: int, cancelled_by: str = '') -> dict:
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT status FROM wh_move_requests WHERE id=?", (request_id,)).fetchone()
+        if not r:
+            raise ValueError("Move request not found")
+        if r[0] != 'PENDING':
+            raise ValueError(f"Only pending requests can be cancelled (is {r[0]})")
+        conn.execute("""UPDATE wh_move_requests
+            SET status='CANCELLED', fulfilled_by=?, fulfilled_at=datetime('now') WHERE id=?""",
+            (cancelled_by, request_id))
+        conn.commit()
+        return {"ok": True, "id": request_id, "status": "CANCELLED"}
+    finally:
+        conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -6839,7 +6953,7 @@ _UNDO_TABLES = {
     'packing_log', 'production_logs', 'prod_batch', 'orders',
     # Warehouse actions (Undo Phase 2)
     'materials', 'material_lots', 'pr_shipments', 'purchase_requests',
-    'wh_stock_transfers', 'fg_location_moves', 'batches',
+    'wh_stock_transfers', 'wh_move_requests', 'fg_location_moves', 'batches',
     'fc_transfer_requests', 'consumable_request', 'dept_cost_ledger',
     # NCG / scrap / regrade (Undo Phase 3)
     'ncg_items', 'ncg_dispositions', 'scrap_log', 'veneer_regrade_log',
