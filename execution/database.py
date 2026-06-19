@@ -9050,9 +9050,12 @@ def create_user(data: dict) -> dict:
     conn.close(); return row_to_dict(row)
 
 def get_user_by_username(username: str) -> dict:
+    # NOTE: do NOT filter on active here. login() needs to see a deactivated
+    # account so it can return the clear "Account is inactive" (403) message —
+    # filtering active=1 made a disabled user look like a wrong password (401).
     conn = get_db()
     row = conn.execute(
-        "SELECT * FROM users WHERE username=? AND active=1", (username,)
+        "SELECT * FROM users WHERE username=?", (username,)
     ).fetchone()
     conn.close(); return row_to_dict(row)
 
