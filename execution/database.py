@@ -1793,13 +1793,16 @@ def create_material(data):
     cur = conn.execute(
         """INSERT INTO materials
            (code,name,type,unit,current_stock,reorder_point,unit_cost,supplier,
-            thickness_mm,width_mm,length_mm,auto_glue_code)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            thickness_mm,width_mm,length_mm,auto_glue_code,
+            species,cut_type,grade,matching,face_back,fsc)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (new_code, data['name'], data['type'], data['unit'],
          data.get('current_stock', 0), data.get('reorder_point', 0),
          data.get('unit_cost', 0), data.get('supplier', ''),
          data.get('thickness_mm'), data.get('width_mm'), data.get('length_mm'),
-         data.get('auto_glue_code'))
+         data.get('auto_glue_code'),
+         data.get('species'), data.get('cut_type'), data.get('grade'),
+         data.get('matching'), data.get('face_back'), data.get('fsc'))
     )
     conn.commit()
     row = _mat_by_id(conn, cur.lastrowid)
@@ -1815,13 +1818,16 @@ def update_material(mid, data):
         """UPDATE materials
            SET code=?,name=?,type=?,unit=?,current_stock=?,reorder_point=?,
                unit_cost=?,supplier=?,
-               thickness_mm=?,width_mm=?,length_mm=?,auto_glue_code=?
+               thickness_mm=?,width_mm=?,length_mm=?,auto_glue_code=?,
+               species=?,cut_type=?,grade=?,matching=?,face_back=?,fsc=?
            WHERE id=?""",
         (new_code, data['name'], data['type'], data['unit'],
          data.get('current_stock', 0), data.get('reorder_point', 0),
          data.get('unit_cost', 0), data.get('supplier', ''),
          data.get('thickness_mm'), data.get('width_mm'), data.get('length_mm'),
-         data.get('auto_glue_code'), mid)
+         data.get('auto_glue_code'),
+         data.get('species'), data.get('cut_type'), data.get('grade'),
+         data.get('matching'), data.get('face_back'), data.get('fsc'), mid)
     )
     conn.commit()
     row = _mat_by_id(conn, mid)

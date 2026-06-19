@@ -3863,14 +3863,37 @@
           <input type="number" class="form-control" id="mat-cost" step="0.01">
           <span class="input-group-text">THB</span></div></div>
     </div>
-    <!-- Dimensions — shown for core_board -->
+    <!-- Dimensions — shown for core_board + veneer_sheet -->
     <div id="mat-dims-section" class="d-none mt-3">
-      <div class="fw-semibold small text-secondary mb-1"><i class="bi bi-rulers me-1"></i>Board Dimensions (for BOM Builder suggestions)</div>
+      <div class="fw-semibold small text-secondary mb-1"><i class="bi bi-rulers me-1"></i>Dimensions (mm) — for BOM Builder suggestions</div>
       <div class="row g-2">
         <div class="col-4"><label class="form-label small">Thickness (mm)</label><input type="number" class="form-control form-control-sm" id="mat-thick" step="0.1" placeholder="e.g. 18"></div>
         <div class="col-4"><label class="form-label small">Width (mm)</label><input type="number" class="form-control form-control-sm" id="mat-width" step="1" placeholder="e.g. 1220"></div>
         <div class="col-4"><label class="form-label small">Length (mm)</label><input type="number" class="form-control form-control-sm" id="mat-length" step="1" placeholder="e.g. 2440"></div>
       </div>
+    </div>
+    <!-- Veneer attributes — shown for veneer_sheet. Inputs use datalists so they
+         act as dropdowns of existing values while still accepting new ones. -->
+    <div id="mat-veneer-section" class="d-none mt-3">
+      <div class="fw-semibold small text-secondary mb-1"><i class="bi bi-tree me-1"></i>Veneer Attributes</div>
+      <div class="row g-2">
+        <div class="col-4"><label class="form-label small">Species</label><input class="form-control form-control-sm" id="mat-species" list="dl-mat-species" placeholder="e.g. Oak"></div>
+        <div class="col-4"><label class="form-label small">Cut Type</label><input class="form-control form-control-sm" id="mat-cut" list="dl-mat-cut" placeholder="e.g. Crown / Quarter / Rotary"></div>
+        <div class="col-4"><label class="form-label small">Grade</label><input class="form-control form-control-sm" id="mat-grade" list="dl-mat-grade" placeholder="e.g. A / B / C"></div>
+        <div class="col-4"><label class="form-label small">Matching</label><input class="form-control form-control-sm" id="mat-matching" list="dl-mat-matching" placeholder="e.g. Book / Slip"></div>
+        <div class="col-4"><label class="form-label small">Face / Back</label>
+          <select class="form-select form-select-sm" id="mat-faceback">
+            <option value="">—</option><option value="face">Face</option><option value="back">Back</option><option value="both">Both</option>
+          </select></div>
+        <div class="col-4"><label class="form-label small">FSC</label>
+          <select class="form-select form-select-sm" id="mat-fsc">
+            <option value="">—</option><option value="FSC">FSC</option><option value="non-FSC">non-FSC</option>
+          </select></div>
+      </div>
+      <datalist id="dl-mat-species"></datalist>
+      <datalist id="dl-mat-cut"></datalist>
+      <datalist id="dl-mat-grade"></datalist>
+      <datalist id="dl-mat-matching"></datalist>
     </div>
     <!-- Auto glue — shown for veneer_sheet -->
     <div id="mat-glue-section" class="d-none mt-3">

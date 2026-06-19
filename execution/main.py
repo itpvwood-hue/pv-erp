@@ -273,6 +273,13 @@ class MaterialIn(BaseModel):
     width_mm: Optional[float] = None
     length_mm: Optional[float] = None
     auto_glue_code: Optional[str] = None
+    # Veneer attributes (only meaningful for type='veneer_sheet')
+    species: Optional[str] = None
+    cut_type: Optional[str] = None
+    grade: Optional[str] = None
+    matching: Optional[str] = None
+    face_back: Optional[str] = None
+    fsc: Optional[str] = None
 
 class ProductIn(BaseModel):
     name: str; sku: str; description: str = ""; unit: str = "sheet"; selling_price: float = 0

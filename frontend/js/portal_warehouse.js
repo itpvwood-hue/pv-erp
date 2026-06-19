@@ -2583,8 +2583,29 @@ function updateMatFilterCounts(){
 }
 function matTypeChanged(){
   const t=document.getElementById('mat-cat').value;
-  document.getElementById('mat-dims-section').classList.toggle('d-none', t!=='core_board');
+  // Dimensions are relevant to both boards and veneers.
+  document.getElementById('mat-dims-section').classList.toggle('d-none', t!=='core_board' && t!=='veneer_sheet');
   document.getElementById('mat-glue-section').classList.toggle('d-none', t!=='veneer_sheet');
+  const vsec=document.getElementById('mat-veneer-section');
+  if(vsec){
+    vsec.classList.toggle('d-none', t!=='veneer_sheet');
+    if(t==='veneer_sheet') populateMatVeneerDatalists();
+  }
+}
+// Build the veneer attribute datalists from the species/cut/grade/matching
+// values already in use, so they show as a dropdown of real options while
+// still allowing a brand-new value to be typed.
+function populateMatVeneerDatalists(){
+  const veneers=(_allMaterials||[]).filter(m=>m.type==='veneer_sheet');
+  const fill=(id,vals)=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.innerHTML=[...new Set(vals.filter(Boolean).map(v=>String(v).trim()))].sort()
+      .map(v=>`<option value="${v}"></option>`).join('');
+  };
+  fill('dl-mat-species',  veneers.map(m=>m.species));
+  fill('dl-mat-cut',      veneers.map(m=>m.cut_type));
+  fill('dl-mat-grade',    veneers.map(m=>m.grade));
+  fill('dl-mat-matching', veneers.map(m=>m.matching));
 }
 function openMaterialModal(m){
   const isEdit=m && m.id;
@@ -2601,6 +2622,12 @@ function openMaterialModal(m){
   document.getElementById('mat-width').value=isEdit?m.width_mm||'':'';
   document.getElementById('mat-length').value=isEdit?m.length_mm||'':'';
   document.getElementById('mat-auto-glue').value=isEdit?m.auto_glue_code||'':'';
+  document.getElementById('mat-species').value=isEdit?m.species||'':'';
+  document.getElementById('mat-cut').value=isEdit?m.cut_type||'':'';
+  document.getElementById('mat-grade').value=isEdit?m.grade||'':'';
+  document.getElementById('mat-matching').value=isEdit?m.matching||'':'';
+  document.getElementById('mat-faceback').value=isEdit?m.face_back||'':'';
+  document.getElementById('mat-fsc').value=isEdit?m.fsc||'':'';
   matTypeChanged();
 }
 async function saveMaterial(){
@@ -2619,6 +2646,16 @@ async function saveMaterial(){
     length_mm:gn('mat-length'),
     auto_glue_code:document.getElementById('mat-auto-glue').value.trim()||null,
   };
+  // Veneer attributes — only sent for veneers (cleared for other types).
+  if(body.type==='veneer_sheet'){
+    const gs=k=>document.getElementById(k).value.trim()||null;
+    body.species  =gs('mat-species');
+    body.cut_type =gs('mat-cut');
+    body.grade    =gs('mat-grade');
+    body.matching =gs('mat-matching');
+    body.face_back=document.getElementById('mat-faceback').value||null;
+    body.fsc      =document.getElementById('mat-fsc').value||null;
+  }
   try{
     if(id) await api(`/api/materials/${id}`,'PUT',body);
     else await api('/api/materials','POST',body);
