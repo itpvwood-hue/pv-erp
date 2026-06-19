@@ -573,16 +573,20 @@ function prResetLines(){
   prAddLine();
 }
 
-// Initialize modal each time it opens
-document.addEventListener('DOMContentLoaded', ()=>{
+// Initialize modal each time it opens. This portal script is fetched
+// dynamically *after* login, so DOMContentLoaded has already fired by now —
+// wire the listener immediately rather than waiting on an event that will
+// never come (which is why the material dropdown / lines used to be blank).
+(function _prWireNewModal(){
   const m = document.getElementById('newPRModal');
-  if(m){
+  if(m && !m._prWired){
+    m._prWired = true;
     m.addEventListener('show.bs.modal', async ()=>{
       await prPrimeMaterialSelects();
       prResetLines();
     });
   }
-});
+})();
 
 async function prSubmit(){
   const lines = [];
