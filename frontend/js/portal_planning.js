@@ -2502,6 +2502,64 @@ async function slhAuxOpenFcTransfer(){
   }, 200);
 }
 
+// Station-scope labels shared by the buttons + header.
+const SLH_DEPT_LABEL = {fc:'FC / Cutting',glue_mix:'Glue Mixing',laminating:'Laminating',
+  cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',hot_press:'Hot Press',
+  grading:'Grading',packing:'Packing'};
+
+// Department Leaders only operate the stations/lines they're assigned to, so the
+// free-choice dropdowns are hidden and replaced by buttons for exactly those
+// scopes. Everyone else keeps the dropdowns.
+function slhRenderScopeButtons(){
+  const selects = document.getElementById('sl-scope-selects');
+  const btnBar  = document.getElementById('sl-scope-buttons');
+  if(!selects || !btnBar) return;
+  const user = (typeof getCurrentUser==='function') ? getCurrentUser() : null;
+  if(!user || user.role !== ROLE.DEPARTMENT_LEADER){
+    selects.classList.remove('d-none');
+    btnBar.classList.add('d-none'); btnBar.classList.remove('d-flex');
+    return;
+  }
+  selects.classList.add('d-none');
+  btnBar.classList.remove('d-none'); btnBar.classList.add('d-flex');
+  const depts = (typeof getCurrentDepts==='function') ? getCurrentDepts() : [];
+  if(!depts.length){
+    btnBar.innerHTML = '<span class="text-muted small"><i class="bi bi-exclamation-triangle me-1"></i>No station assigned — contact your administrator.</span>';
+    return;
+  }
+  // De-dupe identical (dept,line) scopes; sort for a stable order.
+  const seen = new Set();
+  const scopes = [];
+  depts.forEach(d => {
+    const dv = (d.department || '').toLowerCase();
+    if(!SLH_DEPT_LABEL[dv]) return;          // skip unknown/legacy dept codes
+    const ln = d.line_id || '';
+    const key = dv + '|' + ln;
+    if(seen.has(key)) return; seen.add(key);
+    scopes.push({dept: dv, line: ln});
+  });
+  btnBar.innerHTML = scopes.map(s => {
+    const lineLbl = s.line || 'All lines';
+    return `<button class="btn btn-sm btn-outline-primary sl-scope-btn"
+              onclick="slhPickScope('${s.dept}','${s.line}',this)">`+
+           `${SLH_DEPT_LABEL[s.dept]} <span class="text-muted">· ${lineLbl}</span></button>`;
+  }).join('');
+  // Auto-select the first assigned scope.
+  const first = btnBar.querySelector('.sl-scope-btn');
+  if(first) first.click();
+}
+
+function slhPickScope(dept, line, btn){
+  const ds = document.getElementById('sl-dept-scope');
+  const ls = document.getElementById('sl-line');
+  if(ds) ds.value = dept;
+  if(ls) ls.value = line;
+  document.querySelectorAll('#sl-scope-buttons .sl-scope-btn')
+    .forEach(b => b.classList.remove('active','btn-primary','text-white'));
+  if(btn){ btn.classList.add('active','btn-primary','text-white'); }
+  slhSetScope();
+}
+
 function slhSetScope(){
   const dept = document.getElementById('sl-dept-scope')?.value || 'laminating';
   let   line = document.getElementById('sl-line')?.value || 'P01';

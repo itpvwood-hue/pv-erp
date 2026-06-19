@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.54"
+VERSION    = "2.21.55"
 BUILD_DATE = "2026-06-19"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.55", "2026-06-19", "Station Leader Hub access scoping. For Department Leaders the free-choice Station + Line dropdowns are now hidden and replaced by buttons for ONLY the (station, line) scopes they're assigned to (slhRenderScopeButtons; auto-selects the first). Managerial/Planning keep the dropdowns. Also removed the standalone 'Request Consumables' Supply nav item — consumable requests are now raised via a 'Request Consumables' button in the Station Leader Hub header (opens the same request modal). Frontend-only."),
     ("2.21.54", "2026-06-19", "Station-leader access tweaks. (1) Department Leaders no longer have FC Hub — removed from ROLE_PAGES + nav (nav-fc-hub). (2) FC / Cutting is now a station option in the Station Leader Hub department dropdown, so FC is reached there instead of the separate Hub page. (3) PUV/PVS/PSP are now treated as independent lines using the standard Hub UX (relabelled 'Independent lines'; the old request-only aux short-circuit in slhSetScope is removed). Their distinct production flow is deferred per request — for now they reuse the lamination Hub UX. No backend change."),
     ("2.21.53", "2026-06-19", "Login: a deactivated account now returns the clear 'Account is inactive' (403) instead of a misleading 'Invalid username or password' (401). get_user_by_username filtered active=1, so login could never reach its own inactive check — a disabled user looked exactly like a wrong password. Removed that filter (login is its only caller). Helps diagnose 'user can't log in' reports: wrong password = 401, disabled account = 403. Verified: active+correct 200, active+wrong-pw 401, deactivated 403, unknown user 401."),
     ("2.21.52", "2026-06-19", "Add Material modal now exposes veneer attributes. Picking type='Veneers' reveals a Veneer Attributes section (Species, Cut Type, Grade, Matching as dropdowns that suggest existing values but accept new ones, plus Face/Back and FSC selects) and the Dimensions section (thickness/width/length, previously board-only). These were columns the importer/export already used but the UI couldn't set — so UI-created veneers were missing them. Backend MaterialIn + create_material/update_material now persist species/cut_type/grade/matching/face_back/fsc. Verified e2e: adding a veneer via the form stores all attributes; dropdowns list existing species/grade/etc.; non-veneer types are unaffected."),

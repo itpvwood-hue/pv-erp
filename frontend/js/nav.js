@@ -70,7 +70,13 @@ function loadPage(p){
     loadDeptPage(p.replace('dept-',''));
   }
   // Station Leader Hub needs an extra scope/header refresh after its loader.
+  // For Department Leaders this swaps the station/line dropdowns for buttons
+  // limited to their assigned scopes (and auto-selects the first).
   if(p === 'station-log'){
+    let scoped = false;
+    try { slhRenderScopeButtons(); scoped = true; } catch {}
+    // slhRenderScopeButtons auto-clicks the first scope (which calls
+    // slhSetScope) for dept leaders; for everyone else, drive scope directly.
     try { slhSetScope(); } catch { try { slhUpdateHeader(); } catch {} }
   }
   // user-management moved to /admin portal — no loader here.

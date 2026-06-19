@@ -179,9 +179,8 @@
   <div class="nav-sec" data-i18n="FG Warehouse">FG Warehouse</div>
   <a class="nav-link" data-page="dept-fg_warehouse" href="#"><i class="bi bi-building"></i><span data-i18n="FG Warehouse">FG Warehouse</span></a>
 
-  <!-- ── Support / Ops (separate) ─────────────────────────── -->
-  <div class="nav-sec" id="nav-sec-supply" data-i18n="Supply">Supply</div>
-  <a class="nav-link" data-page="consumable-requests" id="nav-consumable-requests" href="#"><i class="bi bi-cart-plus me-1"></i><span data-i18n="Request Consumables">Request Consumables</span></a>
+  <!-- Consumable requests are raised inside the Station Leader Hub (header
+       button), so the standalone Supply nav item was removed. -->
 
   <div class="nav-sec" id="nav-sec-warehouse" data-i18n="Warehouse Ops">Warehouse Ops</div>
   <a class="nav-link" data-page="wh-dashboard" id="nav-wh-dashboard" href="#"><i class="bi bi-speedometer2 me-1"></i><span data-i18n="Warehouse Dashboard">Warehouse Dashboard</span></a>
@@ -2064,24 +2063,33 @@
       <small class="text-muted">Dashboard · Batches · Team &amp; Hours · Station Stock — all in one place</small>
     </div>
     <div class="d-flex gap-2 flex-wrap align-items-center">
-      <label class="small text-muted mb-0 me-1">Station</label>
-      <select class="form-select form-select-sm" id="sl-dept-scope" style="width:170px" onchange="slhSetScope()">
-        <option value="fc">FC / Cutting</option>
-        <option value="glue_mix">Glue Mixing</option>
-        <option value="laminating" selected>Laminating</option>
-        <option value="cold_press">Cold Press</option>
-        <option value="repair">Repair</option>
-        <option value="sanding">Sanding</option>
-        <option value="hot_press">Hot Press</option>
-        <option value="grading">Grading</option>
-        <option value="packing">Packing</option>
-      </select>
-      <label class="small text-muted mb-0 me-1">Line</label>
-      <select class="form-select form-select-sm" id="sl-line" style="width:110px" onchange="slhSetScope()">
-        <option value="P01" selected>P01</option><option>P02</option><option>P37</option>
-        <option disabled>── Independent lines ──</option>
-        <option>PUV</option><option>PVS</option><option>PSP</option>
-      </select>
+      <!-- Managerial / Planning pick any station+line via dropdowns. For a
+           Department Leader these are hidden and replaced by buttons limited to
+           their assigned stations (see slhRenderScopeButtons). -->
+      <span id="sl-scope-selects" class="d-flex gap-2 align-items-center flex-wrap">
+        <label class="small text-muted mb-0 me-1">Station</label>
+        <select class="form-select form-select-sm" id="sl-dept-scope" style="width:170px" onchange="slhSetScope()">
+          <option value="fc">FC / Cutting</option>
+          <option value="glue_mix">Glue Mixing</option>
+          <option value="laminating" selected>Laminating</option>
+          <option value="cold_press">Cold Press</option>
+          <option value="repair">Repair</option>
+          <option value="sanding">Sanding</option>
+          <option value="hot_press">Hot Press</option>
+          <option value="grading">Grading</option>
+          <option value="packing">Packing</option>
+        </select>
+        <label class="small text-muted mb-0 me-1">Line</label>
+        <select class="form-select form-select-sm" id="sl-line" style="width:110px" onchange="slhSetScope()">
+          <option value="P01" selected>P01</option><option>P02</option><option>P37</option>
+          <option disabled>── Independent lines ──</option>
+          <option>PUV</option><option>PVS</option><option>PSP</option>
+        </select>
+      </span>
+      <div id="sl-scope-buttons" class="d-none align-items-center gap-1 flex-wrap"></div>
+      <button class="btn btn-success btn-sm" onclick="crOpenNew(); bootstrap.Modal.getOrCreateInstance(document.getElementById('newConsumableModal')).show();" title="Request consumables from Warehouse">
+        <i class="bi bi-cart-plus me-1"></i>Request Consumables
+      </button>
       <button class="btn btn-outline-secondary btn-sm" onclick="msOpenSetup()" id="sl-machine-setup-btn">
         <i class="bi bi-gear me-1"></i>Machine Setup
       </button>
