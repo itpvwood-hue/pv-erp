@@ -2503,9 +2503,9 @@ async function slhAuxOpenFcTransfer(){
 }
 
 // Station-scope labels shared by the buttons + header.
-const SLH_DEPT_LABEL = {fc:'FC / Cutting',glue_mix:'Glue Mixing',laminating:'Laminating',
-  cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',hot_press:'Hot Press',
-  grading:'Grading',packing:'Packing'};
+const SLH_DEPT_LABEL = {fc:'FC / Cutting',production:'Production',glue_mix:'Glue Mixing',
+  laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',
+  hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
 
 // Department Leaders only operate the stations/lines they're assigned to, so the
 // free-choice dropdowns are hidden and replaced by buttons for exactly those
@@ -2552,6 +2552,19 @@ function slhRenderScopeButtons(){
 function slhPickScope(dept, line, btn){
   const ds = document.getElementById('sl-dept-scope');
   const ls = document.getElementById('sl-line');
+  // The dropdowns only list the standard stations/lines. A scoped role can use
+  // values that aren't there (e.g. the generic 'production' station), so add a
+  // hidden option on the fly before selecting it.
+  const ensure = (sel, val, label) => {
+    if(!sel || !val) return;
+    if(![...sel.options].some(o => o.value===val || o.textContent===val)){
+      const o = document.createElement('option');
+      o.value = val; o.textContent = label || val; o.hidden = true;
+      sel.appendChild(o);
+    }
+  };
+  ensure(ds, dept, SLH_DEPT_LABEL[dept] || dept);
+  ensure(ls, line, line);
   if(ds) ds.value = dept;
   if(ls) ls.value = line;
   document.querySelectorAll('#sl-scope-buttons .sl-scope-btn')
@@ -2583,7 +2596,7 @@ function slhSetScope(){
   if(f) f.value = dept;
   const chip = document.getElementById('sl-scope-chip');
   if(chip){
-    const lbl = ({fc:'FC',glue_mix:'Glue Mixing',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
+    const lbl = ({fc:'FC',production:'Production',glue_mix:'Glue Mixing',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
                   sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing'})[dept] || dept;
     chip.textContent = (dept === 'packing') ? `ALL LINES · ${lbl}` : `${line} · ${lbl}`;
   }
@@ -2608,7 +2621,7 @@ function slhUpdateHeader(){
   const lineSel = document.getElementById('sl-line');
   const line = (lineSel?.value || 'P01').trim();
   const deptLabel = {
-    fc:'FC', glue_mix:'Glue Mixing',
+    fc:'FC', production:'Production', glue_mix:'Glue Mixing',
     laminating:'Laminating', cold_press:'Cold Press',
     repair:'Repair', sanding:'Sanding', hot_press:'Hot Press',
     grading:'Grading', packing:'Packing',

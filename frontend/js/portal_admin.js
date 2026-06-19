@@ -469,29 +469,71 @@ async function umOpenEdit(uid){
   document.getElementById('um-username').value=u.username;
   document.getElementById('um-username').disabled=true;   // username cannot be changed
   document.getElementById('um-display-name').value=u.display_name;
-  document.getElementById('um-role').value=u.role;
+  // A Department Leader whose assignment matches a scoped preset shows that
+  // preset in the Role dropdown rather than the generic "Department Leader".
+  let roleVal=u.role;
+  if(u.role=== ROLE.DEPARTMENT_LEADER){
+    const pk=_slDetectPreset(u._depts||[]);
+    if(pk) roleVal=pk;
+  }
+  document.getElementById('um-role').value=roleVal;
   document.getElementById('um-password').value='';
   document.getElementById('um-pw-hint').textContent='(leave blank to keep)';
   umToggleDepts(u._depts||[]);
   bootstrap.Modal.getOrCreateInstance(document.getElementById('newUserModal')).show();
 }
 
+// "Scoped station-leader" role-dropdown presets. Each is really a
+// DEPARTMENT_LEADER under the hood, auto-assigned to a fixed (dept,line) scope
+// so it can be picked straight from the Role dropdown. PUV/PVS/PSP get a single
+// generic 'PRODUCTION' station for now (their real flow is a later development).
+const SL_ROLE_PRESETS = {
+  SL_FC:  {label:'FC / Cutting',         depts:[{department:'FC',         line_id:null}]},
+  SL_PUV: {label:'PUV — UV Line',        depts:[{department:'PRODUCTION', line_id:'PUV'}]},
+  SL_PVS: {label:'PVS — Veneer Slicing', depts:[{department:'PRODUCTION', line_id:'PVS'}]},
+  SL_PSP: {label:'PSP — Veneer Splicing',depts:[{department:'PRODUCTION', line_id:'PSP'}]},
+};
+// Reverse-map a saved assignment back to its preset key, so editing a scoped
+// user shows the preset in the Role dropdown instead of plain "Department Leader".
+function _slDetectPreset(depts){
+  if(!Array.isArray(depts) || depts.length!==1) return null;
+  const dept=(depts[0].department||'').toUpperCase();
+  const line=depts[0].line_id||null;
+  for(const [k,v] of Object.entries(SL_ROLE_PRESETS)){
+    const p=v.depts[0];
+    if((p.department||'').toUpperCase()===dept && (p.line_id||null)===line) return k;
+  }
+  return null;
+}
+
 function umToggleDepts(existingDepts){
   const role=document.getElementById('um-role').value;
   const sec=document.getElementById('um-dept-section');
-  if(role=== ROLE.DEPARTMENT_LEADER){
+  const note=document.getElementById('um-preset-note');
+  const preset=SL_ROLE_PRESETS[role];
+  if(preset){
+    sec.classList.add('d-none');
+    if(note){
+      note.classList.remove('d-none');
+      note.innerHTML=`<i class="bi bi-info-circle me-1"></i>Scoped station leader — saved as a Department Leader locked to <b>${preset.label}</b>. No manual department picks needed.`;
+    }
+  }else if(role=== ROLE.DEPARTMENT_LEADER){
     sec.classList.remove('d-none');
+    if(note) note.classList.add('d-none');
     _renderDeptGrid('um-dept-grid', existingDepts||[]);
   }else{
     sec.classList.add('d-none');
+    if(note) note.classList.add('d-none');
   }
 }
 
 async function umSave(){
   const editId=document.getElementById('um-edit-id').value;
+  const roleSel=document.getElementById('um-role').value;
+  const preset=SL_ROLE_PRESETS[roleSel];
   const body={
     display_name:document.getElementById('um-display-name').value.trim(),
-    role:document.getElementById('um-role').value,
+    role: preset ? ROLE.DEPARTMENT_LEADER : roleSel,
   };
   const pw=document.getElementById('um-password').value;
   if(pw) body.password=pw;
@@ -508,8 +550,11 @@ async function umSave(){
       if(!created) return;
       uid=created.user_id;
     }
-    // Always save dept assignments for dept leaders (even if empty = clear)
-    if(body.role=== ROLE.DEPARTMENT_LEADER){
+    // Scoped preset → save its fixed assignment. Plain Department Leader → save
+    // whatever is ticked in the grid (even if empty = clear).
+    if(preset){
+      await api(`/api/users/${uid}/departments`,'POST',{departments:preset.depts});
+    }else if(body.role=== ROLE.DEPARTMENT_LEADER){
       const checked=[...document.querySelectorAll('.um-dept-check:checked')].map(c=>{
         const [dept,line]=c.value.split('|');
         return {department:dept, line_id:line==='ALL'?null:line};

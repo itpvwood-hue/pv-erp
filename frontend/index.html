@@ -5743,6 +5743,12 @@
               <option value="PRODUCTION_PLANNING">Production Planning</option>
               <option value="DEPARTMENT_LEADER">Department Leader</option>
               <option value="WAREHOUSE">Warehouse</option>
+              <optgroup label="Station leader — scoped to a line/station">
+                <option value="SL_FC">FC / Cutting</option>
+                <option value="SL_PUV">PUV — UV Line</option>
+                <option value="SL_PVS">PVS — Veneer Slicing</option>
+                <option value="SL_PSP">PSP — Veneer Splicing</option>
+              </optgroup>
             </select>
           </div>
           <div class="col-md-6">
@@ -5754,6 +5760,7 @@
           <label class="form-label small fw-semibold">Department Assignments</label>
           <div id="um-dept-grid" class="row g-2"></div>
         </div>
+        <div id="um-preset-note" class="mt-3 d-none alert alert-info py-2 small mb-0"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary btn-sm" onclick="umSave()"><i class="bi bi-floppy me-1"></i>Save</button>
