@@ -1205,6 +1205,7 @@ def export_veneers():
                COALESCE(unit,'') AS unit,
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
+               COALESCE(wlwh_stock,0)    AS wlwh_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1213,7 +1214,7 @@ def export_veneers():
     conn.close()
     header = ("code,acc_code,name,name_th,species,cut_type,grade,matching,face_back,"
               "thickness_mm,width_mm,length_mm,fsc,auto_glue_code,unit,"
-              "current_stock,fc_stock,min_stock,unit_cost,supplier")
+              "current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=veneers_export.csv"})
@@ -1231,6 +1232,7 @@ def export_boards():
                COALESCE(unit,'') AS unit,
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
+               COALESCE(wlwh_stock,0)    AS wlwh_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1238,7 +1240,7 @@ def export_boards():
     """).fetchall()
     conn.close()
     header = ("code,acc_code,name,name_th,board_type,glue_type,thickness_mm,width_mm,length_mm,fsc,"
-              "unit,current_stock,fc_stock,min_stock,unit_cost,supplier")
+              "unit,current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=boards_export.csv"})
@@ -1256,6 +1258,7 @@ def export_consumables():
                thickness_mm, width_mm, length_mm,
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
+               COALESCE(wlwh_stock,0)    AS wlwh_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1265,7 +1268,7 @@ def export_consumables():
     """).fetchall()
     conn.close()
     header = ("code,acc_code,name,name_th,type,unit,thickness_mm,width_mm,length_mm,"
-              "current_stock,fc_stock,min_stock,unit_cost,supplier")
+              "current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=consumables_export.csv"})
@@ -1280,6 +1283,7 @@ def export_materials():
                type, COALESCE(unit,'') AS unit,
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
+               COALESCE(wlwh_stock,0)    AS wlwh_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1287,7 +1291,7 @@ def export_materials():
     """).fetchall()
     conn.close()
     header = ("code,acc_code,name,name_th,type,unit,"
-              "current_stock,fc_stock,min_stock,unit_cost,supplier")
+              "current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=materials_export.csv"})

@@ -1976,8 +1976,8 @@ def bulk_upsert_material(data):
                      'species','cut_type','grade','matching','face_back','fsc',
                      'board_type','glue_type',
                      # 2.6.1: surfaced in exports → also accept on import
-                     'acc_code','name_th','name_zh','auto_glue_code','fc_stock']
-    _numeric_extended = {'thickness_mm','width_mm','length_mm','fc_stock'}
+                     'acc_code','name_th','name_zh','auto_glue_code','fc_stock','wlwh_stock']
+    _numeric_extended = {'thickness_mm','width_mm','length_mm','fc_stock','wlwh_stock'}
     for k in extended_keys:
         if k not in existing_cols: continue
         if k in data and data.get(k) not in (None, ''):
