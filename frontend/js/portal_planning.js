@@ -2505,12 +2505,9 @@ async function slhAuxOpenFcTransfer(){
 function slhSetScope(){
   const dept = document.getElementById('sl-dept-scope')?.value || 'laminating';
   let   line = document.getElementById('sl-line')?.value || 'P01';
-  // Auxiliary lines (PUV/PVS/PSP) — production flow not defined; show only
-  // the request-hub pane.
-  if(SLH_AUX_LINES[line]){
-    slhEnterAuxMode(line);
-    return;
-  }
+  // PUV/PVS/PSP are now treated as independent lines using the standard Station
+  // Leader Hub UX (their own distinct production flow is a later development).
+  // They no longer drop into the old request-only aux mode.
   slhExitAuxMode();
   // Packing is a centralised station — all 3 lines feed into one hub.
   // Force the line filter to "ALL" so batches from P01, P02 and P37 mix here.

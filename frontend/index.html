@@ -2066,6 +2066,7 @@
     <div class="d-flex gap-2 flex-wrap align-items-center">
       <label class="small text-muted mb-0 me-1">Station</label>
       <select class="form-select form-select-sm" id="sl-dept-scope" style="width:170px" onchange="slhSetScope()">
+        <option value="fc">FC / Cutting</option>
         <option value="glue_mix">Glue Mixing</option>
         <option value="laminating" selected>Laminating</option>
         <option value="cold_press">Cold Press</option>
@@ -2078,7 +2079,7 @@
       <label class="small text-muted mb-0 me-1">Line</label>
       <select class="form-select form-select-sm" id="sl-line" style="width:110px" onchange="slhSetScope()">
         <option value="P01" selected>P01</option><option>P02</option><option>P37</option>
-        <option disabled>── Auxiliary (request-only) ──</option>
+        <option disabled>── Independent lines ──</option>
         <option>PUV</option><option>PVS</option><option>PSP</option>
       </select>
       <button class="btn btn-outline-secondary btn-sm" onclick="msOpenSetup()" id="sl-machine-setup-btn">
@@ -6057,7 +6058,7 @@ const ROLE_PAGES = {
     'forklift-report','scrap-bin',
   ]),
   DEPARTMENT_LEADER: new Set([
-    'dashboard','station-log','glue-mix-station','station-tools','consumable-requests','fc-hub','scrap-bin',
+    'dashboard','station-log','glue-mix-station','station-tools','consumable-requests','scrap-bin',
     'dept-laminating','dept-cold_press','dept-hot_press','dept-bleach',
     'dept-repair','dept-sanding','dept-grading',
   ]),
@@ -6102,7 +6103,7 @@ const NAV_SEC_ROLES = {
   'nav-scrap-bin':           ['MANAGERIAL','PRODUCTION_PLANNING','DEPARTMENT_LEADER'],
   'nav-dept-costs':          ['MANAGERIAL','PRODUCTION_PLANNING','WAREHOUSE'],
   'nav-user-management':     ['MANAGERIAL'],
-  'nav-fc-hub':              ['MANAGERIAL','PRODUCTION_PLANNING','DEPARTMENT_LEADER'],
+  'nav-fc-hub':              ['MANAGERIAL','PRODUCTION_PLANNING'],
   'nav-sec-finance':         ['MANAGERIAL'],
   'nav-finance-portal':      ['MANAGERIAL'],
   'nav-shortfalls':          ['MANAGERIAL','PRODUCTION_PLANNING'],
