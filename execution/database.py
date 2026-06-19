@@ -5731,6 +5731,8 @@ def create_purchase_request(*, request_type: str, material_id: int, qty_requeste
 def list_purchase_requests(status=None, request_type=None) -> list:
     conn = get_db()
     q = """SELECT pr.*, m.code AS material_code, m.name AS material_name, m.type AS material_type,
+                  COALESCE(m.unit_cost, m.price, 0) AS stock_unit_cost,
+                  COALESCE(m.current_stock,0)+COALESCE(m.fc_stock,0)+COALESCE(m.wlwh_stock,0) AS stock_on_hand,
                   po.po_number AS source_po_number,
                   (
                     (SELECT COUNT(*) FROM material_documents d

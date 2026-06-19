@@ -279,7 +279,7 @@ function prRender(rows){
   tb.innerHTML=rows.map(r=>{
     const actions=[];
     if(r.status==='NEW')      actions.push(`<button class="btn btn-xs btn-info text-white" title="Approve" onclick="prSetStatus(${r.id},'APPROVED')"><i class="bi bi-check2"></i></button>`);
-    if(r.status==='APPROVED') actions.push(`<button class="btn btn-xs btn-primary" title="Issue PO to supplier" onclick="prSetStatus(${r.id},'PO_ISSUED')"><i class="bi bi-file-earmark-text"></i></button>`);
+    if(r.status==='APPROVED') actions.push(`<button class="btn btn-xs btn-primary" title="Issue PO to supplier (set order price)" onclick="prIssuePO(${r.id})"><i class="bi bi-file-earmark-text"></i></button>`);
     if(r.status==='PO_ISSUED'||r.status==='ORDERED') actions.push(`<button class="btn btn-xs btn-warning text-dark" title="Supplier confirmed, set ETA" onclick="prSetStatus(${r.id},'AWAITING_ARRIVAL')"><i class="bi bi-hourglass-split"></i></button>`);
     if(r.status==='AWAITING_ARRIVAL') actions.push(`<button class="btn btn-xs btn-success" title="Mark Received" onclick="prSetStatus(${r.id},'RECEIVED')"><i class="bi bi-box-seam"></i></button>`);
     if(r.status!=='RECEIVED' && r.status!=='CANCELLED')
@@ -291,7 +291,7 @@ function prRender(rows){
     return `<tr>
       <td class="small fw-semibold">${r.request_number||('#'+r.id)}${grp}</td>
       <td><span class="badge bg-light text-dark">${r.request_type==='RAW_MATERIAL'?'Raw':'Consumable'}</span></td>
-      <td><b>${r.material_code||''}</b> ${r.material_name||''}</td>
+      <td><b>${r.material_code||''}</b> ${r.material_name||''}${r.unit_cost?`<br><span class="badge bg-light text-dark border" style="font-size:.6rem" title="Agreed order unit price">@ ฿${_accFmtN(r.unit_cost)}</span>`:''}</td>
       <td class="text-end">${_accFmtN(r.qty_requested)}</td>
       <td class="small text-muted">${r.uom||''}</td>
       <td>${_prPrioBadge(r.priority)}</td>
@@ -324,6 +324,83 @@ async function prSetStatus(id, status){
     await api(`/api/purchase-requests/${id}/status`, 'PATCH', body);
     prLoad();
   }catch(e){ alert('Update failed: '+(e.message||e)); }
+}
+// ── Issue PO: capture the agreed order price before placing the order ──
+let _prIssueId = null;
+function _prEnsureIssueModal(){
+  if(document.getElementById('prIssueModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal fade" id="prIssueModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-file-earmark-text me-2"></i>Issue Purchase Order</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2 small text-muted">Set the agreed order price before the PO is placed. Received lots inherit this price.</div>
+        <div class="card bg-light border-0 mb-3"><div class="card-body py-2 px-3">
+          <div class="fw-semibold" id="pri-mat">—</div>
+          <div class="d-flex justify-content-between small mt-1">
+            <span class="text-muted">Qty ordered</span><span id="pri-qty">—</span></div>
+          <div class="d-flex justify-content-between small">
+            <span class="text-muted">Current price in stock</span><span id="pri-stockprice">—</span></div>
+          <div class="d-flex justify-content-between small">
+            <span class="text-muted">On hand</span><span id="pri-onhand">—</span></div>
+        </div></div>
+        <label class="form-label small fw-semibold mb-1">Order unit price (฿) *</label>
+        <input type="number" class="form-control mb-1" id="pri-price" step="0.0001" min="0" oninput="_prIssueRecalc()">
+        <div class="small text-muted mb-3">Order total: <span class="fw-semibold" id="pri-total">฿0.00</span></div>
+        <label class="form-label small fw-semibold mb-1">Supplier PO reference (optional)</label>
+        <input class="form-control" id="pri-ref" placeholder="e.g. supplier's quote / PO no.">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="pri-confirm" onclick="prIssuePOConfirm()"><i class="bi bi-check2 me-1"></i>Place Order</button>
+      </div>
+    </div></div>
+  </div>`);
+}
+let _prIssueQty = 0;
+function _prIssueRecalc(){
+  const p = parseFloat(document.getElementById('pri-price').value)||0;
+  document.getElementById('pri-total').textContent = '฿'+_accFmtN(p*_prIssueQty);
+}
+function prIssuePO(id){
+  const r = (_prRows||[]).find(x=>x.id===id);
+  if(!r){ alert('Request not found — reload the list.'); return; }
+  _prEnsureIssueModal();
+  _prIssueId = id;
+  _prIssueQty = parseFloat(r.qty_requested)||0;
+  const stockPrice = parseFloat(r.stock_unit_cost)||0;
+  document.getElementById('pri-mat').textContent =
+    `${r.material_code?'['+r.material_code+'] ':''}${r.material_name||''}`;
+  document.getElementById('pri-qty').textContent = `${_accFmtN(r.qty_requested)} ${r.uom||''}`;
+  document.getElementById('pri-stockprice').textContent =
+    stockPrice>0 ? `฿${_accFmtN(stockPrice)} / ${r.uom||'unit'}` : '— (no price on file)';
+  document.getElementById('pri-onhand').textContent =
+    `${_accFmtN(r.stock_on_hand||0)} ${r.uom||''}`;
+  // Prefill with the already-agreed price if re-issuing, else the in-stock price
+  document.getElementById('pri-price').value =
+    (r.unit_cost!=null && r.unit_cost!=='') ? r.unit_cost : (stockPrice||'');
+  document.getElementById('pri-ref').value = r.supplier_po_ref || '';
+  _prIssueRecalc();
+  new bootstrap.Modal(document.getElementById('prIssueModal')).show();
+}
+async function prIssuePOConfirm(){
+  const price = parseFloat(document.getElementById('pri-price').value);
+  if(!(price>0)){ alert('Please enter the order unit price before placing the order.'); return; }
+  const btn = document.getElementById('pri-confirm');
+  btn.disabled = true;
+  try{
+    await api(`/api/purchase-requests/${_prIssueId}/status`, 'PATCH', {
+      status:'PO_ISSUED',
+      unit_cost: price,
+      supplier_po_ref: document.getElementById('pri-ref').value||''
+    });
+    bootstrap.Modal.getInstance(document.getElementById('prIssueModal')).hide();
+    prLoad();
+  }catch(e){ alert('Issue PO failed: '+(e.message||e)); }
+  finally{ btn.disabled = false; }
 }
 async function prPrimeMaterialSelects(){
   try{ _prMaterials = await api('/api/materials'); }catch{ _prMaterials=[]; }

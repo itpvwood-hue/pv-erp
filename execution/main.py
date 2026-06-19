@@ -2978,6 +2978,7 @@ class PRStatus(BaseModel):
     status: str
     supplier_po_ref: Optional[str] = ''
     estimated_arrival: Optional[str] = ''  # YYYY-MM-DD
+    unit_cost: Optional[float] = None      # purchasing's agreed order price (set at PO issue)
 
 @app.patch("/api/purchase-requests/{pr_id}/status")
 def set_pr_status(pr_id: int, body: PRStatus, user: dict = Depends(require_auth)):
@@ -2985,7 +2986,8 @@ def set_pr_status(pr_id: int, body: PRStatus, user: dict = Depends(require_auth)
         return update_purchase_request_status(pr_id, body.status,
             actor=user.get('username') or '',
             supplier_po_ref=body.supplier_po_ref or '',
-            estimated_arrival=body.estimated_arrival or '')
+            estimated_arrival=body.estimated_arrival or '',
+            unit_cost=body.unit_cost)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
