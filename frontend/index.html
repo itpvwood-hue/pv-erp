@@ -5743,6 +5743,7 @@
               <option value="PRODUCTION_PLANNING">Production Planning</option>
               <option value="DEPARTMENT_LEADER">Department Leader</option>
               <option value="WAREHOUSE">Warehouse</option>
+              <option value="FINANCE">Finance (Accounting + Purchasing portal)</option>
               <optgroup label="Station leader — scoped to a line/station">
                 <option value="SL_FC">FC / Cutting</option>
                 <option value="SL_PUV">PUV — UV Line</option>
@@ -6094,6 +6095,7 @@ const ROLE = {
   PRODUCTION_PLANNING: 'PRODUCTION_PLANNING',
   DEPARTMENT_LEADER:   'DEPARTMENT_LEADER',
   WAREHOUSE:           'WAREHOUSE',
+  FINANCE:             'FINANCE',   // uses the dedicated Finance Portal (/finance)
 };
 
 const ROLE_LABEL = {
@@ -6101,6 +6103,7 @@ const ROLE_LABEL = {
   [ROLE.PRODUCTION_PLANNING]: 'Production Planning',
   [ROLE.DEPARTMENT_LEADER]:   'Dept Leader',
   [ROLE.WAREHOUSE]:           'Warehouse',
+  [ROLE.FINANCE]:             'Finance',
 };
 
 // Nav sections that should only show for certain roles
