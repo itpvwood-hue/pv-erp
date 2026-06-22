@@ -5120,6 +5120,50 @@ def get_station_stock_movements(dept, line_id=None, from_date=None, to_date=None
     rows = rows_to_list(conn.execute(q, params).fetchall())
     conn.close(); return rows
 
+# Per-department "completed job" log tables — each station leader's daily work
+# records. Maps a station/department code to its log table + the columns the
+# daily Production Report needs (uniform output shape regardless of table).
+#   (table, pk, timestamp col, qty col, qty label, operator col, has notes)
+_STATION_LOG_MAP = {
+    'laminating': ('laminating_log', 'lam_id',    'shift_start', 'pcs_actual',  'pcs',     'emp_code_1',   True),
+    'cold_press': ('cold_press_log', 'cp_id',     'pressed_at',  'pcs_out',     'pcs out', 'operator_name', False),
+    'hot_press':  ('hot_press_log',  'hp_id',     'pressed_at',  'pcs_out',     'pcs out', 'operator_name', False),
+    'repair':     ('repair_log',     'repair_id', 'repaired_at', 'pcs_repaired','pcs',     'emp_code_1',   True),
+    'sanding':    ('sanding_log',    'sand_id',   'sanded_at',   'pcs_out',     'pcs out', 'operator_name', True),
+    'grading':    ('grading_log',    'grade_id',  'graded_at',   'pcs_grade_a', 'grade A', 'grader_name',  True),
+    'packing':    ('packing_log',    'pack_id',   'logged_at',   'pcs_packed',  'packed',  'operator_name', True),
+    'glue_mix':   ('glue_mix_log',   'mix_id',    'mixed_at',    'qty_kg',      'kg',      'operator_name', True),
+}
+
+def get_station_day_jobs(dept, line_id=None, date=None):
+    """Completed-job log entries at a station for one day (Daily Production
+    Report). Uniform rows: log_id, batch_id, qty, qty_label, operator, notes,
+    logged_at, line_id. Stations without a production log (fc/production) -> []."""
+    m = _STATION_LOG_MAP.get((dept or '').lower())
+    if not m or not date:
+        return []
+    table, pk, ts, qty, qty_label, op, has_notes = m
+    notes_sel = "COALESCE(lg.notes,'')" if has_notes else "''"
+    conn = get_db()
+    q = f"""SELECT lg.{pk} AS log_id, lg.batch_id AS batch_id,
+                   lg.{qty} AS qty, COALESCE(lg.{op},'') AS operator,
+                   {notes_sel} AS notes, lg.{ts} AS logged_at,
+                   COALESCE(pb.line_id,'') AS line_id
+            FROM {table} lg
+            LEFT JOIN prod_batch pb ON pb.batch_id = lg.batch_id
+            WHERE DATE(lg.{ts}) = ?"""
+    params = [date]
+    if line_id:
+        q += " AND (pb.line_id = ? OR pb.line_id IS NULL)"
+        params.append(line_id)
+    q += f" ORDER BY lg.{ts}"
+    rows = rows_to_list(conn.execute(q, params).fetchall())
+    conn.close()
+    for r in rows:
+        r['qty_label'] = qty_label
+        r['dept'] = dept
+    return rows
+
 def log_station_stock_movement(data: dict) -> dict:
     """Log a movement and update station_stock current_qty.
        movement_type: RECEIVE (+), ISSUE (-), ADJUST (set to qty), BATCH_USE (-)

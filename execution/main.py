@@ -55,6 +55,7 @@ from database import (
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
     get_attendance, save_attendance, delete_attendance, get_attendance_summary,
     get_station_stock, get_station_stock_movements, log_station_stock_movement,
+    get_station_day_jobs,
     update_station_stock_min,
     get_station_presets, save_station_preset, delete_station_preset, touch_station_preset,
     log_glue_mix, log_laminating, advance_laminating,
@@ -2193,6 +2194,22 @@ def list_stock_movements(department: str, line_id: Optional[str] = None,
                          user: dict = Depends(require_auth)):
     return get_station_stock_movements(department, line_id=line_id,
                                        from_date=from_date, to_date=to_date)
+
+@app.get("/api/station/daily-report")
+def station_daily_report(department: str, line_id: Optional[str] = None,
+                         date: Optional[str] = None, user: dict = Depends(require_auth)):
+    """All data for a station's printable daily reports (Production + Stock &
+    Utilization) for one day: completed-job logs, stock movements, and the
+    consumable requests raised. Defaults to today."""
+    from datetime import date as _date
+    day = date or _date.today().isoformat()
+    jobs = get_station_day_jobs(department, line_id=line_id, date=day)
+    movements = get_station_stock_movements(department, line_id=line_id,
+                                            from_date=day, to_date=day, limit=1000)
+    reqs = [r for r in get_consumable_requests(department=department, line_id=line_id)
+            if (r.get('created_at') or '')[:10] == day]
+    return {"date": day, "department": department, "line_id": line_id or '',
+            "jobs": jobs, "movements": movements, "requests": reqs}
 
 @app.post("/api/station-stock/movement", status_code=201)
 def post_stock_movement(body: dict, user: dict = Depends(require_auth)):
