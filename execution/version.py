@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.57"
+VERSION    = "2.21.58"
 BUILD_DATE = "2026-06-19"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.58", "2026-06-19", "Station Leader Hub: removed the duplicate non-scoped 'Request Consumables' header button (added in 2.21.55). Consumable requests now go solely through the scope-locked 'Request from Warehouse' button on the Stock & Movements tab (stOpenWHRequest), which is tied to the selected station + line. Avoids the confusion of two request buttons where one wasn't locked to the chosen department/line."),
     ("2.21.57", "2026-06-19", "Reconcile config drift: commit the FINANCE role option to the repo. The User Management Role dropdown's 'Finance (Accounting + Purchasing portal)' option existed only as an uncommitted manual edit on the server (never in git, per git -S), so any deploy would have wiped it. Added it to index.html's um-role + the frontend ROLE / ROLE_LABEL maps. FINANCE was already a valid backend role (CHECK constraint + Role.FINANCE) with a dedicated Finance Portal (finance.html at /finance); Finance users sign in there, the main-app dropdown just lets an admin create the account. No backend change."),
     ("2.21.56", "2026-06-19", "Role dropdown: FC / Cutting, PUV, PVS, PSP are now selectable as scoped station-leader roles in User Management. Picking one creates a Department Leader auto-locked to that station/line (no manual department grid; an info note explains it), and round-trips on edit. Under the hood they save as DEPARTMENT_LEADER + a fixed assignment (FC->FC all-lines; PUV/PVS/PSP->a single generic 'Production' station on that line, pending their real flow). The Station Leader Hub renders the matching scope button and tolerates the generic 'production' station. No backend/role-constraint change. Verified e2e: creating each preset stores the right role+assignment; edit shows the preset back; the scoped user lands on their station in the Hub."),
     ("2.21.55", "2026-06-19", "Station Leader Hub access scoping. For Department Leaders the free-choice Station + Line dropdowns are now hidden and replaced by buttons for ONLY the (station, line) scopes they're assigned to (slhRenderScopeButtons; auto-selects the first). Managerial/Planning keep the dropdowns. Also removed the standalone 'Request Consumables' Supply nav item — consumable requests are now raised via a 'Request Consumables' button in the Station Leader Hub header (opens the same request modal). Frontend-only."),

@@ -2087,9 +2087,10 @@
         </select>
       </span>
       <div id="sl-scope-buttons" class="d-none align-items-center gap-1 flex-wrap"></div>
-      <button class="btn btn-success btn-sm" onclick="crOpenNew(); bootstrap.Modal.getOrCreateInstance(document.getElementById('newConsumableModal')).show();" title="Request consumables from Warehouse">
-        <i class="bi bi-cart-plus me-1"></i>Request Consumables
-      </button>
+      <!-- Consumable requests are raised via the scope-locked "Request from
+           Warehouse" button on the Stock & Movements tab (stOpenWHRequest),
+           which is tied to the selected station + line. The old non-scoped
+           header button was removed. -->
       <button class="btn btn-outline-secondary btn-sm" onclick="msOpenSetup()" id="sl-machine-setup-btn">
         <i class="bi bi-gear me-1"></i>Machine Setup
       </button>
