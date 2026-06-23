@@ -2097,15 +2097,9 @@
       <button class="btn btn-outline-secondary btn-sm" onclick="slhRefresh()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
       <span class="vr mx-1"></span>
       <input type="date" class="form-control form-control-sm" id="sl-report-date" style="width:140px" title="Daily report date">
-      <div class="btn-group btn-group-sm">
-        <button class="btn btn-dark dropdown-toggle" data-bs-toggle="dropdown" title="Print the day's report to sign (Save as PDF)">
-          <i class="bi bi-printer me-1"></i>Daily Report
-        </button>
-        <ul class="dropdown-menu dropdown-menu-end">
-          <li><a class="dropdown-item" href="#" onclick="slhPrintProductionReport();return false;"><i class="bi bi-clipboard-data me-2"></i>Production Report</a></li>
-          <li><a class="dropdown-item" href="#" onclick="slhPrintStockReport();return false;"><i class="bi bi-box-seam me-2"></i>Stock &amp; Utilization Report</a></li>
-        </ul>
-      </div>
+      <button class="btn btn-dark btn-sm" onclick="slhPrintDailyReport()" title="Print the day's combined report to sign (Save as PDF)">
+        <i class="bi bi-printer me-1"></i>Daily Report
+      </button>
     </div>
   </div>
 
@@ -2122,6 +2116,9 @@
     </button></li>
     <li class="nav-item"><button class="nav-link" data-slh-tab="stock" onclick="slhSwitchTab('stock')">
       <i class="bi bi-box-seam me-1"></i>Stock &amp; Movements
+    </button></li>
+    <li class="nav-item"><button class="nav-link" data-slh-tab="review" onclick="slhSwitchTab('review')">
+      <i class="bi bi-check2-square me-1"></i>Daily Review
     </button></li>
     <li class="nav-item"><button class="nav-link" data-slh-tab="reports" onclick="slhSwitchTab('reports')">
       <i class="bi bi-bar-chart me-1"></i>HR Summary
@@ -2320,6 +2317,7 @@
   <div id="slh-pane-team" class="slh-pane d-none"></div>
   <div id="slh-pane-stock" class="slh-pane d-none"></div>
   <div id="slh-pane-movements" class="slh-pane d-none"></div>
+  <div id="slh-pane-review" class="slh-pane d-none"></div>
   <div id="slh-pane-reports" class="slh-pane d-none"></div>
 
   <!-- ── Tab: FORKLIFTS — registry + oil requests ─────────────── -->

@@ -2549,24 +2549,49 @@ function slhRenderScopeButtons(){
   if(first) first.click();
 }
 
-// ── Daily station reports (print → Save as PDF, physically signed) ──
-// No digital sign-off: the leader prints/saves each report and signs the paper.
-// The print window's title is set to the systematic filename so "Save as PDF"
-// pre-fills e.g. 2026-06-22_P01_LAMINATING_production.pdf.
+// ── Daily station report (print → Save as PDF, physically signed) ──
+// One combined Thai + Chinese sheet (production + stock + utilisation). The
+// print window's title = systematic filename so Save-as-PDF pre-fills e.g.
+// 2026-06-22_P01_LAMINATING_daily.pdf. No digital sign-off — printed & signed.
 const _SLH_REPORT_CSS = `
-  *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px;font-size:12px}
-  h1{font-size:18px;margin:0 0 2px} h2{font-size:13px;margin:18px 0 6px;border-bottom:2px solid #333;padding-bottom:2px}
-  .meta{font-size:12px;margin-bottom:6px} .meta b{display:inline-block;min-width:64px}
+  *{box-sizing:border-box} body{font-family:'Tahoma','Microsoft Sans Serif',Arial,sans-serif;color:#111;margin:24px;font-size:12px}
+  .coh{display:flex;align-items:center;gap:14px;border-bottom:3px solid #333;padding-bottom:8px;margin-bottom:8px}
+  .coh img{height:50px} .coh .nm{font-size:17px;font-weight:bold} .coh .nm small{font-weight:normal;color:#444}
+  .coh .addr{font-size:11px;color:#666}
+  h1{font-size:16px;margin:6px 0 2px} h1 small{font-weight:normal;color:#555;font-size:.8em}
+  h2{font-size:13px;margin:16px 0 6px;border-bottom:2px solid #333;padding-bottom:2px} h2 small{font-weight:normal;color:#666}
+  .meta{font-size:12px;margin-bottom:4px}
   table{width:100%;border-collapse:collapse;margin-bottom:8px}
   th,td{border:1px solid #999;padding:4px 6px;text-align:left;vertical-align:top}
-  th{background:#eee} td.num,th.num{text-align:right;white-space:nowrap} tfoot td{font-weight:bold;background:#f5f5f5}
-  .empty{color:#777;font-style:italic;padding:8px 0}
-  .sign{margin-top:40px;display:flex;justify-content:space-between;gap:48px}
-  .sign .box{flex:1} .sign .line{margin-top:38px;border-top:1px solid #333;padding-top:3px;text-align:center}
-  .foot{margin-top:22px;font-size:10px;color:#666}
-  @media print{body{margin:12mm}}
+  th{background:#eee;font-size:11px} th small{display:block;color:#666;font-weight:normal}
+  td.num,th.num{text-align:right;white-space:nowrap} tfoot td{font-weight:bold;background:#f5f5f5}
+  .empty{color:#777;font-style:italic;padding:6px 0}
+  .sign{margin-top:36px;display:flex;justify-content:space-between;gap:48px}
+  .sign .box{flex:1} .sign .line{margin-top:38px;border-top:1px solid #333;padding-top:3px;text-align:center;font-size:11px}
+  .foot{margin-top:20px;font-size:10px;color:#666}
+  @media print{body{margin:10mm}}
 `;
 function _slhEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// Thai (primary) + Chinese (secondary) labels. Edit company name/address here.
+const _RPT_COMPANY = { th:'บริษัท พีวีวูด', zh:'PVWood', addr:'' }; // addr shown if non-empty
+const _RPT = {
+  title:['รายงานการผลิตและสต๊อกประจำวัน','每日生产与库存报告'],
+  line:['สายการผลิต','生产线'], station:['สถานี','工位'], date:['วันที่','日期'],
+  jobs:['งานที่ผลิตเสร็จ','完成生产'], time:['เวลา','时间'], batch:['ล็อต','批次'],
+  qty:['จำนวน','数量'], defect:['ของเสีย/NCG','不良品'], operator:['ผู้ปฏิบัติงาน','操作员'],
+  notes:['หมายเหตุ','备注'], total:['รวม','合计'],
+  balances:['ยอดสต๊อกสถานี','工位库存'], material:['วัสดุ','物料'],
+  opening:['ยอดยกมา','期初'], change:['เปลี่ยนแปลง','变动'], closing:['ยอดคงเหลือ','期末'],
+  movements:['การเคลื่อนไหวสต๊อก','库存变动'], type:['ประเภท','类型'],
+  requests:['คำขอวัสดุสิ้นเปลือง','耗材申请'], status:['สถานะ','状态'],
+  none:['ไม่มีข้อมูลในวันนี้','当天无数据'],
+  leaderSign:['หัวหน้าสถานี — ลงชื่อ / วันที่','工位负责人 — 签字 / 日期'],
+  supSign:['ผู้ควบคุม — ลงชื่อ / วันที่','主管 — 签字 / 日期'],
+  gen:['จัดทำโดยระบบ PVWood ERP','由 PVWood ERP 系统生成'],
+};
+function _LT(k){ return _slhEsc((_RPT[k]||[k])[0]); }            // Thai only
+function _LH(k){ const v=_RPT[k]||[k,'']; return `${_slhEsc(v[0])}<small>${_slhEsc(v[1])}</small>`; } // TH + ZH (header)
+function _LB(k){ const v=_RPT[k]||[k,'']; return `${_slhEsc(v[0])} / ${_slhEsc(v[1])}`; }            // TH / ZH (inline)
 async function _slhFetchDailyReport(){
   const dept = document.getElementById('sl-dept-scope')?.value || '';
   const line = document.getElementById('sl-line')?.value || '';
@@ -2574,77 +2599,152 @@ async function _slhFetchDailyReport(){
   const qs = `department=${encodeURIComponent(dept)}${line?`&line_id=${encodeURIComponent(line)}`:''}&date=${date}`;
   const data = await api(`/api/station/daily-report?${qs}`);
   data._deptLabel = (typeof SLH_DEPT_LABEL!=='undefined' && SLH_DEPT_LABEL[dept]) || dept;
-  data._lineLabel = line || 'All lines';
+  data._lineLabel = line || 'ALL';
   return data;
 }
 function _slhReportFilename(data, kind){
   return `${data.date}_${(data.line_id||'ALL')}_${(data.department||'').toUpperCase()}_${kind}`;
 }
-function _slhReportHeader(title, data){
-  return `<h1>PVWood — ${title}</h1>
-    <div class="meta"><b>Line:</b> ${_slhEsc(data._lineLabel)} &nbsp;&nbsp; <b>Station:</b> ${_slhEsc(data._deptLabel)}</div>
-    <div class="meta"><b>Date:</b> ${_slhEsc(data.date)}</div>`;
+function _slhCompanyHeader(){
+  const a = _RPT_COMPANY.addr ? `<div class="addr">${_slhEsc(_RPT_COMPANY.addr)}</div>` : '';
+  return `<div class="coh">
+      <img src="/static/assets/pvwood-logo.svg" onerror="this.style.display='none'">
+      <div><div class="nm">${_slhEsc(_RPT_COMPANY.th)} <small>${_slhEsc(_RPT_COMPANY.zh)}</small></div>${a}</div>
+    </div>`;
 }
 function _slhSignBlock(){
   return `<div class="sign">
-      <div class="box"><div class="line">Station Leader — sign / date</div></div>
-      <div class="box"><div class="line">Supervisor — sign / date</div></div>
+      <div class="box"><div class="line">${_LB('leaderSign')}</div></div>
+      <div class="box"><div class="line">${_LB('supSign')}</div></div>
     </div>
-    <div class="foot">Generated by PVWood ERP on ${new Date().toLocaleString()}. Retain per company record-keeping policy.</div>`;
+    <div class="foot">${_LB('gen')} — ${new Date().toLocaleString()}</div>`;
 }
 function _slhOpenPrint(bodyHtml, filename){
   const w = window.open('', '_blank');
   if(!w){ toast('Allow pop-ups to print/save the report','warning'); return; }
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${_slhEsc(filename)}</title>`+
+  w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${_slhEsc(filename)}</title>`+
     `<style>${_SLH_REPORT_CSS}</style></head><body>${bodyHtml}</body></html>`);
   w.document.close();
   setTimeout(()=>{ try{ w.focus(); w.print(); }catch{} }, 350);
 }
-async function slhPrintProductionReport(){
+async function slhPrintDailyReport(){
   let data; try{ data = await _slhFetchDailyReport(); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
-  const jobs = data.jobs||[];
-  let total = 0;
-  const rows = jobs.map(j=>{ total += Number(j.qty)||0; return `<tr>
+  const jobs = data.jobs||[], bal = data.balances||[], mv = data.movements||[], rq = data.requests||[];
+  const anyDefect = jobs.some(j => Number(j.defect)>0);
+  // 1) Production jobs
+  let qTot=0, dTot=0;
+  const jobRows = jobs.map(j=>{ qTot+=Number(j.qty)||0; dTot+=Number(j.defect)||0; return `<tr>
       <td>${_slhEsc((j.logged_at||'').slice(11,16))}</td>
       <td>${_slhEsc(j.batch_id)}</td>
       <td class="num">${_slhEsc(j.qty)} <span style="color:#666">${_slhEsc(j.qty_label)}</span></td>
+      ${anyDefect?`<td class="num">${_slhEsc(j.defect)}</td>`:''}
       <td>${_slhEsc(j.operator)}</td>
       <td>${_slhEsc(j.notes)}</td></tr>`; }).join('');
-  const body = _slhReportHeader('Daily Production Report', data) +
-    `<h2>Completed Jobs (${jobs.length})</h2>` +
-    (jobs.length
-      ? `<table><thead><tr><th>Time</th><th>Batch</th><th class="num">Qty</th><th>Operator</th><th>Notes</th></tr></thead>`+
-        `<tbody>${rows}</tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${total}</td><td colspan="2"></td></tr></tfoot></table>`
-      : `<div class="empty">No completed jobs recorded for this station on ${_slhEsc(data.date)}.</div>`) +
+  const jobsTbl = jobs.length
+    ? `<table><thead><tr><th>${_LH('time')}</th><th>${_LH('batch')}</th><th class="num">${_LH('qty')}</th>`+
+      `${anyDefect?`<th class="num">${_LH('defect')}</th>`:''}<th>${_LH('operator')}</th><th>${_LH('notes')}</th></tr></thead>`+
+      `<tbody>${jobRows}</tbody><tfoot><tr><td colspan="2">${_LB('total')}</td><td class="num">${qTot}</td>`+
+      `${anyDefect?`<td class="num">${dTot}</td>`:''}<td colspan="2"></td></tr></tfoot></table>`
+    : `<div class="empty">${_LB('none')}</div>`;
+  // 2) Stock balances (opening / change / closing)
+  const balTbl = bal.length
+    ? `<table><thead><tr><th>${_LH('material')}</th><th class="num">${_LH('opening')}</th>`+
+      `<th class="num">${_LH('change')}</th><th class="num">${_LH('closing')}</th></tr></thead><tbody>`+
+      bal.map(b=>`<tr><td>${_slhEsc(b.code)} ${_slhEsc(b.name)}</td>`+
+        `<td class="num">${_slhEsc(b.opening)} ${_slhEsc(b.unit||'')}</td>`+
+        `<td class="num">${b.change>0?'+':''}${_slhEsc(b.change)}</td>`+
+        `<td class="num">${_slhEsc(b.closing)} ${_slhEsc(b.unit||'')}</td></tr>`).join('')+
+      `</tbody></table>`
+    : `<div class="empty">${_LB('none')}</div>`;
+  // 3) Movements
+  const mvTbl = mv.length
+    ? `<table><thead><tr><th>${_LH('time')}</th><th>${_LH('type')}</th><th>${_LH('material')}</th>`+
+      `<th class="num">${_LH('qty')}</th><th>${_LH('batch')}</th><th>${_LH('notes')}</th></tr></thead><tbody>`+
+      mv.map(m=>`<tr><td>${_slhEsc((m.created_at||'').slice(11,16))}</td><td>${_slhEsc(m.movement_type)}</td>`+
+        `<td>${_slhEsc(m.material_code)} ${_slhEsc(m.material_name)}</td>`+
+        `<td class="num">${_slhEsc(m.qty_change)} ${_slhEsc(m.unit||'')}</td>`+
+        `<td>${_slhEsc(m.batch_ref)}</td><td>${_slhEsc(m.notes)}</td></tr>`).join('')+
+      `</tbody></table>`
+    : `<div class="empty">${_LB('none')}</div>`;
+  // 4) Consumable requests
+  const rqTbl = rq.length
+    ? `<table><thead><tr><th>${_LH('time')}</th><th>${_LH('material')}</th><th class="num">${_LH('qty')}</th>`+
+      `<th>${_LH('status')}</th></tr></thead><tbody>`+
+      rq.map(r=>`<tr><td>${_slhEsc((r.created_at||'').slice(11,16))}</td><td>${_slhEsc(r.material_name)}</td>`+
+        `<td class="num">${_slhEsc(r.qty_requested)} ${_slhEsc(r.unit||'')}</td><td>${_slhEsc(r.status)}</td></tr>`).join('')+
+      `</tbody></table>`
+    : `<div class="empty">${_LB('none')}</div>`;
+  const body = _slhCompanyHeader() +
+    `<h1>${_LT('title')} <small>${_slhEsc(_RPT.title[1])}</small></h1>` +
+    `<div class="meta">${_LB('line')}: <b>${_slhEsc(data._lineLabel)}</b> &nbsp; ${_LB('station')}: <b>${_slhEsc(data._deptLabel)}</b> &nbsp; ${_LB('date')}: <b>${_slhEsc(data.date)}</b></div>` +
+    `<h2>${_LT('jobs')} <small>${_slhEsc(_RPT.jobs[1])} (${jobs.length})</small></h2>` + jobsTbl +
+    `<h2>${_LT('balances')} <small>${_slhEsc(_RPT.balances[1])}</small></h2>` + balTbl +
+    `<h2>${_LT('movements')} <small>${_slhEsc(_RPT.movements[1])} (${mv.length})</small></h2>` + mvTbl +
+    `<h2>${_LT('requests')} <small>${_slhEsc(_RPT.requests[1])} (${rq.length})</small></h2>` + rqTbl +
     _slhSignBlock();
-  _slhOpenPrint(body, _slhReportFilename(data,'production'));
+  _slhOpenPrint(body, _slhReportFilename(data,'daily'));
 }
-async function slhPrintStockReport(){
-  let data; try{ data = await _slhFetchDailyReport(); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
-  const mv = data.movements||[], rq = data.requests||[];
+
+// ── Daily Review tab — edit-in-place corrections (audited; stock reconciles) ──
+let _slhReviewDept = '', _slhReviewLine = '', _slhReviewDate = '';
+async function slhLoadReview(){
+  const host = document.getElementById('slh-pane-review');
+  if(!host) return;
+  host.innerHTML = '<div class="text-muted small py-3">Loading…</div>';
+  let data;
+  try{ data = await _slhFetchDailyReport(); }
+  catch(e){ host.innerHTML = `<div class="alert alert-warning py-2 small mb-0">Load failed: ${_slhEsc(e.message||e)}</div>`; return; }
+  _slhReviewDept = data.department; _slhReviewLine = data.line_id || ''; _slhReviewDate = data.date;
+  const jobs = data.jobs || [], mv = data.movements || [];
+  const jobRows = jobs.map(j=>`<tr>
+      <td class="small text-muted text-nowrap">${_slhEsc((j.logged_at||'').slice(11,16))}</td>
+      <td><input class="form-control form-control-sm" style="width:130px" id="rvj-batch-${_slhEsc(j.log_id)}" value="${_slhEsc(j.batch_id)}"></td>
+      <td class="text-nowrap"><input type="number" step="0.01" class="form-control form-control-sm d-inline-block" style="width:84px" id="rvj-qty-${_slhEsc(j.log_id)}" value="${_slhEsc(j.qty)}"> <span class="text-muted small">${_slhEsc(j.qty_label)}</span></td>
+      <td class="small">${_slhEsc(j.operator)}</td>
+      <td class="small">${_slhEsc(j.notes)}</td>
+      <td><button class="btn btn-sm btn-primary" onclick="slhSaveJob('${_slhEsc(j.log_id)}')"><i class="bi bi-check2"></i></button></td>
+    </tr>`).join('');
   const mvRows = mv.map(m=>`<tr>
-      <td>${_slhEsc((m.created_at||'').slice(11,16))}</td>
-      <td>${_slhEsc(m.movement_type)}</td>
-      <td>${_slhEsc(m.material_code)} ${_slhEsc(m.material_name)}</td>
-      <td class="num">${_slhEsc(m.qty_change)} ${_slhEsc(m.unit||'')}</td>
-      <td>${_slhEsc(m.batch_ref)}</td>
-      <td>${_slhEsc(m.notes)}</td></tr>`).join('');
-  const rqRows = rq.map(r=>`<tr>
-      <td>${_slhEsc((r.created_at||'').slice(11,16))}</td>
-      <td>${_slhEsc(r.material_name)}</td>
-      <td class="num">${_slhEsc(r.qty_requested)} ${_slhEsc(r.unit||'')}</td>
-      <td>${_slhEsc(r.status)}</td></tr>`).join('');
-  const body = _slhReportHeader('Daily Stock &amp; Utilization Report', data) +
-    `<h2>Stock Movements (${mv.length})</h2>` +
-    (mv.length
-      ? `<table><thead><tr><th>Time</th><th>Type</th><th>Material</th><th class="num">Qty</th><th>Batch</th><th>Notes</th></tr></thead><tbody>${mvRows}</tbody></table>`
-      : `<div class="empty">No stock movements recorded on ${_slhEsc(data.date)}.</div>`) +
-    `<h2>Consumable Requests (${rq.length})</h2>` +
-    (rq.length
-      ? `<table><thead><tr><th>Time</th><th>Material</th><th class="num">Qty</th><th>Status</th></tr></thead><tbody>${rqRows}</tbody></table>`
-      : `<div class="empty">No consumable requests raised on ${_slhEsc(data.date)}.</div>`) +
-    _slhSignBlock();
-  _slhOpenPrint(body, _slhReportFilename(data,'stock'));
+      <td class="small text-muted text-nowrap">${_slhEsc((m.created_at||'').slice(11,16))}</td>
+      <td class="small">${_slhEsc(m.movement_type)}</td>
+      <td class="small">${_slhEsc(m.material_code)} ${_slhEsc(m.material_name)}</td>
+      <td><input type="number" step="0.01" class="form-control form-control-sm" style="width:90px" id="rvm-qty-${m.id}" value="${_slhEsc(m.qty_change)}"></td>
+      <td><input class="form-control form-control-sm" style="width:130px" id="rvm-batch-${m.id}" value="${_slhEsc(m.batch_ref)}"></td>
+      <td><button class="btn btn-sm btn-primary" onclick="slhSaveMovement(${m.id})"><i class="bi bi-check2"></i></button></td>
+    </tr>`).join('');
+  const deptLbl = (typeof SLH_DEPT_LABEL!=='undefined' && SLH_DEPT_LABEL[_slhReviewDept]) || _slhReviewDept;
+  host.innerHTML = `
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <div><span class="badge bg-secondary">${_slhEsc(_slhReviewLine||'ALL')}</span>
+        <span class="badge bg-info text-dark">${_slhEsc(deptLbl)}</span> <b>${_slhEsc(_slhReviewDate)}</b>
+        <span class="text-muted small ms-2">(change the date in the header, then Refresh)</span></div>
+      <div class="small text-muted"><i class="bi bi-info-circle me-1"></i>Edit a value then save — corrections are written to the audit log; movement-qty edits reconcile station stock.</div>
+    </div>
+    <h6 class="mt-1"><i class="bi bi-clipboard-data me-1"></i>Completed Jobs (${jobs.length})</h6>
+    ${jobs.length ? `<div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-3">
+      <thead class="table-light"><tr><th>Time</th><th>Batch</th><th>Qty</th><th>Operator</th><th>Notes</th><th></th></tr></thead>
+      <tbody>${jobRows}</tbody></table></div>` : '<div class="text-muted small mb-3">No completed jobs for this day.</div>'}
+    <h6 class="mt-2"><i class="bi bi-box-seam me-1"></i>Stock Movements (${mv.length})</h6>
+    ${mv.length ? `<div class="table-responsive"><table class="table table-sm table-bordered align-middle">
+      <thead class="table-light"><tr><th>Time</th><th>Type</th><th>Material</th><th>Qty</th><th>Batch Ref</th><th></th></tr></thead>
+      <tbody>${mvRows}</tbody></table></div>` : '<div class="text-muted small">No stock movements for this day.</div>'}`;
+}
+async function slhSaveJob(logId){
+  const qEl = document.getElementById('rvj-qty-'+logId), bEl = document.getElementById('rvj-batch-'+logId);
+  const qty = parseFloat(qEl.value), batch = (bEl.value||'').trim();
+  try{
+    await api(`/api/station/job/${encodeURIComponent(_slhReviewDept)}/${encodeURIComponent(logId)}`,'PATCH',
+              {qty: isNaN(qty)?null:qty, batch_id: batch||null});
+    toast('Job corrected'); slhLoadReview();
+  }catch(e){ toast('Save failed: '+(e.message||e),'danger'); }
+}
+async function slhSaveMovement(id){
+  const qEl = document.getElementById('rvm-qty-'+id), bEl = document.getElementById('rvm-batch-'+id);
+  const qty = parseFloat(qEl.value), batch = bEl.value;
+  try{
+    await api(`/api/station/movement/${id}`,'PATCH',{qty_change: isNaN(qty)?null:qty, batch_ref: batch});
+    toast('Movement corrected — stock reconciled'); slhLoadReview();
+  }catch(e){ toast('Save failed: '+(e.message||e),'danger'); }
 }
 
 function slhPickScope(dept, line, btn){
@@ -2770,6 +2870,7 @@ function slhSwitchTab(tab){
   else if(tab === 'batches') slLoadBatches();
   else if(tab === 'team') { _slhEnsureStLoaded(); stLoadAttendance?.(); }
   else if(tab === 'stock') { _slhEnsureStLoaded(); stLoadStock?.(); stLoadMovements?.(); }
+  else if(tab === 'review') slhLoadReview();
   else if(tab === 'reports') { _slhEnsureStLoaded(); stLoadSummary?.(); }
   else if(tab === 'forklifts') { flkLoad(); oilLoad(); }
 }

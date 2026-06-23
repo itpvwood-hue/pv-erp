@@ -55,7 +55,8 @@ from database import (
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
     get_attendance, save_attendance, delete_attendance, get_attendance_summary,
     get_station_stock, get_station_stock_movements, log_station_stock_movement,
-    get_station_day_jobs,
+    get_station_day_jobs, get_station_day_balances,
+    correct_station_job, correct_stock_movement,
     update_station_stock_min,
     get_station_presets, save_station_preset, delete_station_preset, touch_station_preset,
     log_glue_mix, log_laminating, advance_laminating,
@@ -2206,10 +2207,31 @@ def station_daily_report(department: str, line_id: Optional[str] = None,
     jobs = get_station_day_jobs(department, line_id=line_id, date=day)
     movements = get_station_stock_movements(department, line_id=line_id,
                                             from_date=day, to_date=day, limit=1000)
+    balances = get_station_day_balances(department, line_id=line_id, date=day)
     reqs = [r for r in get_consumable_requests(department=department, line_id=line_id)
             if (r.get('created_at') or '')[:10] == day]
     return {"date": day, "department": department, "line_id": line_id or '',
-            "jobs": jobs, "movements": movements, "requests": reqs}
+            "jobs": jobs, "movements": movements, "balances": balances, "requests": reqs}
+
+@app.patch("/api/station/job/{dept}/{log_id}")
+def correct_job_route(dept: str, log_id: str, body: dict, user: dict = Depends(require_auth)):
+    """Daily-review correction of a completed-job log: {qty?, batch_id?}."""
+    try:
+        return correct_station_job(dept, log_id,
+                                   qty=body.get('qty'), batch_id=body.get('batch_id'),
+                                   actor=user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.patch("/api/station/movement/{movement_id}")
+def correct_movement_route(movement_id: int, body: dict, user: dict = Depends(require_auth)):
+    """Daily-review correction of a station stock movement: {qty_change?, batch_ref?}."""
+    try:
+        return correct_stock_movement(movement_id,
+                                      qty_change=body.get('qty_change'),
+                                      batch_ref=body.get('batch_ref'), actor=user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/station-stock/movement", status_code=201)
 def post_stock_movement(body: dict, user: dict = Depends(require_auth)):

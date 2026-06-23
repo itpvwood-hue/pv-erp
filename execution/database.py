@@ -5135,18 +5135,23 @@ _STATION_LOG_MAP = {
     'glue_mix':   ('glue_mix_log',   'mix_id',    'mixed_at',    'qty_kg',      'kg',      'operator_name', True),
 }
 
+# Defect/NCG piece expression per station, where the log records it.
+_STATION_DEFECT = {'grading': '(lg.pcs_ncg + lg.pcs_reject)', 'sanding': 'lg.defect_count'}
+
 def get_station_day_jobs(dept, line_id=None, date=None):
     """Completed-job log entries at a station for one day (Daily Production
-    Report). Uniform rows: log_id, batch_id, qty, qty_label, operator, notes,
-    logged_at, line_id. Stations without a production log (fc/production) -> []."""
+    Report). Uniform rows: log_id, batch_id, qty, qty_label, defect, operator,
+    notes, logged_at, line_id. Stations without a production log -> []."""
     m = _STATION_LOG_MAP.get((dept or '').lower())
     if not m or not date:
         return []
     table, pk, ts, qty, qty_label, op, has_notes = m
     notes_sel = "COALESCE(lg.notes,'')" if has_notes else "''"
+    defect_sel = _STATION_DEFECT.get((dept or '').lower(), '0')
     conn = get_db()
     q = f"""SELECT lg.{pk} AS log_id, lg.batch_id AS batch_id,
-                   lg.{qty} AS qty, COALESCE(lg.{op},'') AS operator,
+                   lg.{qty} AS qty, {defect_sel} AS defect,
+                   COALESCE(lg.{op},'') AS operator,
                    {notes_sel} AS notes, lg.{ts} AS logged_at,
                    COALESCE(pb.line_id,'') AS line_id
             FROM {table} lg
@@ -5163,6 +5168,111 @@ def get_station_day_jobs(dept, line_id=None, date=None):
         r['qty_label'] = qty_label
         r['dept'] = dept
     return rows
+
+def get_station_day_balances(dept, line_id=None, date=None):
+    """Opening / change / closing station-stock balance for each material that
+    moved at this station on the given day. closing = current_qty minus all
+    movements after the day; opening = closing minus the day's net change."""
+    if not date:
+        return []
+    conn = get_db()
+    line = line_id or ''
+    mats = rows_to_list(conn.execute(
+        """SELECT DISTINCT mv.material_id, m.code, m.name, m.unit
+           FROM station_stock_movements mv JOIN materials m ON m.id=mv.material_id
+           WHERE mv.department=? AND mv.line_id=? AND DATE(mv.created_at)=?
+           ORDER BY m.name""", (dept, line, date)).fetchall())
+    out = []
+    for mr in mats:
+        mid = mr['material_id']
+        cur = conn.execute(
+            "SELECT COALESCE(current_qty,0) AS q FROM station_stock WHERE department=? AND line_id=? AND material_id=?",
+            (dept, line, mid)).fetchone()
+        current = float(cur['q']) if cur else 0.0
+        after = conn.execute(
+            "SELECT COALESCE(SUM(qty_change),0) AS s FROM station_stock_movements WHERE department=? AND line_id=? AND material_id=? AND DATE(created_at)>?",
+            (dept, line, mid, date)).fetchone()['s']
+        during = conn.execute(
+            "SELECT COALESCE(SUM(qty_change),0) AS s FROM station_stock_movements WHERE department=? AND line_id=? AND material_id=? AND DATE(created_at)=?",
+            (dept, line, mid, date)).fetchone()['s']
+        closing = current - float(after)
+        opening = closing - float(during)
+        out.append({'material_id': mid, 'code': mr['code'], 'name': mr['name'],
+                    'unit': mr['unit'], 'opening': round(opening, 3),
+                    'change': round(float(during), 3), 'closing': round(closing, 3)})
+    conn.close()
+    return out
+
+def _audit_correction(actor, action_type, summary):
+    """Write an audit-log entry for a daily-review correction (best-effort)."""
+    try:
+        u = actor if isinstance(actor, dict) else {'user_id': actor, 'username': actor}
+        record_action(user=u, action_type=action_type, summary=summary)
+    except Exception:
+        pass
+
+def correct_station_job(dept, log_id, qty=None, batch_id=None, actor=''):
+    """Daily-review correction of a completed-job log: fix the piece count
+    and/or reassign to the correct batch. Edit-in-place + audit."""
+    m = _STATION_LOG_MAP.get((dept or '').lower())
+    if not m:
+        raise ValueError('This station has no editable production log')
+    table, pk, ts, qtycol, qty_label, op, has_notes = m
+    conn = get_db()
+    try:
+        row = conn.execute(
+            f"SELECT {pk} AS pk, batch_id, {qtycol} AS qty FROM {table} WHERE {pk}=?",
+            (log_id,)).fetchone()
+        if not row:
+            raise ValueError('Job log not found')
+        before = {'qty': row['qty'], 'batch_id': row['batch_id']}
+        sets, params = [], []
+        if qty is not None:
+            sets.append(f"{qtycol}=?"); params.append(float(qty))
+        if batch_id is not None and str(batch_id).strip():
+            sets.append("batch_id=?"); params.append(str(batch_id).strip())
+        if not sets:
+            return {'ok': True, 'unchanged': True}
+        params.append(log_id)
+        conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE {pk}=?", params)
+        conn.commit()
+    finally:
+        conn.close()
+    after = {'qty': (float(qty) if qty is not None else before['qty']),
+             'batch_id': (str(batch_id).strip() if batch_id else before['batch_id'])}
+    _audit_correction(actor, 'correct_job', f"{dept} job {log_id}: {before} -> {after}")
+    return {'ok': True, 'before': before, 'after': after}
+
+def correct_stock_movement(movement_id, qty_change=None, batch_ref=None, actor=''):
+    """Daily-review correction of a station stock movement: fix the quantity
+    (station stock auto-reconciles by the delta) and/or the batch reference."""
+    conn = get_db()
+    try:
+        mv = conn.execute("SELECT * FROM station_stock_movements WHERE id=?", (movement_id,)).fetchone()
+        if not mv:
+            raise ValueError('Movement not found')
+        before = {'qty_change': mv['qty_change'], 'batch_ref': mv['batch_ref']}
+        sets, params, delta = [], [], 0.0
+        if qty_change is not None:
+            new_q = float(qty_change); delta = new_q - float(mv['qty_change'] or 0)
+            sets.append("qty_change=?"); params.append(new_q)
+        if batch_ref is not None:
+            sets.append("batch_ref=?"); params.append(str(batch_ref))
+        if not sets:
+            return {'ok': True, 'unchanged': True}
+        params.append(movement_id)
+        conn.execute(f"UPDATE station_stock_movements SET {', '.join(sets)} WHERE id=?", params)
+        if delta:
+            conn.execute("""UPDATE station_stock SET current_qty=COALESCE(current_qty,0)+?,
+                            last_updated=datetime('now')
+                            WHERE department=? AND line_id=? AND material_id=?""",
+                         (delta, mv['department'], mv['line_id'], mv['material_id']))
+        conn.commit()
+    finally:
+        conn.close()
+    _audit_correction(actor, 'correct_movement',
+                      f"movement {movement_id}: {before} (qty delta {delta})")
+    return {'ok': True, 'before': before, 'delta': delta}
 
 def log_station_stock_movement(data: dict) -> dict:
     """Log a movement and update station_stock current_qty.
