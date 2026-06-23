@@ -456,6 +456,21 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_station_stock_dept ON station_stock(department,line_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_station_stock_mvmt ON station_stock_movements(department,created_at)")
+    # Daily-review "review needed" flags. When an upstream station's output is
+    # corrected, downstream job logs of that batch get flagged here so the
+    # station leader confirms each one. Cleared when that job is (re)saved.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS station_job_flags (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            department  TEXT NOT NULL,
+            log_id      TEXT NOT NULL,
+            batch_id    TEXT DEFAULT '',
+            reason      TEXT DEFAULT 'upstream corrected',
+            flagged_at  TEXT DEFAULT (datetime('now')),
+            cleared     INTEGER DEFAULT 0,
+            UNIQUE(department, log_id)
+        )
+    """)
     conn.commit()
 
     # ── Glue Recipes table ────────────────────────────────────────
@@ -5147,17 +5162,20 @@ def get_station_day_jobs(dept, line_id=None, date=None):
         return []
     table, pk, ts, qty, qty_label, op, has_notes = m
     notes_sel = "COALESCE(lg.notes,'')" if has_notes else "''"
-    defect_sel = _STATION_DEFECT.get((dept or '').lower(), '0')
+    deptl = (dept or '').lower()
+    defect_sel = _STATION_DEFECT.get(deptl, '0')
     conn = get_db()
     q = f"""SELECT lg.{pk} AS log_id, lg.batch_id AS batch_id,
                    lg.{qty} AS qty, {defect_sel} AS defect,
                    COALESCE(lg.{op},'') AS operator,
                    {notes_sel} AS notes, lg.{ts} AS logged_at,
-                   COALESCE(pb.line_id,'') AS line_id
+                   COALESCE(pb.line_id,'') AS line_id,
+                   (SELECT COUNT(*) FROM station_job_flags f
+                      WHERE f.department=? AND f.log_id=lg.{pk} AND f.cleared=0) AS flagged
             FROM {table} lg
             LEFT JOIN prod_batch pb ON pb.batch_id = lg.batch_id
             WHERE DATE(lg.{ts}) = ?"""
-    params = [date]
+    params = [deptl, date]
     if line_id:
         q += " AND (pb.line_id = ? OR pb.line_id IS NULL)"
         params.append(line_id)
@@ -5211,14 +5229,54 @@ def _audit_correction(actor, action_type, summary):
     except Exception:
         pass
 
+# Batch flow order + which stations expose a clean pcs_in gate / single output.
+_FLOW_ORDER = ['glue_mix','laminating','cold_press','repair','sanding','hot_press','grading','packing']
+_STATION_PCS_IN = {'cold_press':'pcs_in','sanding':'pcs_in','hot_press':'pcs_in','packing':'pcs_in'}
+_SYNC_FROM = {'laminating','cold_press','sanding','hot_press'}  # one clean output feeds next pcs_in
+
+def _reconcile_downstream(conn, dept, batch_id, new_output, do_sync):
+    """Adjacent-sync + flag. Set the immediately-next station's pcs_in to
+    new_output (only if that station has one and do_sync), then flag every
+    downstream job log of this batch as 'review needed'. Returns counts."""
+    dept = (dept or '').lower()
+    if dept not in _FLOW_ORDER or not batch_id:
+        return {'synced': [], 'flagged': []}
+    downstream = _FLOW_ORDER[_FLOW_ORDER.index(dept) + 1:]
+    synced, flagged, first_station = [], [], True
+    for nd in downstream:
+        nm = _STATION_LOG_MAP.get(nd)
+        if not nm:
+            continue
+        table, pk = nm[0], nm[1]
+        rows = conn.execute(f"SELECT {pk} AS pk FROM {table} WHERE batch_id=?", (batch_id,)).fetchall()
+        if not rows:
+            continue
+        for rr in rows:
+            if first_station and do_sync and new_output is not None and nd in _STATION_PCS_IN:
+                conn.execute(f"UPDATE {table} SET {_STATION_PCS_IN[nd]}=? WHERE {pk}=?",
+                             (float(new_output), rr['pk']))
+                synced.append({'dept': nd, 'log_id': rr['pk']})
+            conn.execute(
+                """INSERT INTO station_job_flags (department, log_id, batch_id, reason)
+                   VALUES (?,?,?, 'upstream corrected')
+                   ON CONFLICT(department, log_id)
+                   DO UPDATE SET cleared=0, flagged_at=datetime('now')""",
+                (nd, str(rr['pk']), batch_id))
+            flagged.append({'dept': nd, 'log_id': rr['pk']})
+        first_station = False
+    return {'synced': synced, 'flagged': flagged}
+
 def correct_station_job(dept, log_id, qty=None, batch_id=None, actor=''):
     """Daily-review correction of a completed-job log: fix the piece count
-    and/or reassign to the correct batch. Edit-in-place + audit."""
-    m = _STATION_LOG_MAP.get((dept or '').lower())
+    and/or reassign to the correct batch. Edit-in-place + audit + downstream
+    reconciliation (adjacent-sync the next station's pcs_in, flag the rest)."""
+    deptl = (dept or '').lower()
+    m = _STATION_LOG_MAP.get(deptl)
     if not m:
         raise ValueError('This station has no editable production log')
     table, pk, ts, qtycol, qty_label, op, has_notes = m
     conn = get_db()
+    recon = {'synced': [], 'flagged': []}
     try:
         row = conn.execute(
             f"SELECT {pk} AS pk, batch_id, {qtycol} AS qty FROM {table} WHERE {pk}=?",
@@ -5226,22 +5284,38 @@ def correct_station_job(dept, log_id, qty=None, batch_id=None, actor=''):
         if not row:
             raise ValueError('Job log not found')
         before = {'qty': row['qty'], 'batch_id': row['batch_id']}
+        cur_batch = row['batch_id']
         sets, params = [], []
         if qty is not None:
             sets.append(f"{qtycol}=?"); params.append(float(qty))
-        if batch_id is not None and str(batch_id).strip():
-            sets.append("batch_id=?"); params.append(str(batch_id).strip())
+        new_batch = str(batch_id).strip() if (batch_id is not None and str(batch_id).strip()) else None
+        if new_batch:
+            sets.append("batch_id=?"); params.append(new_batch)
         if not sets:
             return {'ok': True, 'unchanged': True}
         params.append(log_id)
         conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE {pk}=?", params)
+        # The edited job has just been reviewed — clear its own flag.
+        conn.execute("UPDATE station_job_flags SET cleared=1 WHERE department=? AND log_id=?",
+                     (deptl, str(log_id)))
+        eff_batch = new_batch or cur_batch
+        if qty is not None:
+            recon = _reconcile_downstream(conn, deptl, eff_batch, float(qty), deptl in _SYNC_FROM)
+        else:
+            recon = _reconcile_downstream(conn, deptl, eff_batch, None, False)
+        if new_batch and new_batch != cur_batch:   # reassigned: old batch's chain also needs a look
+            old = _reconcile_downstream(conn, deptl, cur_batch, None, False)
+            recon['flagged'] += old['flagged']
         conn.commit()
     finally:
         conn.close()
     after = {'qty': (float(qty) if qty is not None else before['qty']),
-             'batch_id': (str(batch_id).strip() if batch_id else before['batch_id'])}
-    _audit_correction(actor, 'correct_job', f"{dept} job {log_id}: {before} -> {after}")
-    return {'ok': True, 'before': before, 'after': after}
+             'batch_id': (new_batch or before['batch_id'])}
+    _audit_correction(actor, 'correct_job',
+                      f"{dept} job {log_id}: {before} -> {after}; "
+                      f"synced={len(recon['synced'])} flagged={len(recon['flagged'])}")
+    return {'ok': True, 'before': before, 'after': after,
+            'synced': len(recon['synced']), 'flagged': len(recon['flagged'])}
 
 def correct_stock_movement(movement_id, qty_change=None, batch_ref=None, actor=''):
     """Daily-review correction of a station stock movement: fix the quantity

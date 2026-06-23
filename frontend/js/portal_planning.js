@@ -2696,14 +2696,16 @@ async function slhLoadReview(){
   catch(e){ host.innerHTML = `<div class="alert alert-warning py-2 small mb-0">Load failed: ${_slhEsc(e.message||e)}</div>`; return; }
   _slhReviewDept = data.department; _slhReviewLine = data.line_id || ''; _slhReviewDate = data.date;
   const jobs = data.jobs || [], mv = data.movements || [];
-  const jobRows = jobs.map(j=>`<tr>
-      <td class="small text-muted text-nowrap">${_slhEsc((j.logged_at||'').slice(11,16))}</td>
+  const jobRows = jobs.map(j=>{
+    const flagged = Number(j.flagged)>0;
+    return `<tr class="${flagged?'table-warning':''}">
+      <td class="small text-muted text-nowrap">${_slhEsc((j.logged_at||'').slice(11,16))}${flagged?' <span class="badge bg-warning text-dark" title="Upstream output was corrected — confirm this value, then save to clear.">review</span>':''}</td>
       <td><input class="form-control form-control-sm" style="width:130px" id="rvj-batch-${_slhEsc(j.log_id)}" value="${_slhEsc(j.batch_id)}"></td>
       <td class="text-nowrap"><input type="number" step="0.01" class="form-control form-control-sm d-inline-block" style="width:84px" id="rvj-qty-${_slhEsc(j.log_id)}" value="${_slhEsc(j.qty)}"> <span class="text-muted small">${_slhEsc(j.qty_label)}</span></td>
       <td class="small">${_slhEsc(j.operator)}</td>
       <td class="small">${_slhEsc(j.notes)}</td>
       <td><button class="btn btn-sm btn-primary" onclick="slhSaveJob('${_slhEsc(j.log_id)}')"><i class="bi bi-check2"></i></button></td>
-    </tr>`).join('');
+    </tr>`;}).join('');
   const mvRows = mv.map(m=>`<tr>
       <td class="small text-muted text-nowrap">${_slhEsc((m.created_at||'').slice(11,16))}</td>
       <td class="small">${_slhEsc(m.movement_type)}</td>
