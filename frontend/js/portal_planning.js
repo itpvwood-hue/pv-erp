@@ -3508,6 +3508,13 @@ async function slgmReloadShortfall(){
   }
 }
 
+// The glue-mix station is per-line — its WH requests must carry the parent line
+// so they show in My Open Requests (line-scoped) and in the warehouse queue
+// (not "no line"). Mirror how stOpenWHRequest resolves the station line.
+function _slgmLine(){
+  return document.getElementById('sl-line')?.value
+      || document.getElementById('st-line')?.value || '';
+}
 async function slgmRequestFromWH(materialId, qty, name){
   const ask = prompt(`Request from Warehouse for "${name}".\n\nLitres / kg to request:`, String(qty || ''));
   if(ask === null) return;
@@ -3518,7 +3525,7 @@ async function slgmRequestFromWH(materialId, qty, name){
       material_id: materialId,
       qty_requested: q,
       department: 'glue_mix',
-      line_id: '',
+      line_id: _slgmLine(),
       notes: `From Glue Mixing shortfall — auto suggestion for ${name}`,
     });
     toast(`Request sent to WH for ${q} of ${name}`,'success');
@@ -3553,7 +3560,7 @@ async function slgmBulkRequestWH(){
         material_id: r.material_id,
         qty_requested: qty,
         department: 'glue_mix',
-        line_id: '',
+        line_id: _slgmLine(),
         notes: `Glue Mixing ${tag} (${r.component}) ${ctx}` +
                (bufPct>0?` · +${bufPct}% buffer`:''),
       });
