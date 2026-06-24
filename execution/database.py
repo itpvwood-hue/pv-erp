@@ -8908,7 +8908,7 @@ def log_glue_mix_with_stock(data: dict) -> dict:
             continue
         try:
             log_station_stock_movement({
-                "department": "glue_mix", "line_id": "",
+                "department": "glue_mix", "line_id": data.get('line_id') or "",
                 "material_id": int(mat_id), "qty_change": qty,
                 "movement_type": "BATCH_USE",
                 "batch_ref": data['batch_id'], "reference": mid,

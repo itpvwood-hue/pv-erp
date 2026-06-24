@@ -3354,7 +3354,7 @@ async function slRenderGlueMixCard(){
       <div class="small text-muted mt-1" id="slgm-summary">
         ${_gmSelectedBatches.length ?
           _gmSelectedBatches.map(b=>`<span class="badge bg-warning text-dark me-1">${b.batch_number}</span>`).join('') +
-          ` · ${_gmSelectedBatches.length} batch(es) · ${fmt(totalPcs)} pcs · suggested ${fmt(totalKg)} kg`
+          ` · ${_gmSelectedBatches.length} batch(es) · ${fmt(totalPcs)} pallets · suggested ${fmt(totalKg)} kg`
           : 'Tick batches in the queue to start a mix.'}
       </div>
     </div></div>
@@ -4386,7 +4386,7 @@ async function gmApplySelectionToForm(){
   const totalKg = _gmSelectedBatches.reduce((s,b)=>s+Number(_gmBatchGlueInfo[b.id]?.total_kg||0),0);
   const totalPcs = _gmSelectedBatches.reduce((s,b)=>s+Number(b.quantity||0),0);
   const list = _gmSelectedBatches.map(b=>`<span class="badge bg-warning text-dark me-1">${b.batch_number}</span>`).join('');
-  label.innerHTML = `${list}<span class="text-muted ms-1">${_gmSelectedBatches.length} batch(es) · ${fmt(totalPcs)} pcs · ${fmt(totalKg)} kg target</span>`;
+  label.innerHTML = `${list}<span class="text-muted ms-1">${_gmSelectedBatches.length} batch(es) · ${fmt(totalPcs)} pallets · ${fmt(totalKg)} kg target</span>`;
 
   await gmRefreshStation();
   document.getElementById('gm-bom-code').value = _gmActiveRecipe.recipe_code || '';
@@ -4418,7 +4418,10 @@ const GM_COMPONENTS=[
 let _gmStation=[]; // glue_mix station stock cache
 
 async function gmRefreshStation(){
-  _gmStation=await api('/api/station-stock?department=glue_mix').catch(()=>[]);
+  // Glue mixing is per-line — read the station stock for the current line so it
+  // matches where deposits land and where confirm-mix deducts.
+  const line=_slgmLine();
+  _gmStation=await api(`/api/station-stock?department=glue_mix${line?'&line_id='+encodeURIComponent(line):''}`).catch(()=>[]);
 }
 
 async function gmSelectBatch(id){
@@ -4488,15 +4491,20 @@ async function gmEnsureMatPrices(){
 // Resolve the linked material_id for an ingredient slot from the recipe's
 // material_links JSON (set in the Glue BOM Builder). Falls back to station-
 // stock name match if no explicit link.
-function _gmResolveMatId(recipe, ingKey, fallbackName){
+function _gmResolveMatId(recipe, c){
   try{
     const links = (typeof recipe.material_links === 'string')
                   ? JSON.parse(recipe.material_links || '{}')
                   : (recipe.material_links || {});
-    if(links[ingKey]) return parseInt(links[ingKey]);
+    // The Glue BOM Builder + backend store links by the field-derived key
+    // (e0_glue_kg -> e0_glue). Earlier this resolver used the short c.key
+    // (e0/latex/yellow...) which never matched, so explicit links were ignored.
+    const fieldKey = (c.field || '').replace(/_kg$/, '');
+    if(links[fieldKey]) return parseInt(links[fieldKey]);
+    if(links[c.key])    return parseInt(links[c.key]);   // legacy short-key links
   }catch{}
   // Fallback: match station-stock entry by component label
-  const lc = (fallbackName||'').toLowerCase();
+  const lc = (c.label || '').toLowerCase();
   for(const s of _gmStation){
     const nm = (s.material_name||'').toLowerCase();
     if(nm === lc || (nm && (nm.includes(lc) || lc.includes(nm)))) return s.material_id;
@@ -4530,7 +4538,7 @@ function gmCalcComponents(){
   tbody.innerHTML = GM_COMPONENTS.filter(c => (parseFloat(r[c.field])||0) > 0).map(c => {
     const baseKg = parseFloat(r[c.field])||0;
     const qty = baseKg * factor;
-    const matId = _gmResolveMatId(r, c.key, c.label);
+    const matId = _gmResolveMatId(r, c);
     const stockRow = matId ? _gmStation.find(s => s.material_id === matId) : null;
     const price = matId ? (_gmMatPriceById[matId] || 0) : 0;
     const cost = qty * price;
@@ -4647,6 +4655,7 @@ async function gmSubmitMix(){
     batch_id: primary.batch_number,
     batch_numbers: _gmSelectedBatches.map(b=>b.batch_number),
     recipe_code: _gmActiveRecipe.recipe_code,
+    line_id: _slgmLine(),
     qty_kg: totalKg,
     mix_time_min: parseInt(document.getElementById('gm-mix-min').value)||_gmActiveRecipe.mix_time_min||20,
     operator_name: document.getElementById('gm-operator').value.trim()||'—',
