@@ -518,9 +518,15 @@ def edit_material(mid: int, body: MaterialIn):
     return update_material(mid, body.dict())
 
 @app.delete("/api/materials/{mid}")
-def remove_material(mid: int):
+def remove_material(mid: int, force: bool = False, x_auth_token: str = Header(None)):
+    # This route is defined before require_auth/Role exist, so resolve inline.
+    # Force delete (clears received lots + glue links) is Managerial-only.
+    if force:
+        u = get_session_user(x_auth_token) if x_auth_token else None
+        if not u or u.get('role') != 'MANAGERIAL':
+            raise HTTPException(403, "Force delete requires Managerial role")
     try:
-        return delete_material(mid)
+        return delete_material(mid, force=force)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

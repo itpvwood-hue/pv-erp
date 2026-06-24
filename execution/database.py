@@ -1865,30 +1865,60 @@ def update_material(mid, data):
     row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
-def delete_material(mid):
-    """Delete a material, but refuse (with a clear reason) when it's still
-    referenced by a BOM or received lots — otherwise the FK just 500s."""
+def delete_material(mid, force=False):
+    """Delete a material. Refuses (with a clear reason) when it's still
+    referenced — otherwise the FK just 500s.
+
+    force=True (managerial) clears the *stale* blockers first — received-lot
+    records and glue-recipe ingredient links — then deletes. BOM usage is NEVER
+    auto-cleared (it means the material is part of a product recipe); we refuse
+    and name the SKUs so it's removed from those BOMs deliberately."""
+    import json as _json
     conn = get_db()
     try:
-        refs = []
+        # BOM usage blocks deletion even under force — name the SKUs to fix.
         n_bom = conn.execute("SELECT COUNT(*) FROM bom_lines WHERE material_id=?", (mid,)).fetchone()[0]
-        if n_bom: refs.append(f"{n_bom} BOM line(s)")
-        n_lot = conn.execute("SELECT COUNT(*) FROM material_lots WHERE material_id=?", (mid,)).fetchone()[0]
-        if n_lot: refs.append(f"{n_lot} received lot(s)")
-        # Linked as a glue ingredient? (material_links is JSON: {ingredient: material_id})
-        n_glue = conn.execute(
-            "SELECT COUNT(*) FROM glue_recipes WHERE material_links LIKE ?",
-            (f'%: {mid}%',)).fetchone()[0]
-        if n_glue: refs.append(f"{n_glue} glue recipe(s)")
-        if refs:
-            raise ValueError("Cannot delete — material is used by " + ", ".join(refs) +
-                             ". Remove those references first.")
+        if n_bom:
+            skus = []
+            try:
+                skus = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT s.code FROM bom_lines bl JOIN skus s ON s.id=bl.sku_id "
+                    "WHERE bl.material_id=? LIMIT 8", (mid,)).fetchall() if r[0]]
+            except Exception:
+                pass
+            raise ValueError(
+                f"Cannot delete — material is in {n_bom} BOM line(s)" +
+                (f" (SKU: {', '.join(skus)})" if skus else "") +
+                ". Remove it from those product BOMs first.")
+
+        if force:
+            conn.execute("DELETE FROM material_lots WHERE material_id=?", (mid,))
+            for r in conn.execute("SELECT id, material_links FROM glue_recipes WHERE material_links LIKE ?",
+                                  (f'%: {mid}%',)).fetchall():
+                try:
+                    links = _json.loads(r[1] or '{}')
+                    links = {k: v for k, v in links.items() if int(v) != int(mid)}
+                    conn.execute("UPDATE glue_recipes SET material_links=? WHERE id=?",
+                                 (_json.dumps(links), r[0]))
+                except Exception:
+                    pass
+            conn.commit()
+        else:
+            refs = []
+            n_lot = conn.execute("SELECT COUNT(*) FROM material_lots WHERE material_id=?", (mid,)).fetchone()[0]
+            if n_lot: refs.append(f"{n_lot} received lot(s)")
+            n_glue = conn.execute("SELECT COUNT(*) FROM glue_recipes WHERE material_links LIKE ?",
+                                  (f'%: {mid}%',)).fetchone()[0]
+            if n_glue: refs.append(f"{n_glue} glue recipe(s)")
+            if refs:
+                raise ValueError("Cannot delete — material is used by " + ", ".join(refs) +
+                                 ". Remove those references first, or use Force delete.")
         try:
             conn.execute("DELETE FROM materials WHERE id=?", (mid,))
             conn.commit()
         except sqlite3.IntegrityError:
             raise ValueError("Cannot delete — material is still referenced elsewhere.")
-        return {"ok": True, "deleted_id": mid}
+        return {"ok": True, "deleted_id": mid, "forced": bool(force)}
     finally:
         conn.close()
 

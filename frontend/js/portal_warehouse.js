@@ -2251,8 +2251,20 @@ async function deleteMaterial(id){
         || (_allMaterials||[]).find(x=>x.id===id);
   const label = m ? `${m.code||''} ${m.name||''}`.trim() : `#${id}`;
   if(!confirm(`Delete material "${label}"?\n\nThis cannot be undone.`)) return;
-  try{ await api(`/api/materials/${id}`,'DELETE'); toast('Material deleted'); loadMaterials(); }
-  catch(e){ toast('Delete failed: '+e.message,'danger'); }
+  try{ await api(`/api/materials/${id}`,'DELETE'); toast('Material deleted'); loadMaterials(); return; }
+  catch(e){
+    const msg = e.message||String(e);
+    // If it's blocked only by stale references (lots / glue links), a Managerial
+    // user can force the delete. BOM-referenced materials still can't be forced.
+    const isManagerial = (getCurrentUser && getCurrentUser()?.role === ROLE.MANAGERIAL);
+    const forceable = isManagerial && /received lot|glue recipe|use Force delete/i.test(msg) && !/BOM/i.test(msg);
+    if(forceable && confirm(`${msg}\n\nForce delete "${label}"? This also removes its received-lot records and unlinks it from any glue recipes. This cannot be undone.`)){
+      try{ await api(`/api/materials/${id}?force=true`,'DELETE'); toast('Material force-deleted'); loadMaterials(); }
+      catch(e2){ toast('Force delete failed: '+(e2.message||e2),'danger'); }
+      return;
+    }
+    toast('Delete failed: '+msg,'danger');
+  }
 }
 function whMoveOpen(id){
   const m=[..._allMaterials].find(x=>x.id===id); if(!m){ toast('Material not found','warning'); return; }
