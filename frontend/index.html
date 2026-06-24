@@ -4617,6 +4617,18 @@
   <!-- Summary cards -->
   <div class="row g-3 mb-3" id="um-stats"></div>
 
+  <!-- One-time maintenance -->
+  <div class="card border-warning mb-3">
+    <div class="card-body py-2 d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div class="small">
+        <b><i class="bi bi-wrench-adjustable me-1"></i>Glue-mix stock cleanup</b>
+        <span class="text-muted">— one-time fix for the legacy blank-line deduction bug: folds <code>glue_mix</code> line='' stock into P01 and re-lines its movements. Safe + idempotent.</span>
+        <span id="gmfold-result" class="ms-2"></span>
+      </div>
+      <button class="btn btn-sm btn-outline-warning" onclick="adminFoldGlueStock()"><i class="bi bi-arrow-down-up me-1"></i>Run cleanup</button>
+    </div>
+  </div>
+
   <!-- User table -->
   <div class="card">
     <div class="card-header py-2 d-flex align-items-center gap-2">

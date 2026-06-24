@@ -575,6 +575,24 @@ async function umToggleActive(uid,active){
   }catch(e){toast(e.message,'danger');}
 }
 
+// One-time cleanup for the legacy blank-line glue-mix stock bug.
+async function adminFoldGlueStock(){
+  if(!confirm('Fold all blank-line glue-mix station stock into P01 (and re-line its movements)?\n\nThis is a one-time cleanup and is safe to run more than once.')) return;
+  const el=document.getElementById('gmfold-result');
+  if(el) el.innerHTML='<span class="text-muted">Running…</span>';
+  try{
+    const res=await api('/api/maintenance/fold-glue-stock','POST');
+    const n=res.folded?.length||0;
+    const detail=(res.folded||[]).map(f=>`${f.name}: ${f.folded_qty} → ${f.new_qty}`).join(' · ');
+    if(el) el.innerHTML=`<span class="text-success">Folded ${n} material(s), re-lined ${res.movements_relined} movement(s) → P01.</span>`
+      + (detail?`<div class="text-muted small mt-1">${detail}</div>`:'');
+    toast(`Glue-mix cleanup done — ${n} material(s) folded into P01`,'success');
+  }catch(e){
+    if(el) el.innerHTML=`<span class="text-danger">${e.message||e}</span>`;
+    toast('Cleanup failed: '+(e.message||e),'danger');
+  }
+}
+
 
 
 

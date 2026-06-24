@@ -8828,6 +8828,44 @@ def get_batch_glue_info(batch_id: int) -> dict:
         "matched": recipe is not None,
     }
 
+def fold_glue_mix_blank_stock(target_line: str = 'P01') -> dict:
+    """One-time cleanup for the pre-2.21.64 line='' glue-mix bug. Re-lines the
+    blank-line glue_mix stock movements onto target_line and folds each blank
+    station_stock row into the matching target-line row (summing), deleting the
+    blanks. Idempotent — a second run finds nothing to fold."""
+    conn = get_db()
+    try:
+        relined = conn.execute(
+            "UPDATE station_stock_movements SET line_id=? "
+            "WHERE department='glue_mix' AND COALESCE(line_id,'')=''",
+            (target_line,)).rowcount
+        blanks = rows_to_list(conn.execute(
+            "SELECT id, material_id, COALESCE(current_qty,0) AS q FROM station_stock "
+            "WHERE department='glue_mix' AND COALESCE(line_id,'')=''").fetchall())
+        folded = []
+        for b in blanks:
+            mid = b['material_id']; qty = float(b['q'])
+            tgt = conn.execute(
+                "SELECT id, COALESCE(current_qty,0) AS q FROM station_stock "
+                "WHERE department='glue_mix' AND line_id=? AND material_id=?",
+                (target_line, mid)).fetchone()
+            if tgt:
+                new_q = float(tgt['q']) + qty
+                conn.execute("UPDATE station_stock SET current_qty=?, last_updated=datetime('now') WHERE id=?",
+                             (new_q, tgt['id']))
+            else:
+                new_q = qty
+                conn.execute("INSERT INTO station_stock (department,line_id,material_id,current_qty) "
+                             "VALUES ('glue_mix',?,?,?)", (target_line, mid, qty))
+            conn.execute("DELETE FROM station_stock WHERE id=?", (b['id'],))
+            nm = conn.execute("SELECT name FROM materials WHERE id=?", (mid,)).fetchone()
+            folded.append({'material_id': mid, 'name': (nm['name'] if nm else str(mid)),
+                           'folded_qty': round(qty, 3), 'new_qty': round(new_q, 3)})
+        conn.commit()
+        return {'target_line': target_line, 'movements_relined': relined, 'folded': folded}
+    finally:
+        conn.close()
+
 def log_glue_mix_with_stock(data: dict) -> dict:
     """Log glue mix, capture actual per-ingredient kg + cost, and deduct each
     component from glue_mix station stock.

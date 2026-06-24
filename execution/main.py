@@ -56,7 +56,7 @@ from database import (
     get_attendance, save_attendance, delete_attendance, get_attendance_summary,
     get_station_stock, get_station_stock_movements, log_station_stock_movement,
     get_station_day_jobs, get_station_day_balances,
-    correct_station_job, correct_stock_movement,
+    correct_station_job, correct_stock_movement, fold_glue_mix_blank_stock,
     update_station_stock_min,
     get_station_presets, save_station_preset, delete_station_preset, touch_station_preset,
     log_glue_mix, log_laminating, advance_laminating,
@@ -2232,6 +2232,12 @@ def correct_movement_route(movement_id: int, body: dict, user: dict = Depends(re
                                       batch_ref=body.get('batch_ref'), actor=user)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/maintenance/fold-glue-stock")
+def fold_glue_stock_route(user: dict = Depends(require_role(Role.MANAGERIAL))):
+    """One-time cleanup of the legacy blank-line glue-mix stock bug: fold every
+    glue_mix line='' stock row into P01 and re-line its movements. Idempotent."""
+    return fold_glue_mix_blank_stock('P01')
 
 @app.post("/api/station-stock/movement", status_code=201)
 def post_stock_movement(body: dict, user: dict = Depends(require_auth)):
