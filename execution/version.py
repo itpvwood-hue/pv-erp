@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.67"
+VERSION    = "2.21.68"
 BUILD_DATE = "2026-06-19"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.68", "2026-06-19", "Enforce unique material codes (SKU codes already UNIQUE). (a) _mat_by_code now matches case-insensitively so an upload of 'abc' updates the existing 'ABC' instead of making a near-duplicate; (b) create_material rejects a code that already exists; (c) the inventory upload rejects rows whose code duplicates another row in the same file (case-insensitive); (d) a best-effort case-insensitive UNIQUE index on materials(code) is created at startup (skipped if pre-existing duplicates block it, then app-layer still prevents new ones). To find existing dupes: SELECT code,COUNT(*) FROM materials WHERE COALESCE(code,'')!='' GROUP BY code COLLATE NOCASE HAVING COUNT(*)>1."),
     ("2.21.67", "2026-06-19", "Glue recipe editor: relabel hardcoded additive fields — 'E0 Glue (Urea Resin) kg' -> 'Glue kg', 'Latex G312 kg' -> 'Latex kg'. Label-only (the underlying field ids/keys e0_glue/latex_g312 are unchanged, so recipes + material links are unaffected)."),
     ("2.21.66", "2026-06-19", "One-time glue-mix stock cleanup. New managerial action (User Management → 'Run cleanup', POST /api/maintenance/fold-glue-stock) folds the legacy blank-line glue_mix station-stock rows from the pre-2.21.64 deduction bug into the P01 row (summing, e.g. -157.79 blank + 1000 P01 = 842.21) and re-lines their movements to P01, then deletes the blank rows. Idempotent. Fixes the negative 'On Hand' in the Glue Mix shortfall without re-counting."),
     ("2.21.65", "2026-06-19", "Fix: Daily Review didn't refresh on date change. slhRefresh() handled every Station Leader Hub tab except 'review', so changing the header date + clicking Refresh left the Daily Review pane stale. Added the 'review' branch; also wired the date picker's onchange to reload the review when that tab is active."),

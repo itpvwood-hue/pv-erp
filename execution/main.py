@@ -1069,10 +1069,21 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
     blank_skipped = len(rows_csv) - len(real_rows)
 
     results = []; errors = []
+    seen_codes = {}   # lower(code) -> first line it appeared on (codes must be unique)
     for src_lineno, row in real_rows:
         if not row.get('name'):
             errors.append(f"Row {src_lineno}: missing 'name' (had code={row.get('code') or '?'})")
             continue
+        # Reject duplicate codes within the same file (case-insensitive). Each
+        # material code must be unique, so two rows sharing one would otherwise
+        # silently overwrite each other.
+        _code = (row.get('code') or '').strip()
+        if _code:
+            _ck = _code.lower()
+            if _ck in seen_codes:
+                errors.append(f"Row {src_lineno}: duplicate code '{_code}' (already on row {seen_codes[_ck]}) — codes must be unique")
+                continue
+            seen_codes[_ck] = src_lineno
         # Apply the drop-zone's category to rows that don't specify their own.
         if default_type and not (row.get('type') or '').strip():
             row['type'] = default_type

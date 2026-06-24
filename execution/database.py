@@ -1424,6 +1424,17 @@ def init_db():
         except Exception:
             pass  # column already exists
 
+    # Enforce unique material codes at the DB level (case-insensitive). Best
+    # effort: if the table still contains pre-existing duplicate codes the index
+    # can't be created — startup continues (the app layer also blocks dupes on
+    # create/upload), and the index takes once the duplicates are resolved.
+    try:
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_code_unique "
+                     "ON materials(code COLLATE NOCASE) WHERE COALESCE(code,'') != ''")
+        conn.commit()
+    except Exception:
+        conn.rollback()  # leftover duplicate codes block it — handled in-app
+
     # ── One-time seed of bom_lines.waste_factor (idempotent: only NULLs) ──
     # Preserve the historical 5% on existing veneer lines (seq 2/3) and fix
     # boards (seq 1) + everything else to 0%. New rows get an explicit value
@@ -1778,9 +1789,12 @@ def _mat_by_id(conn, mid):
     return conn.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
 
 def _mat_by_code(conn, code):
-    """Return the materials row for a code, or None."""
+    """Return the materials row for a code (case-insensitive), or None. Matching
+    case-insensitively means an upload of 'abc' updates the existing 'ABC' rather
+    than creating a near-duplicate."""
     if not code: return None
-    return conn.execute("SELECT * FROM materials WHERE code=?", (code,)).fetchone()
+    return conn.execute("SELECT * FROM materials WHERE code=? COLLATE NOCASE",
+                        (code,)).fetchone()
 
 def _mat_id_by_code(conn, code):
     """Return materials.id for a code, or None if not present."""
@@ -1805,6 +1819,9 @@ def create_material(data):
     # code — invisible to BOMs, FIFO and the FC-stock CSV (all match by code).
     # Empty string → NULL, mirroring update_material.
     new_code = (data.get('code') or '').strip() or None
+    if new_code and _mat_by_code(conn, new_code):
+        conn.close()
+        raise ValueError(f"Material code already exists: {new_code}")
     cur = conn.execute(
         """INSERT INTO materials
            (code,name,type,unit,current_stock,reorder_point,unit_cost,supplier,
