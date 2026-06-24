@@ -2789,9 +2789,15 @@ function slhSetScope(){
   if(dept === 'packing'){
     if(lineEl){ lineEl.value = ''; lineEl.disabled = true; }
     line = '';
+  }else if(dept === 'fc'){
+    // FC / Cutting is its OWN independent line: every production line's batches
+    // centralise here for cutting, then FC feeds back into each line. Scope the
+    // FC station to the 'FC' line (not P01) and lock the selector.
+    if(lineEl){ lineEl.value = 'FC'; lineEl.disabled = true; }
+    line = 'FC';
   }else{
     if(lineEl){
-      if(lineEl.disabled){ lineEl.disabled = false; if(!lineEl.value) lineEl.value = 'P01'; }
+      if(lineEl.disabled){ lineEl.disabled = false; if(!lineEl.value || lineEl.value==='FC') lineEl.value = 'P01'; }
       line = lineEl.value || 'P01';
     }
   }
@@ -2799,9 +2805,11 @@ function slhSetScope(){
   if(f) f.value = dept;
   const chip = document.getElementById('sl-scope-chip');
   if(chip){
-    const lbl = ({fc:'FC',production:'Production',glue_mix:'Glue Mixing',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
+    const lbl = ({fc:'Cutting',production:'Production',glue_mix:'Glue Mixing',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
                   sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing'})[dept] || dept;
-    chip.textContent = (dept === 'packing') ? `ALL LINES · ${lbl}` : `${line} · ${lbl}`;
+    chip.textContent = (dept === 'packing') ? `ALL LINES · ${lbl}`
+                     : (dept === 'fc') ? `FC LINE · ${lbl}`
+                     : `${line} · ${lbl}`;
   }
   const stDept = document.getElementById('st-dept');
   const stLine = document.getElementById('st-line');
@@ -2824,12 +2832,12 @@ function slhUpdateHeader(){
   const lineSel = document.getElementById('sl-line');
   const line = (lineSel?.value || 'P01').trim();
   const deptLabel = {
-    fc:'FC', production:'Production', glue_mix:'Glue Mixing',
+    fc:'Cutting', production:'Production', glue_mix:'Glue Mixing',
     laminating:'Laminating', cold_press:'Cold Press',
     repair:'Repair', sanding:'Sanding', hot_press:'Hot Press',
     grading:'Grading', packing:'Packing',
   }[dept] || dept;
-  const linePart = (dept === 'packing') ? 'ALL LINES' : line;
+  const linePart = (dept === 'packing') ? 'ALL LINES' : (dept === 'fc') ? 'FC LINE' : line;
   el.innerHTML =
     `<span class="badge bg-primary me-2" style="font-size:.85rem">${linePart}</span>`+
     `<span class="badge bg-secondary me-2" style="font-size:.85rem">${deptLabel}</span>`+
@@ -3223,9 +3231,10 @@ function msCapacityHint(dept){
 }
 async function slLoadBatches(){
   const dept=document.getElementById('sl-dept-filter').value;
-  // Packing is centralised — show batches from every line. All other stations
-  // are line-scoped.
-  const isCentralised = (dept === 'packing');
+  // Packing and FC are centralised — show batches from every line. Packing is
+  // the shared end station; FC is the shared cutting station every line's
+  // batches pass through first. All other stations are line-scoped.
+  const isCentralised = (dept === 'packing' || dept === 'fc');
   const line = isCentralised ? '' : (document.getElementById('sl-line').value || '');
   // Glue Mixing is virtual — there are no batches with current_department='glue_mix'.
   // Mixers prepare glue *for* batches currently in laminating, so we pull those.
