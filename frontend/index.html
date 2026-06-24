@@ -2097,7 +2097,7 @@
       </button>
       <button class="btn btn-outline-secondary btn-sm" onclick="slhRefresh()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
       <span class="vr mx-1"></span>
-      <input type="date" class="form-control form-control-sm" id="sl-report-date" style="width:140px" title="Daily report date">
+      <input type="date" class="form-control form-control-sm" id="sl-report-date" style="width:140px" title="Daily report date" onchange="try{ if(_slhTab==='review') slhLoadReview(); }catch(e){}">
       <button class="btn btn-dark btn-sm" onclick="slhPrintDailyReport()" title="Print the day's combined report to sign (Save as PDF)">
         <i class="bi bi-printer me-1"></i>Daily Report
       </button>

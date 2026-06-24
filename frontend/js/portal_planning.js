@@ -2853,6 +2853,7 @@ function slhRefresh(){
     if(typeof stLoadStock==='function')     stLoadStock();
     if(typeof stLoadMovements==='function') stLoadMovements();
   }
+  else if(_slhTab === 'review') slhLoadReview();
   else if(_slhTab === 'reports' && typeof stLoadSummary==='function') stLoadSummary();
 }
 

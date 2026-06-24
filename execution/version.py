@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.64"
+VERSION    = "2.21.65"
 BUILD_DATE = "2026-06-19"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.65", "2026-06-19", "Fix: Daily Review didn't refresh on date change. slhRefresh() handled every Station Leader Hub tab except 'review', so changing the header date + clicking Refresh left the Daily Review pane stale. Added the 'review' branch; also wired the date picker's onchange to reload the review when that tab is active."),
     ("2.21.64", "2026-06-19", "Fix 3 Glue Mixing bugs. (1) Linked materials weren't recognised: the station resolver looked up material_links by the short key (e0/latex/yellow) but the Glue BOM Builder + backend store them field-keyed (e0_glue/latex_g312/yellow_pigment) — now resolves by the field key (legacy short key kept as fallback). (2) Confirm-mix didn't deduct station stock: the deduction hardcoded line_id='' while glue-mix stock is per-line (P01), so it hit a phantom row. gmSubmitMix now sends the station line, the backend deducts on it, and gmRefreshStation reads it — deposit/read/deduct all line-consistent. (3) Batch chip showed 'N pcs' for what is the pallet count — relabelled 'N pallets'."),
     ("2.21.63", "2026-06-19", "FC / Cutting is now its own independent line in the Station Leader Hub, not P01. Selecting FC scopes the station to the 'FC' line (matches the FC station's keying) and locks the line selector; header/chip read 'FC LINE · Cutting' instead of 'P01 · FC'. The FC batch list is centralised (shows batches from every production line — all P01/P02/P37 batches pass through FC for cutting, then feed back to their line), like Packing. FC added as a selectable line; station stock/movements/requests key to 'FC'. Frontend-only."),
     ("2.21.62", "2026-06-19", "Fix: Glue Mixing shortfall WH requests had no parent line. slgmRequestFromWH and slgmBulkRequestWH ('Request All Short + Low from WH') posted consumable requests with line_id='' — so they never appeared in the station's line-scoped 'My Open Requests', and showed as '(no line)' in the warehouse supply queue. Both now carry the station's current line (new _slgmLine() helper, mirrors stOpenWHRequest). Glue mix is per-line, so requests now correctly attach to e.g. P01."),
