@@ -1620,25 +1620,27 @@ PV_GLUE_RECIPES = [
 ]
 
 def _seed_real_glue_recipes(conn):
-    """Replace any existing recipes with the canonical 14 PV Wood recipes (idempotent by recipe_code)."""
-    # Delete legacy placeholder recipes (UF/PF/MR fakes from before)
+    """Seed the canonical 14 PV Wood glue recipes — ONCE, on a fresh database.
+
+    After the first seed the user OWNS their Glue BOMs: edits, deactivations and
+    deletions all persist across restarts. Previously this ran every boot and
+    UPDATE-ed existing recipes (wiping edits + forcing is_active=1) or re-INSERTed
+    missing ones (resurrecting deleted recipes), so a redeploy reverted changes."""
+    # One-time cleanup of legacy placeholder recipes (safe to run repeatedly).
     conn.execute("DELETE FROM glue_recipes WHERE recipe_code LIKE 'GLU-%'")
+    # Only seed defaults when the catalog is empty — never overwrite or resurrect
+    # what the user has changed or removed.
+    if conn.execute("SELECT COUNT(*) FROM glue_recipes").fetchone()[0]:
+        conn.commit()
+        return
     for r in PV_GLUE_RECIPES:
         code, name, vthk, species, core, e0, latex, flour, yp, hd, rp, bp, ti, total = r
-        existing = conn.execute("SELECT id FROM glue_recipes WHERE recipe_code=?", (code,)).fetchone()
-        if existing:
-            conn.execute("""UPDATE glue_recipes SET name=?, veneer_thickness=?, wood_species=?, core_board=?,
-                e0_glue_kg=?, latex_g312_kg=?, flour_kg=?, yellow_pigment_kg=?, hardener_kg=?,
-                red_pigment_kg=?, black_pigment_kg=?, titanium_kg=?, total_kg=?, is_active=1
-                WHERE id=?""",
-                (name, vthk, species, core, e0, latex, flour, yp, hd, rp, bp, ti, total, existing['id']))
-        else:
-            conn.execute("""INSERT INTO glue_recipes
-                (recipe_code, name, veneer_thickness, wood_species, core_board,
-                 e0_glue_kg, latex_g312_kg, flour_kg, yellow_pigment_kg, hardener_kg,
-                 red_pigment_kg, black_pigment_kg, titanium_kg, total_kg, is_active, mix_time_min)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,20)""",
-                (code, name, vthk, species, core, e0, latex, flour, yp, hd, rp, bp, ti, total))
+        conn.execute("""INSERT INTO glue_recipes
+            (recipe_code, name, veneer_thickness, wood_species, core_board,
+             e0_glue_kg, latex_g312_kg, flour_kg, yellow_pigment_kg, hardener_kg,
+             red_pigment_kg, black_pigment_kg, titanium_kg, total_kg, is_active, mix_time_min)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,20)""",
+            (code, name, vthk, species, core, e0, latex, flour, yp, hd, rp, bp, ti, total))
     conn.commit()
 
 
