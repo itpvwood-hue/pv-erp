@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.69"
-BUILD_DATE = "2026-06-19"
+VERSION    = "2.21.70"
+BUILD_DATE = "2026-06-25"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.70", "2026-06-25", "Material delete now covers ALL references (was only checking lots/glue/BOM, so other FKs hit the generic 'still referenced elsewhere'). delete_material dynamically scans every FK pointing at materials(id) via PRAGMA foreign_key_list: a normal delete names exactly what blocks it (stock, movements, requests, lots, documents, NCG/regrade/cost history, …); Managerial Force delete clears every operational reference + glue links (foreign_keys OFF during the sweep) then removes the material. Product-recipe references (bom_lines/bom/vcmx_boms/packing_lines) still block even on force, naming the recipe/SKU."),
     ("2.21.69", "2026-06-19", "Materials: Managerial 'Force delete' for materials stuck on stale references. A normal delete still refuses when a material is used (now names which: received lots, glue recipes, or BOM SKUs). When the only blockers are received-lot records and/or glue-recipe links, a Managerial user is offered Force delete, which clears those then removes the material (DELETE /api/materials/{id}?force=true, Managerial-only). BOM usage is never force-cleared — it names the SKUs so you remove it from the product BOM first. The materials delete endpoint now also requires auth."),
     ("2.21.68", "2026-06-19", "Enforce unique material codes (SKU codes already UNIQUE). (a) _mat_by_code now matches case-insensitively so an upload of 'abc' updates the existing 'ABC' instead of making a near-duplicate; (b) create_material rejects a code that already exists; (c) the inventory upload rejects rows whose code duplicates another row in the same file (case-insensitive); (d) a best-effort case-insensitive UNIQUE index on materials(code) is created at startup (skipped if pre-existing duplicates block it, then app-layer still prevents new ones). To find existing dupes: SELECT code,COUNT(*) FROM materials WHERE COALESCE(code,'')!='' GROUP BY code COLLATE NOCASE HAVING COUNT(*)>1."),
     ("2.21.67", "2026-06-19", "Glue recipe editor: relabel hardcoded additive fields — 'E0 Glue (Urea Resin) kg' -> 'Glue kg', 'Latex G312 kg' -> 'Latex kg'. Label-only (the underlying field ids/keys e0_glue/latex_g312 are unchanged, so recipes + material links are unaffected)."),

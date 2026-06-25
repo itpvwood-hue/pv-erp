@@ -2254,11 +2254,12 @@ async function deleteMaterial(id){
   try{ await api(`/api/materials/${id}`,'DELETE'); toast('Material deleted'); loadMaterials(); return; }
   catch(e){
     const msg = e.message||String(e);
-    // If it's blocked only by stale references (lots / glue links), a Managerial
-    // user can force the delete. BOM-referenced materials still can't be forced.
+    // Operational references can be force-cleared by a Managerial user; the
+    // backend signals that case with "use Force delete". Product-recipe blockers
+    // (BOM / VCMX / packing) don't carry that hint and can't be forced.
     const isManagerial = (getCurrentUser && getCurrentUser()?.role === ROLE.MANAGERIAL);
-    const forceable = isManagerial && /received lot|glue recipe|use Force delete/i.test(msg) && !/BOM/i.test(msg);
-    if(forceable && confirm(`${msg}\n\nForce delete "${label}"? This also removes its received-lot records and unlinks it from any glue recipes. This cannot be undone.`)){
+    const forceable = isManagerial && /use Force delete/i.test(msg);
+    if(forceable && confirm(`${msg}\n\nForce delete "${label}"? This permanently removes its station stock, movements, lots, requests, documents and history, and unlinks it from any glue recipes. This cannot be undone.`)){
       try{ await api(`/api/materials/${id}?force=true`,'DELETE'); toast('Material force-deleted'); loadMaterials(); }
       catch(e2){ toast('Force delete failed: '+(e2.message||e2),'danger'); }
       return;

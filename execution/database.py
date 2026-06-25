@@ -1865,20 +1865,62 @@ def update_material(mid, data):
     row = _mat_by_id(conn, mid)
     conn.close(); return row_to_dict(row)
 
-def delete_material(mid, force=False):
-    """Delete a material. Refuses (with a clear reason) when it's still
-    referenced — otherwise the FK just 500s.
+# Tables that DEFINE a product/recipe — a material referenced here is genuinely
+# in use, so deletion is refused even on force (remove it from the recipe first).
+_MAT_RECIPE_TABLES = {'bom_lines', 'bom', 'vcmx_boms', 'packing_lines'}
+# Friendly singular labels for the "what's blocking" message.
+_MAT_REF_LABEL = {
+    'material_lots':'received lot', 'station_stock':'station stock row',
+    'station_stock_movements':'stock movement', 'material_documents':'document',
+    'consumable_request':'consumable request', 'purchase_requests':'purchase request',
+    'wh_move_requests':'WH move request', 'wh_stock_transfers':'WH transfer',
+    'fc_transfer_requests':'FC transfer', 'dept_cost_ledger':'cost-ledger entry',
+    'batch_material_lots':'batch lot link', 'prod_order_veneer_alloc':'veneer allocation',
+    'ncg_items':'NCG item', 'ncg_dispositions':'NCG disposition',
+    'veneer_regrade_log':'regrade record',
+    'bom_lines':'BOM line', 'bom':'BOM line', 'vcmx_boms':'VCMX recipe',
+    'packing_lines':'packing-spec line',
+}
 
-    force=True (managerial) clears the *stale* blockers first — received-lot
-    records and glue-recipe ingredient links — then deletes. BOM usage is NEVER
-    auto-cleared (it means the material is part of a product recipe); we refuse
-    and name the SKUs so it's removed from those BOMs deliberately."""
+def _material_fk_refs(conn):
+    """[(table, from_column)] for every FK in the schema that points at
+    materials(id) — so the delete logic stays correct as tables are added."""
+    refs = []
+    for (t,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
+        try:
+            for fk in conn.execute(f"PRAGMA foreign_key_list('{t}')").fetchall():
+                if (fk[2] or '').lower() == 'materials':
+                    refs.append((t, fk[3]))
+        except Exception:
+            pass
+    return refs
+
+def delete_material(mid, force=False):
+    """Delete a material. A normal delete refuses (naming exactly what blocks it)
+    when the material is still referenced anywhere. force=True (managerial)
+    clears every *operational* reference — stock, movements, lots, requests,
+    documents, NCG/regrade/cost history — plus glue-recipe links, then deletes.
+    Product-recipe references (BOM / VCMX / packing spec) are NEVER force-cleared;
+    we name them so the material is removed from those recipes deliberately."""
     import json as _json
     conn = get_db()
     try:
-        # BOM usage blocks deletion even under force — name the SKUs to fix.
-        n_bom = conn.execute("SELECT COUNT(*) FROM bom_lines WHERE material_id=?", (mid,)).fetchone()[0]
-        if n_bom:
+        refs = _material_fk_refs(conn)
+
+        def _count(table, col):
+            try:
+                return conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (mid,)).fetchone()[0]
+            except Exception:
+                return 0
+
+        # 1) Recipe/product references always block (even force).
+        recipe = {}
+        for t, col in refs:
+            if t in _MAT_RECIPE_TABLES:
+                n = _count(t, col)
+                if n: recipe[t] = recipe.get(t, 0) + n
+        if recipe:
             skus = []
             try:
                 skus = [r[0] for r in conn.execute(
@@ -1886,13 +1928,17 @@ def delete_material(mid, force=False):
                     "WHERE bl.material_id=? LIMIT 8", (mid,)).fetchall() if r[0]]
             except Exception:
                 pass
+            parts = [f"{n} {_MAT_REF_LABEL.get(t, t)}(s)" for t, n in recipe.items()]
             raise ValueError(
-                f"Cannot delete — material is in {n_bom} BOM line(s)" +
+                "Cannot delete — material is part of a product recipe: " + ", ".join(parts) +
                 (f" (SKU: {', '.join(skus)})" if skus else "") +
-                ". Remove it from those product BOMs first.")
+                ". Remove it from those BOMs/recipes first.")
+
+        n_glue = conn.execute("SELECT COUNT(*) FROM glue_recipes WHERE material_links LIKE ?",
+                              (f'%: {mid}%',)).fetchone()[0]
 
         if force:
-            conn.execute("DELETE FROM material_lots WHERE material_id=?", (mid,))
+            conn.execute("PRAGMA foreign_keys=OFF")
             for r in conn.execute("SELECT id, material_links FROM glue_recipes WHERE material_links LIKE ?",
                                   (f'%: {mid}%',)).fetchall():
                 try:
@@ -1902,23 +1948,35 @@ def delete_material(mid, force=False):
                                  (_json.dumps(links), r[0]))
                 except Exception:
                     pass
+            for t, col in refs:                 # clear every non-recipe reference
+                if t in _MAT_RECIPE_TABLES: continue
+                try:
+                    conn.execute(f"DELETE FROM {t} WHERE {col}=?", (mid,))
+                except Exception:
+                    pass
+            conn.execute("DELETE FROM materials WHERE id=?", (mid,))
             conn.commit()
-        else:
-            refs = []
-            n_lot = conn.execute("SELECT COUNT(*) FROM material_lots WHERE material_id=?", (mid,)).fetchone()[0]
-            if n_lot: refs.append(f"{n_lot} received lot(s)")
-            n_glue = conn.execute("SELECT COUNT(*) FROM glue_recipes WHERE material_links LIKE ?",
-                                  (f'%: {mid}%',)).fetchone()[0]
-            if n_glue: refs.append(f"{n_glue} glue recipe(s)")
-            if refs:
-                raise ValueError("Cannot delete — material is used by " + ", ".join(refs) +
-                                 ". Remove those references first, or use Force delete.")
+            return {"ok": True, "deleted_id": mid, "forced": True}
+
+        # 2) Normal delete — report every blocker so the user knows what to clear.
+        blockers = []
+        if n_glue: blockers.append(f"{n_glue} glue recipe(s)")
+        per_table = {}
+        for t, col in refs:
+            if t in _MAT_RECIPE_TABLES: continue
+            n = _count(t, col)
+            if n: per_table[t] = per_table.get(t, 0) + n
+        for t, n in per_table.items():
+            blockers.append(f"{n} {_MAT_REF_LABEL.get(t, t)}(s)")
+        if blockers:
+            raise ValueError("Cannot delete — material is used by " + ", ".join(blockers) +
+                             ". Remove those, or use Force delete.")
         try:
             conn.execute("DELETE FROM materials WHERE id=?", (mid,))
             conn.commit()
         except sqlite3.IntegrityError:
             raise ValueError("Cannot delete — material is still referenced elsewhere.")
-        return {"ok": True, "deleted_id": mid, "forced": bool(force)}
+        return {"ok": True, "deleted_id": mid, "forced": False}
     finally:
         conn.close()
 
