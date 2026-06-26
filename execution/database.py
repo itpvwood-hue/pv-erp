@@ -1469,22 +1469,23 @@ def init_db():
     #    Rows with no skus match (VCMX production orders, which carry vcmx_bom_id,
     #    and legacy production_logs rows pointing at deleted products) stay NULL.
     #    No behavior change yet; later phases re-point reads/writes onto sku_id. ──
-    try:
-        for _t in ('production_orders', 'po_lines', 'orders', 'production_logs'):
-            if not conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_t,)).fetchone():
-                continue
-            conn.execute(f"""
-                UPDATE {_t} SET sku_id = (
-                    SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku) = UPPER(s.code)
-                    WHERE p.id = {_t}.product_id)
-                WHERE sku_id IS NULL AND product_id IS NOT NULL
-                  AND EXISTS (SELECT 1 FROM skus s JOIN products p
-                              ON UPPER(p.sku) = UPPER(s.code) WHERE p.id = {_t}.product_id)""")
-        conn.commit()
-    except Exception:
-        try: conn.rollback()
-        except Exception: pass
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='products'").fetchone():
+        try:
+            for _t in ('production_orders', 'po_lines', 'orders', 'production_logs'):
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_t,)).fetchone():
+                    continue
+                conn.execute(f"""
+                    UPDATE {_t} SET sku_id = (
+                        SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku) = UPPER(s.code)
+                        WHERE p.id = {_t}.product_id)
+                    WHERE sku_id IS NULL AND product_id IS NOT NULL
+                      AND EXISTS (SELECT 1 FROM skus s JOIN products p
+                                  ON UPPER(p.sku) = UPPER(s.code) WHERE p.id = {_t}.product_id)""")
+            conn.commit()
+        except Exception:
+            try: conn.rollback()
+            except Exception: pass
 
     # Enforce unique material codes at the DB level (case-insensitive). Best
     # effort: if the table still contains pre-existing duplicate codes the index
@@ -1593,14 +1594,14 @@ def init_db():
         conn.executescript("""
         DROP VIEW IF EXISTS v_lam_efficacy;
         CREATE VIEW v_lam_efficacy AS
-        SELECT l.table_id, po.production_line AS line_id, pr.sku AS sku_code,
+        SELECT l.table_id, po.production_line AS line_id, pr.code AS sku_code,
                DATE(l.shift_start) AS production_date, '' AS shift,
                l.emp_code_1, l.emp_code_2, l.pcs_target, l.pcs_actual,
                ROUND(l.pcs_actual*100.0/NULLIF(l.pcs_target,0),1) AS efficacy_pct
         FROM laminating_log l
         JOIN batches b ON b.batch_number = l.batch_id
         JOIN production_orders po ON po.id = b.prod_order_id
-        LEFT JOIN products pr ON pr.id = po.product_id;
+        LEFT JOIN skus pr ON pr.id = po.sku_id;
 
         DROP VIEW IF EXISTS v_sanding_defect_rate;
         CREATE VIEW v_sanding_defect_rate AS
@@ -1615,7 +1616,7 @@ def init_db():
 
         DROP VIEW IF EXISTS v_daily_production;
         CREATE VIEW v_daily_production AS
-        SELECT DATE(g.graded_at) AS production_date, po.production_line AS line_id, pr.sku AS sku_code,
+        SELECT DATE(g.graded_at) AS production_date, po.production_line AS line_id, pr.code AS sku_code,
                COUNT(DISTINCT g.batch_id) AS batches,
                SUM(g.pcs_grade_a + g.pcs_grade_b + g.pcs_ncg + g.pcs_reject) AS qty_planned,
                SUM(g.pcs_grade_a + g.pcs_grade_b) AS qty_good, SUM(g.pcs_ncg) AS qty_ncg,
@@ -1625,8 +1626,8 @@ def init_db():
         FROM grading_log g
         JOIN batches b ON b.batch_number = g.batch_id
         JOIN production_orders po ON po.id = b.prod_order_id
-        LEFT JOIN products pr ON pr.id = po.product_id
-        GROUP BY DATE(g.graded_at), po.production_line, pr.sku;
+        LEFT JOIN skus pr ON pr.id = po.sku_id
+        GROUP BY DATE(g.graded_at), po.production_line, pr.code;
 
         DROP VIEW IF EXISTS v_ncg_by_reason;
         CREATE VIEW v_ncg_by_reason AS
@@ -1640,7 +1641,7 @@ def init_db():
 
         DROP VIEW IF EXISTS v_ncg_backtrack;
         CREATE VIEW v_ncg_backtrack AS
-        SELECT g.grade_id, g.batch_id, pr.sku AS sku_code, po.production_line AS line_id,
+        SELECT g.grade_id, g.batch_id, pr.code AS sku_code, po.production_line AS line_id,
                DATE(g.graded_at) AS production_date, '' AS shift,
                g.pcs_ncg, g.pcs_reject, g.ncg_reason_code, g.graded_at,
                COALESCE(g.grader_id, g.grader_name) AS grader,
@@ -1654,7 +1655,7 @@ def init_db():
         FROM grading_log g
         JOIN batches b ON b.batch_number = g.batch_id
         JOIN production_orders po ON po.id = b.prod_order_id
-        LEFT JOIN products pr ON pr.id = po.product_id
+        LEFT JOIN skus pr ON pr.id = po.sku_id
         LEFT JOIN laminating_log l ON l.batch_id = g.batch_id
         LEFT JOIN glue_mix_log lm ON lm.batch_id = g.batch_id
         LEFT JOIN repair_log r ON r.batch_id = g.batch_id
@@ -2466,14 +2467,14 @@ def delete_machine(mid):
 def get_all_orders():
     conn = get_db()
     rows = conn.execute("""
-        SELECT o.*,p.name as product_name,p.sku FROM orders o JOIN products p ON o.product_id=p.id
+        SELECT o.*,p.name as product_name,p.code AS sku FROM orders o LEFT JOIN skus p ON p.id = o.sku_id
         ORDER BY o.priority,o.due_date
     """).fetchall()
     conn.close(); return rows_to_list(rows)
 
 def get_order(oid):
     conn = get_db()
-    row = conn.execute("SELECT o.*,p.name as product_name,p.sku FROM orders o JOIN products p ON o.product_id=p.id WHERE o.id=?",(oid,)).fetchone()
+    row = conn.execute("SELECT o.*,p.name as product_name,p.code AS sku FROM orders o LEFT JOIN skus p ON p.id = o.sku_id WHERE o.id=?",(oid,)).fetchone()
     conn.close(); return row_to_dict(row)
 
 def create_order(data):
@@ -2484,7 +2485,7 @@ def create_order(data):
          data.get('produced_qty',0),data['due_date'],data.get('status','pending'),data.get('priority',3),data.get('notes',''))
     )
     conn.commit()
-    row = conn.execute("SELECT o.*,p.name as product_name,p.sku FROM orders o JOIN products p ON o.product_id=p.id WHERE o.id=?",(cur.lastrowid,)).fetchone()
+    row = conn.execute("SELECT o.*,p.name as product_name,p.code AS sku FROM orders o LEFT JOIN skus p ON p.id = o.sku_id WHERE o.id=?",(cur.lastrowid,)).fetchone()
     conn.close(); return row_to_dict(row)
 
 def update_order(oid, data):
@@ -2495,7 +2496,7 @@ def update_order(oid, data):
          data.get('produced_qty',0),data['due_date'],data.get('status','pending'),data.get('priority',3),data.get('notes',''),oid)
     )
     conn.commit()
-    row = conn.execute("SELECT o.*,p.name as product_name,p.sku FROM orders o JOIN products p ON o.product_id=p.id WHERE o.id=?",(oid,)).fetchone()
+    row = conn.execute("SELECT o.*,p.name as product_name,p.code AS sku FROM orders o LEFT JOIN skus p ON p.id = o.sku_id WHERE o.id=?",(oid,)).fetchone()
     conn.close(); return row_to_dict(row)
 
 def delete_order(oid):
@@ -2506,8 +2507,8 @@ def delete_order(oid):
 # ═══════════════════════════════════════════════════════════════
 def get_all_production_logs(date_filter=None):
     conn = get_db()
-    base = """SELECT pl.*,p.name as product_name,p.sku,m.name as machine_name,o.order_number
-              FROM production_logs pl JOIN products p ON pl.product_id=p.id
+    base = """SELECT pl.*,p.name as product_name,p.code AS sku,m.name as machine_name,o.order_number
+              FROM production_logs pl LEFT JOIN skus p ON p.id = pl.sku_id
               JOIN machines m ON pl.machine_id=m.id LEFT JOIN orders o ON pl.order_id=o.id"""
     if date_filter:
         rows = conn.execute(base+" WHERE pl.log_date=? ORDER BY pl.shift,pl.created_at",(date_filter,)).fetchall()
@@ -2530,8 +2531,8 @@ def create_production_log(data):
     if data.get('order_id'):
         conn.execute("UPDATE orders SET produced_qty=produced_qty+? WHERE id=?",(data['actual_qty'],data['order_id']))
     conn.commit()
-    row = conn.execute("""SELECT pl.*,p.name as product_name,p.sku,m.name as machine_name,o.order_number
-        FROM production_logs pl JOIN products p ON pl.product_id=p.id
+    row = conn.execute("""SELECT pl.*,p.name as product_name,p.code AS sku,m.name as machine_name,o.order_number
+        FROM production_logs pl LEFT JOIN skus p ON p.id = pl.sku_id
         JOIN machines m ON pl.machine_id=m.id LEFT JOIN orders o ON pl.order_id=o.id WHERE pl.id=?""",(cur.lastrowid,)).fetchone()
     conn.close(); return row_to_dict(row)
 
@@ -2571,8 +2572,8 @@ def get_purchase_order(po_id):
     po = row_to_dict(conn.execute("SELECT * FROM purchase_orders WHERE id=?",(po_id,)).fetchone())
     if po:
         po['lines'] = rows_to_list(conn.execute("""
-            SELECT pol.*,p.name as product_name,p.sku FROM po_lines pol
-            JOIN products p ON pol.product_id=p.id WHERE pol.po_id=?
+            SELECT pol.*,p.name as product_name,p.code AS sku FROM po_lines pol
+            LEFT JOIN skus p ON p.id = pol.sku_id WHERE pol.po_id=?
         """,(po_id,)).fetchall())
     conn.close(); return po
 
@@ -2858,19 +2859,18 @@ def list_fg_batches(sku: str = None, location: str = None) -> list:
         SELECT b.id, b.batch_number, b.quantity AS pallets,
                COALESCE(b.fg_location, 'FG') AS fg_location,
                b.created_at,
-               COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) AS pcs,
-               p.sku AS sku_code, p.name AS product_name,
+               COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) AS pcs,
+               p.code AS sku_code, p.name AS product_name,
                pur.po_number, pur.customer
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE b.current_department = 'fg_warehouse' AND b.status != 'completed'
     """
     params = []
     if sku:
-        q += " AND p.sku = ?"; params.append(sku)
+        q += " AND p.code = ?"; params.append(sku)
     if location:
         q += " AND COALESCE(b.fg_location,'FG') = ?"; params.append(location.strip().upper())
     q += " ORDER BY b.created_at, b.id"
@@ -2931,11 +2931,11 @@ def move_fg_batches(batch_ids, to_location: str, moved_by: str = '', notes: str 
 def get_fg_location_log(limit: int = 50) -> list:
     conn = get_db()
     rows = rows_to_list(conn.execute("""
-        SELECT fm.*, b.batch_number, p.sku AS sku_code, p.name AS product_name
+        SELECT fm.*, b.batch_number, p.code AS sku_code, p.name AS product_name
         FROM fg_location_moves fm
         JOIN batches b ON b.id = fm.batch_id
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         ORDER BY fm.created_at DESC, fm.id DESC LIMIT ?""", (int(limit),)).fetchall())
     conn.close(); return rows
 
@@ -2954,10 +2954,10 @@ def get_customer_orders(cid: int) -> dict:
     return {"customer": cust, "orders": orders}
 
 _PO_LINE_SELECT = """
-    SELECT pol.*, p.name as product_name, p.sku,
+    SELECT pol.*, p.name as product_name, p.code AS sku,
            ps.code as packing_sku_code, ps.name as packing_sku_name, ps.customer as packing_customer
     FROM po_lines pol
-    JOIN products p ON pol.product_id = p.id
+    LEFT JOIN skus p ON p.id = pol.sku_id
     LEFT JOIN packing_skus ps ON ps.id = pol.packing_sku_id
 """
 
@@ -2980,9 +2980,9 @@ def get_po_material_readiness(po_id: int) -> dict:
 
     # All PO lines that have a matching product
     lines = rows_to_list(conn.execute("""
-        SELECT pol.quantity, pol.product_id, p.name AS product_name, p.sku
+        SELECT pol.quantity, pol.product_id, p.name AS product_name, p.code AS sku
         FROM po_lines pol
-        JOIN products p ON pol.product_id = p.id
+        LEFT JOIN skus p ON p.id = pol.sku_id
         WHERE pol.po_id = ?
         ORDER BY pol.id
     """, (po_id,)).fetchall())
@@ -3090,11 +3090,23 @@ def get_po_material_readiness(po_id: int) -> dict:
         'all_ok':             all(m['status'] == 'ok' for m in materials) and not missing_bom_skus,
     }
 
+def _sku_id_for_product(conn, product_id):
+    """Resolve skus.id for a legacy products.id via the bridge (products.sku ==
+    skus.code). Transitional during the products->skus migration so new rows get
+    sku_id populated (reads key off sku_id). Returns None if there's no match."""
+    if not product_id:
+        return None
+    r = conn.execute(
+        "SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku)=UPPER(s.code) WHERE p.id=?",
+        (product_id,)).fetchone()
+    return r[0] if r else None
+
 def create_po_line(data):
     conn = get_db()
+    sku_id = data.get('sku_id') or _sku_id_for_product(conn, data.get('product_id'))
     cur = conn.execute(
-        "INSERT INTO po_lines (po_id,product_id,quantity,unit_price,production_line,notes,packing_sku_id,pcs_per_pallet) VALUES (?,?,?,?,?,?,?,?)",
-        (data['po_id'], data['product_id'], data['quantity'], data.get('unit_price', 0),
+        "INSERT INTO po_lines (po_id,product_id,sku_id,quantity,unit_price,production_line,notes,packing_sku_id,pcs_per_pallet) VALUES (?,?,?,?,?,?,?,?,?)",
+        (data['po_id'], data['product_id'], sku_id, data['quantity'], data.get('unit_price', 0),
          data.get('production_line', 'P01'), data.get('notes', ''), data.get('packing_sku_id'),
          data.get('pcs_per_pallet') or None)
     )
@@ -3127,12 +3139,12 @@ def delete_po_line(line_id):
 # ═══════════════════════════════════════════════════════════════
 def get_all_production_orders(po_id=None):
     conn = get_db()
-    base = """SELECT po.*,p.name as product_name,p.sku,
+    base = """SELECT po.*,p.name as product_name,p.code AS sku,
                      porder.po_number,porder.customer,
                      COUNT(DISTINCT b.id) as batch_count,
                      COALESCE(SUM(CASE WHEN b.status='active' THEN b.quantity ELSE 0 END),0) as active_qty
               FROM production_orders po
-              JOIN products p ON po.product_id=p.id
+              LEFT JOIN skus p ON p.id = po.sku_id
               LEFT JOIN purchase_orders porder ON po.po_id=porder.id
               LEFT JOIN batches b ON b.prod_order_id=po.id"""
     if po_id:
@@ -3144,26 +3156,27 @@ def get_all_production_orders(po_id=None):
 def get_production_order(order_id):
     conn = get_db()
     row = conn.execute("""
-        SELECT po.*,p.name as product_name,p.sku,porder.po_number,porder.customer
-        FROM production_orders po JOIN products p ON po.product_id=p.id
+        SELECT po.*,p.name as product_name,p.code AS sku,porder.po_number,porder.customer
+        FROM production_orders po LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders porder ON po.po_id=porder.id WHERE po.id=?
     """,(order_id,)).fetchone()
     conn.close(); return row_to_dict(row)
 
 def create_production_order(data):
     conn = get_db()
+    sku_id = data.get('sku_id') or _sku_id_for_product(conn, data.get('product_id'))
     cur = conn.execute(
         """INSERT INTO production_orders
-           (prod_order_number,po_line_id,po_id,product_id,production_line,quantity,status,priority,planned_start,planned_end,notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           (prod_order_number,po_line_id,po_id,product_id,sku_id,production_line,quantity,status,priority,planned_start,planned_end,notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data['prod_order_number'],data.get('po_line_id'),data.get('po_id'),
-         data['product_id'],data['production_line'],data['quantity'],
+         data['product_id'],sku_id,data['production_line'],data['quantity'],
          data.get('status','planned'),data.get('priority',3),
          data.get('planned_start',''),data.get('planned_end',''),data.get('notes',''))
     )
     conn.commit()
-    row = conn.execute("""SELECT po.*,p.name as product_name,p.sku,porder.po_number,porder.customer
-        FROM production_orders po JOIN products p ON po.product_id=p.id
+    row = conn.execute("""SELECT po.*,p.name as product_name,p.code AS sku,porder.po_number,porder.customer
+        FROM production_orders po LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders porder ON po.po_id=porder.id WHERE po.id=?""",(cur.lastrowid,)).fetchone()
     conn.close(); return row_to_dict(row)
 
@@ -3177,8 +3190,8 @@ def update_production_order(order_id, data):
          data.get('actual_start',''),data.get('actual_end',''),data.get('notes',''),order_id)
     )
     conn.commit()
-    row = conn.execute("""SELECT po.*,p.name as product_name,p.sku,porder.po_number,porder.customer
-        FROM production_orders po JOIN products p ON po.product_id=p.id
+    row = conn.execute("""SELECT po.*,p.name as product_name,p.code AS sku,porder.po_number,porder.customer
+        FROM production_orders po LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders porder ON po.po_id=porder.id WHERE po.id=?""",(order_id,)).fetchone()
     conn.close(); return row_to_dict(row)
 
@@ -3241,14 +3254,14 @@ DEPARTMENTS = ['fc','laminating','cold_press','hot_press','bleach','repair','san
 def get_all_batches(department=None, prod_order_id=None):
     conn = get_db()
     base = """SELECT b.*,po.prod_order_number,po.production_line,po.quantity as order_qty,
-                     po.priority, p.name as product_name,p.sku,
+                     po.priority, p.name as product_name,p.code AS sku,
                      porder.po_number,porder.customer,
-                     COALESCE(sk.pallet_qty, 1) as pallet_qty,
-                     COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) as total_pcs
+                     COALESCE(p.pallet_qty, 1) as pallet_qty,
+                     COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) as total_pcs
               FROM batches b JOIN production_orders po ON b.prod_order_id=po.id
-              JOIN products p ON po.product_id=p.id
+              LEFT JOIN skus p ON p.id = po.sku_id
               LEFT JOIN purchase_orders porder ON po.po_id=porder.id
-              LEFT JOIN skus sk ON sk.code = p.sku"""
+"""
     if department:
         rows = conn.execute(base+" WHERE b.current_department=? ORDER BY b.created_at",(department,)).fetchall()
     elif prod_order_id:
@@ -3260,14 +3273,13 @@ def get_all_batches(department=None, prod_order_id=None):
 def get_batch(batch_id):
     conn = get_db()
     row = conn.execute("""SELECT b.*,po.prod_order_number,po.production_line,po.quantity as order_qty,
-        po.priority, p.name as product_name,p.sku,
+        po.priority, p.name as product_name,p.code AS sku,
         porder.po_number,porder.customer,
-        COALESCE(sk.pallet_qty, 1) as pallet_qty,
-        COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) as total_pcs
+        COALESCE(p.pallet_qty, 1) as pallet_qty,
+        COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) as total_pcs
         FROM batches b JOIN production_orders po ON b.prod_order_id=po.id
-        JOIN products p ON po.product_id=p.id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders porder ON po.po_id=porder.id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE b.id=?""",(batch_id,)).fetchone()
     conn.close(); return row_to_dict(row)
 
@@ -3503,10 +3515,9 @@ def _batch_total_pcs(batch_dict, conn):
     # Look up pallet_qty from SKU
     pallet_qty = 1
     sku_row = conn.execute("""
-        SELECT sk.pallet_qty FROM batches b
+        SELECT p.pallet_qty FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
-        LEFT JOIN skus sk ON sk.code = p.sku
+        LEFT JOIN skus p ON p.id = po.sku_id
         WHERE b.id = ?""", (batch_dict['id'],)).fetchone()
     if sku_row and sku_row[0]:
         pallet_qty = int(sku_row[0])
@@ -3629,11 +3640,10 @@ def find_mergeable_siblings(batch_id):
     if not b:
         conn.close(); return []
     rows = rows_to_list(conn.execute("""
-        SELECT b.*, COALESCE(sk.pallet_qty, 1) as pallet_qty
+        SELECT b.*, COALESCE(p.pallet_qty, 1) as pallet_qty
         FROM batches b
         LEFT JOIN production_orders po ON po.id = b.prod_order_id
-        LEFT JOIN products p ON p.id = po.product_id
-        LEFT JOIN skus sk ON sk.code = p.sku
+        LEFT JOIN skus p ON p.id = po.sku_id
         WHERE b.id != ?
           AND b.prod_order_id = ?
           AND b.current_department = ?
@@ -3655,9 +3665,9 @@ def get_planning_flow():
     conn = get_db()
     batches = rows_to_list(conn.execute("""
         SELECT b.*,po.prod_order_number,po.production_line,po.quantity as order_qty,
-               p.name as product_name,p.sku,porder.po_number,porder.customer
+               p.name as product_name,p.code AS sku,porder.po_number,porder.customer
         FROM batches b JOIN production_orders po ON b.prod_order_id=po.id
-        JOIN products p ON po.product_id=p.id LEFT JOIN purchase_orders porder ON po.po_id=porder.id
+        LEFT JOIN skus p ON p.id = po.sku_id LEFT JOIN purchase_orders porder ON po.po_id=porder.id
         WHERE b.status NOT IN ('completed') ORDER BY b.current_department,b.status,b.created_at
     """).fetchall())
     conn.close()
@@ -3672,8 +3682,8 @@ def get_po_flow_matrix():
     # Per production order: quantity at each department
     po_orders = rows_to_list(conn.execute("""
         SELECT po.id,po.prod_order_number,po.production_line,po.quantity as total_qty,po.status,
-               p.name as product_name,p.sku,porder.po_number,porder.customer
-        FROM production_orders po JOIN products p ON po.product_id=p.id
+               p.name as product_name,p.code AS sku,porder.po_number,porder.customer
+        FROM production_orders po LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders porder ON po.po_id=porder.id
         WHERE po.status NOT IN ('cancelled')
         ORDER BY porder.customer,po.prod_order_number
@@ -3909,13 +3919,13 @@ def get_capacity_context():
     ctx = {
         "machines": rows_to_list(conn.execute("SELECT * FROM machines").fetchall()),
         "active_orders": rows_to_list(conn.execute("""
-            SELECT o.*,p.name as product_name FROM orders o JOIN products p ON o.product_id=p.id
+            SELECT o.*,p.name as product_name FROM orders o LEFT JOIN skus p ON p.id = o.sku_id
             WHERE o.status IN ('pending','in_progress') ORDER BY o.priority,o.due_date
         """).fetchall()),
         "recent_logs": rows_to_list(conn.execute("""
             SELECT pl.log_date,pl.shift,p.name as product_name,m.name as machine_name,
                    pl.planned_qty,pl.actual_qty,pl.downtime_minutes
-            FROM production_logs pl JOIN products p ON pl.product_id=p.id
+            FROM production_logs pl LEFT JOIN skus p ON p.id = pl.sku_id
             JOIN machines m ON pl.machine_id=m.id WHERE pl.log_date>=date('now','-7 days')
             ORDER BY pl.log_date DESC
         """).fetchall()),
@@ -3929,17 +3939,16 @@ def get_fc_material_requirements(prod_order_id):
     conn = get_db()
     order = row_to_dict(conn.execute("""
         SELECT po.*,
-               p.name as product_name, p.sku as product_sku,
+               p.name as product_name, p.code as product_sku,
                pur.po_number, pur.customer,
                fv.id as face_veneer_id, fv.name as face_veneer_name, fv.code as face_veneer_code,
                bv.id as back_veneer_id, bv.name as back_veneer_name, bv.code as back_veneer_code,
-               COALESCE(sk.pallet_qty, 1) as pallet_qty
+               COALESCE(p.pallet_qty, 1) as pallet_qty
         FROM production_orders po
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
         LEFT JOIN materials fv ON fv.id = po.confirmed_face_veneer_id
         LEFT JOIN materials bv ON bv.id = po.confirmed_back_veneer_id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE po.id = ?
     """, (prod_order_id,)).fetchone())
     if not order:
@@ -4120,25 +4129,24 @@ def get_fg_warehouse_dashboard():
 
     # 1. Stock by SKU — sum of pcs from batches currently at fg_warehouse
     stock_rows = rows_to_list(conn.execute("""
-        SELECT p.sku as sku_code,
+        SELECT p.code as sku_code,
                p.name as product_name,
-               COALESCE(sk.pallet_qty, 1) as pallet_qty,
-               sk.thickness_mm, sk.width_mm, sk.length_mm,
+               COALESCE(p.pallet_qty, 1) as pallet_qty,
+               p.thickness_mm, p.width_mm, p.length_mm,
                COUNT(b.id) as batch_count,
-               SUM(COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1))) as in_stock_pcs,
+               SUM(COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1))) as in_stock_pcs,
                SUM(b.quantity) as in_stock_pallets,
                SUM(CASE WHEN COALESCE(b.fg_location,'FG')='WLWH'
-                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) ELSE 0 END) as wlwh_pcs,
+                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) ELSE 0 END) as wlwh_pcs,
                SUM(CASE WHEN COALESCE(b.fg_location,'FG')='WLWH' THEN b.quantity ELSE 0 END) as wlwh_pallets,
                SUM(CASE WHEN COALESCE(b.fg_location,'FG')<>'WLWH'
-                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) ELSE 0 END) as fg_pcs,
+                        THEN COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) ELSE 0 END) as fg_pcs,
                SUM(CASE WHEN COALESCE(b.fg_location,'FG')<>'WLWH' THEN b.quantity ELSE 0 END) as fg_pallets
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
-        LEFT JOIN skus sk ON sk.code = p.sku
+        LEFT JOIN skus p ON p.id = po.sku_id
         WHERE b.current_department = 'fg_warehouse' AND b.status != 'completed'
-        GROUP BY p.sku
+        GROUP BY p.code
         ORDER BY in_stock_pcs DESC
     """).fetchall())
 
@@ -4161,9 +4169,9 @@ def get_fg_warehouse_dashboard():
     for po in open_pos:
         lines = rows_to_list(conn.execute("""
             SELECT pol.id, pol.quantity as pallets_ordered, pol.pcs_per_pallet,
-                   p.sku, p.name as product_name, pol.production_line
+                   p.code AS sku, p.name as product_name, pol.production_line
             FROM po_lines pol
-            JOIN products p ON p.id = pol.product_id
+            LEFT JOIN skus p ON p.id = pol.sku_id
             WHERE pol.po_id = ?
         """, (po['id'],)).fetchall())
         po_total_ordered = 0
@@ -4187,18 +4195,17 @@ def get_fg_warehouse_dashboard():
     # 3. Pending receipt — batches that packing has released to the FG receiving zone
     pending_receipt = rows_to_list(conn.execute("""
         SELECT b.id, b.batch_number, b.quantity, b.pcs_actual, b.current_department, b.created_at,
-               COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) as total_pcs,
-               COALESCE(sk.pallet_qty, 1) as pallet_qty,
-               p.sku, p.name as product_name,
+               COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) as total_pcs,
+               COALESCE(p.pallet_qty, 1) as pallet_qty,
+               p.code AS sku, p.name as product_name,
                po.prod_order_number, po.production_line, po.priority,
                pur.po_number, pur.customer,
                (SELECT MAX(moved_at) FROM batch_movements
                 WHERE batch_id=b.id AND to_department='fg_receiving') as released_at
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE b.current_department = 'fg_receiving'
           AND b.status = 'active'
         ORDER BY po.priority, b.created_at
@@ -4207,16 +4214,15 @@ def get_fg_warehouse_dashboard():
     # 4. In production — batches still being made (NOT yet at fg_receiving or fg_warehouse)
     in_production = rows_to_list(conn.execute("""
         SELECT b.id, b.batch_number, b.quantity, b.pcs_actual, b.current_department, b.created_at,
-               COALESCE(b.pcs_actual, b.quantity * COALESCE(sk.pallet_qty, 1)) as total_pcs,
-               COALESCE(sk.pallet_qty, 1) as pallet_qty,
-               p.sku, p.name as product_name,
+               COALESCE(b.pcs_actual, b.quantity * COALESCE(p.pallet_qty, 1)) as total_pcs,
+               COALESCE(p.pallet_qty, 1) as pallet_qty,
+               p.code AS sku, p.name as product_name,
                po.prod_order_number, po.production_line, po.priority,
                pur.po_number, pur.customer
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE b.current_department NOT IN ('fg_receiving', 'fg_warehouse')
           AND b.status = 'active'
         ORDER BY po.priority, b.created_at
@@ -4338,7 +4344,7 @@ def get_fc_movements(limit=50, mat_type=None):
         FROM batch_movements bm
         JOIN batches b ON b.id = bm.batch_id
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         WHERE bm.from_department = 'fc' AND bm.to_department = 'laminating'
         ORDER BY bm.moved_at DESC
         LIMIT ?
@@ -4357,15 +4363,14 @@ def get_all_fc_batches():
     conn = get_db()
     rows = rows_to_list(conn.execute("""
         SELECT b.*, po.prod_order_number, po.production_line, po.quantity as order_qty,
-               p.name as product_name, p.sku as product_sku,
+               p.name as product_name, p.code as product_sku,
                pur.po_number, pur.customer,
                po.id as prod_order_id,
-               COALESCE(sk.pallet_qty, 1) as pallet_qty
+               COALESCE(p.pallet_qty, 1) as pallet_qty
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
-        LEFT JOIN skus sk ON sk.code = p.sku
         WHERE b.current_department = 'fc' AND b.status = 'active'
         ORDER BY b.created_at DESC
     """).fetchall())
@@ -4377,12 +4382,12 @@ def get_line_board(production_line=None):
     conn = get_db()
     query = """
         SELECT b.*, po.prod_order_number, po.production_line, po.priority,
-               p.name as product_name, p.sku as product_sku,
+               p.name as product_name, p.code as product_sku,
                pur.po_number, pur.customer,
                po.id as prod_order_id
         FROM batches b
         JOIN production_orders po ON po.id = b.prod_order_id
-        JOIN products p ON p.id = po.product_id
+        LEFT JOIN skus p ON p.id = po.sku_id
         LEFT JOIN purchase_orders pur ON pur.id = po.po_id
         WHERE b.status = 'active'
     """
@@ -5869,64 +5874,64 @@ def _get_accounting_production_output_impl(conn, from_date, to_date, dept, line)
         # (label, sql, columns to feed _add)
         ('cold_press', """
             SELECT DATE(cp.pressed_at) as d, 'cold_press' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    cp.pcs_in, cp.pcs_out, 0 as defects
             FROM cold_press_log cp
             LEFT JOIN batches b ON b.batch_number = cp.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(cp.pressed_at) BETWEEN ? AND ?
         """),
         ('hot_press', """
             SELECT DATE(hp.pressed_at) as d, 'hot_press' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    hp.pcs_in, hp.pcs_out, 0 as defects
             FROM hot_press_log hp
             LEFT JOIN batches b ON b.batch_number = hp.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(hp.pressed_at) BETWEEN ? AND ?
         """),
         ('sanding', """
             SELECT DATE(sl.sanded_at) as d, 'sanding' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    sl.pcs_in, sl.pcs_out, sl.defect_count as defects
             FROM sanding_log sl
             LEFT JOIN batches b ON b.batch_number = sl.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(sl.sanded_at) BETWEEN ? AND ?
         """),
         ('laminating', """
             SELECT DATE(ll.shift_start) as d, 'laminating' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    ll.pcs_target as pcs_in, ll.pcs_actual as pcs_out, 0 as defects
             FROM laminating_log ll
             LEFT JOIN batches b ON b.batch_number = ll.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(ll.shift_start) BETWEEN ? AND ?
         """),
         ('grading', """
             SELECT DATE(g.graded_at) as d, 'grading' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    (g.pcs_grade_a + g.pcs_grade_b + g.pcs_ncg + g.pcs_reject) as pcs_in,
                    (g.pcs_grade_a + g.pcs_grade_b) as pcs_out,
                    (g.pcs_ncg + g.pcs_reject) as defects
             FROM grading_log g
             LEFT JOIN batches b ON b.batch_number = g.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(g.graded_at) BETWEEN ? AND ?
         """),
         ('packing', """
             SELECT DATE(pk.logged_at) as d, 'packing' as dept,
-                   COALESCE(po.production_line,'') as line, COALESCE(p.sku,'') as sku,
+                   COALESCE(po.production_line,'') as line, COALESCE(p.code,'') as sku,
                    pk.pcs_in, pk.pcs_packed as pcs_out, 0 as defects
             FROM packing_log pk
             LEFT JOIN batches b ON b.batch_number = pk.batch_id
             LEFT JOIN production_orders po ON po.id = b.prod_order_id
-            LEFT JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             WHERE DATE(pk.logged_at) BETWEEN ? AND ?
         """),
     ]
@@ -7098,11 +7103,11 @@ def create_scrap_entry(*, batch_id: int, dept: str, pcs_scrapped: int,
 def list_scrap_entries(disposition: str = None, dept: str = None) -> list:
     conn = get_db()
     try:
-        q = """SELECT s.*, m.unit, p.name AS product_name, p.sku AS product_sku
+        q = """SELECT s.*, m.unit, p.name AS product_name, p.code AS product_sku
                FROM scrap_log s
                LEFT JOIN batches b ON b.id = s.batch_id
                LEFT JOIN production_orders po ON po.id = b.prod_order_id
-               LEFT JOIN products p ON p.id = po.product_id
+               LEFT JOIN skus p ON p.id = po.sku_id
                LEFT JOIN materials m ON m.id = NULL  -- placeholder for join uniformity
                WHERE 1=1"""
         params = []
@@ -7708,11 +7713,11 @@ def get_fc_aggregate_requirements() -> dict:
         batches = rows_to_list(conn.execute("""
             SELECT b.id, b.batch_number, b.quantity, b.pcs_actual,
                    po.id AS prod_order_id, po.priority,
-                   p.id AS product_id, p.sku, p.name AS product_name,
+                   p.id AS product_id, p.code AS sku, p.name AS product_name,
                    spo.po_number AS sales_po_number
             FROM batches b
             JOIN production_orders po ON po.id = b.prod_order_id
-            JOIN products p ON p.id = po.product_id
+            LEFT JOIN skus p ON p.id = po.sku_id
             LEFT JOIN purchase_orders spo ON spo.id = po.po_id
             WHERE b.status = 'active' AND LOWER(b.current_department) = 'fc'
             ORDER BY COALESCE(po.priority, 2) ASC, b.id ASC
@@ -8378,8 +8383,8 @@ def auto_generate_purchase_requests_for_po(po_id: int, requested_by: str = '') -
                    COALESCE(m.fc_stock, 0) + COALESCE(m.current_stock, 0) AS on_hand,
                    SUM(COALESCE(bl.qty_override, bl.usage_g_per_face, 0) * COALESCE(pol.quantity, 0)) AS required
             FROM po_lines pol
-            JOIN products p ON p.id = pol.product_id
-            JOIN skus s     ON s.code = p.sku
+            LEFT JOIN skus p ON p.id = pol.sku_id
+            JOIN skus s     ON s.code = p.code AS sku
             JOIN bom_lines bl ON bl.sku_id = s.id
             JOIN materials m  ON m.id = bl.material_id
             WHERE pol.po_id = ?
@@ -8666,9 +8671,9 @@ def get_po_document_trace(po_id: int) -> dict:
         prod_orders = rows_to_list(conn.execute("""
             SELECT po2.id, po2.prod_order_number, po2.quantity,
                    po2.confirmed_face_veneer_id, po2.confirmed_back_veneer_id,
-                   p.sku AS product_sku, p.name AS product_name
+                   p.code AS product_sku, p.name AS product_name
             FROM production_orders po2
-            JOIN products p ON p.id = po2.product_id
+            LEFT JOIN skus p ON p.id = po2.sku_id
             WHERE po2.po_id = ?
             ORDER BY po2.id
         """, (po_id,)).fetchall())
@@ -8913,11 +8918,11 @@ def get_po_traceability(po_id: int) -> dict:
         # Batches tied to this PO via production_orders (column is `po_id`, not `purchase_order_id`)
         batches = rows_to_list(conn.execute("""
             SELECT b.id, b.batch_number, b.quantity, b.pcs_actual,
-                   p.sku AS product_sku, p.name AS product_name,
+                   p.code AS product_sku, p.name AS product_name,
                    po2.id AS prod_order_id
             FROM batches b
             JOIN production_orders po2 ON po2.id = b.prod_order_id
-            JOIN products p ON p.id = po2.product_id
+            LEFT JOIN skus p ON p.id = po2.sku_id
             WHERE po2.po_id = ?
             ORDER BY b.id
         """, (po_id,)).fetchall())
@@ -8951,9 +8956,9 @@ def get_batch_glue_info(batch_id: int) -> dict:
     """Resolve a batch to its BOM glue line: returns code, total qty needed, recipe match."""
     conn = get_db()
     # Get batch with linked product/sku
-    b = conn.execute("""SELECT b.id,b.quantity,b.batch_number,p.sku AS product_sku
+    b = conn.execute("""SELECT b.id,b.quantity,b.batch_number,p.code AS product_sku
                         FROM batches b JOIN production_orders po ON po.id=b.prod_order_id
-                        JOIN products p ON p.id=po.product_id WHERE b.id=?""", (batch_id,)).fetchone()
+                        LEFT JOIN skus p ON p.id = po.sku_id WHERE b.id=?""", (batch_id,)).fetchone()
     if not b:
         conn.close(); return {"error": "Batch not found"}
     b = dict(b)
