@@ -73,7 +73,7 @@ TOOLS = [
             "objects. Only SELECT statements are allowed; INSERT/UPDATE/"
             "DELETE/DDL are rejected. The result is capped at "
             f"{MAX_SQL_ROWS} rows — apply LIMIT in your query for narrower "
-            "questions. Tables include: materials, batches, prod_batches, "
+            "questions. Tables include: materials, batches, batch_movements, "
             "purchase_orders, purchase_requests, consumable_request, "
             "manufacturing_line, departments, line_flow, glue_recipes, "
             "production_orders, bom_lines, skus, packing_skus, "

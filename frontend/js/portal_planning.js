@@ -6006,26 +6006,9 @@ async function runBatchDiagnosis(bid){
   }catch(e){el.innerHTML=`<div class="alert alert-danger small">${e.message}</div>`;}
 }
 
-// New batch modal
-async function openNewBatchModal(){
-  bootstrap.Modal.getOrCreateInstance(document.getElementById('newBatchModal')).show();
-}
-async function createNewBatch(){
-  const body={sku_code:document.getElementById('nb-sku').value.trim().toUpperCase(),
-    line_id:document.getElementById('nb-line').value,
-    shift:document.getElementById('nb-shift').value,
-    qty_planned:parseInt(document.getElementById('nb-qty').value)||0,
-    production_date:document.getElementById('nb-date').value,
-    order_id:document.getElementById('nb-order').value||null};
-  if(!body.sku_code||!body.qty_planned){toast('SKU and quantity required','danger');return;}
-  try{
-    const b=await api('/api/prod-batches','POST',body);
-    bootstrap.Modal.getInstance(document.getElementById('newBatchModal')).hide();
-    toast('Batch '+b.batch_id+' created');
-    await slLoadBatches();
-    slSelectBatch(b.batch_id);
-  }catch(e){toast(e.message,'danger');}
-}
+// New-batch modal (createNewBatch / openNewBatchModal) was removed in v2.21.76:
+// it created legacy prod_batch rows via the retired /api/prod-batches endpoint
+// and was never wired to a button. Batches come from production orders.
 
 
 
@@ -8582,91 +8565,10 @@ async function bdcSave(){
   }catch(e){toast(e.message,'danger');}
 }
 
-// ── Station Log batch detail (prod_batch) ─────────────────────
-let _slDetailBatch=null;
-async function slOpenDetail(batchId){
-  _slDetailBatch=batchId;
-  document.getElementById('bdc-title').innerHTML=`<i class="bi bi-layers me-2"></i>${batchId}`;
-  document.getElementById('bdc-body').innerHTML='<p class="text-muted small p-3">Loading…</p>';
-  bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('batchDetailCanvas')).show();
-  const [b, logs] = await Promise.all([
-    api(`/api/prod-batches/${batchId}`).catch(()=>null),
-    api(`/api/prod-batches/${batchId}/full-history`).catch(()=>{}),
-  ]);
-  document.getElementById('bdc-body').innerHTML = _renderProdBatchDetail(b, logs||{});
-}
-
-function _renderProdBatchDetail(b, logs){
-  const stationLabels={glue_mix:'Glue Mix',laminating:'Laminating',cold_press:'Cold Press',
-    repair:'Repair',sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
-  const stationIcons={glue_mix:'bi-droplet-fill',laminating:'bi-table',cold_press:'bi-snow',
-    repair:'bi-tools',sanding:'bi-eraser',hot_press:'bi-thermometer-sun',grading:'bi-patch-check',packing:'bi-boxes'};
-  const user=getCurrentUser();
-  const canEdit=user?.role=== ROLE.PRODUCTION_PLANNING||user?.role=== ROLE.MANAGERIAL;
-
-  let logsHtml='';
-  for(const [key, entries] of Object.entries(logs)){
-    if(!entries?.length) continue;
-    logsHtml+=`<div class="mb-3">
-      <h6 class="small fw-bold text-muted text-uppercase mb-2"><i class="bi ${stationIcons[key]||'bi-circle'} me-1"></i>${stationLabels[key]||key}</h6>
-      ${entries.map(e=>{
-        const ncgIssues=(e.ncg_issues||[]);
-        return `<div class="border rounded p-2 mb-1" style="font-size:.78rem">
-          <div class="d-flex gap-3 flex-wrap">
-            ${Object.entries(e).filter(([k])=>!['ncg_issues'].includes(k)).slice(0,8).map(([k,v])=>
-              `<span><span class="text-muted">${k.replace(/_/g,' ')}:</span> <b>${v!=null?v:'—'}</b></span>`
-            ).join('')}
-          </div>
-          ${ncgIssues.length?`<div class="mt-1"><span class="text-warning small">NCG Issues: </span>${ncgIssues.map(i=>`<span class="badge bg-warning text-dark me-1">${i.reason_code} (${i.pcs_count} pcs)</span>`).join('')}</div>`:''}
-        </div>`;
-      }).join('')}
-    </div>`;
-  }
-
-  return `<div class="px-3 py-2">
-    <div class="row g-2 mb-3">
-      <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">SKU</div><div class="fw-bold small">${b?.sku_code||'—'}</div></div></div>
-      <div class="col-6"><div class="card bg-light p-2 text-center"><div class="small text-muted">Status</div><div class="fw-bold">${b?.status||'—'}</div></div></div>
-    </div>
-    <table class="table table-sm table-borderless mb-3" style="font-size:.82rem">
-      <tr><th class="text-muted fw-normal" style="width:38%">Batch ID</th><td class="fw-semibold">${b?.batch_id||'—'}</td></tr>
-      <tr><th class="text-muted fw-normal">Line</th><td>${b?.line_id||'—'}</td></tr>
-      <tr><th class="text-muted fw-normal">Qty Planned</th><td>${fmt(b?.qty_planned)} pcs</td></tr>
-      <tr><th class="text-muted fw-normal">Date / Shift</th><td>${b?.production_date||'—'} · ${b?.shift||'—'}</td></tr>
-    </table>
-    ${canEdit?`<div class="mb-3 p-2 border rounded bg-light">
-      <div class="small fw-semibold mb-2"><i class="bi bi-pencil me-1"></i>Quick Edit</div>
-      <div class="row g-2">
-        <div class="col-6"><label class="form-label small">Qty Planned</label>
-          <input type="number" class="form-control form-control-sm" id="bdc-sl-qty" value="${b?.qty_planned||0}"></div>
-        <div class="col-6"><label class="form-label small">Shift</label>
-          <select class="form-select form-select-sm" id="bdc-sl-shift">
-            <option ${b?.shift==='MORNING'?'selected':''}>MORNING</option>
-            <option ${b?.shift==='AFTERNOON'?'selected':''}>AFTERNOON</option>
-            <option ${b?.shift==='NIGHT'?'selected':''}>NIGHT</option>
-          </select></div>
-        <div class="col-12"><label class="form-label small">Notes</label>
-          <input class="form-control form-control-sm" id="bdc-sl-notes" value="${b?.notes||''}"></div>
-      </div>
-      <button class="btn btn-primary btn-sm mt-2" onclick="bdcSlSave('${b?.batch_id}')"><i class="bi bi-floppy me-1"></i>Save</button>
-    </div>`:''}
-    <h6 class="small fw-bold text-muted text-uppercase mb-2 mt-3">Station Logs</h6>
-    ${logsHtml||'<p class="text-muted small">No station logs recorded yet.</p>'}
-  </div>`;
-}
-
-async function bdcSlSave(batchId){
-  const body={
-    qty_planned: parseInt(document.getElementById('bdc-sl-qty').value)||0,
-    shift: document.getElementById('bdc-sl-shift').value||'MORNING',
-    notes: document.getElementById('bdc-sl-notes').value||'',
-  };
-  try{
-    await api(`/api/prod-batches/${batchId}`,'PATCH',body);
-    toast('Batch updated','success');
-    slOpenDetail(batchId);
-  }catch(e){toast(e.message,'danger');}
-}
+// The legacy prod_batch detail panel (slOpenDetail / _renderProdBatchDetail /
+// bdcSlSave) was removed in v2.21.76 — it read/wrote the retired
+// /api/prod-batches endpoints and had no live caller. The live batch detail is
+// deptBatchDetail (System B: batches + batch_movements + station logs).
 
 
 

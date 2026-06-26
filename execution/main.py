@@ -50,8 +50,6 @@ from database import (
     get_employees, save_employee, delete_employee,
     get_manufacturing_lines, get_prod_machines,
     get_departments, get_line_flow, get_all_line_flows, get_stations,
-    get_mfg_orders, create_mfg_order,
-    get_prod_batches, create_prod_batch, advance_prod_batch_status, get_prod_batch,
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
     get_attendance, save_attendance, delete_attendance, get_attendance_summary,
     get_station_stock, get_station_stock_movements, log_station_stock_movement,
@@ -59,8 +57,8 @@ from database import (
     correct_station_job, correct_stock_movement, fold_glue_mix_blank_stock,
     update_station_stock_min,
     get_station_presets, save_station_preset, delete_station_preset, touch_station_preset,
-    log_glue_mix, log_laminating, advance_laminating,
-    log_cold_press, log_repair, advance_repair,
+    log_glue_mix, log_laminating,
+    log_cold_press, log_repair,
     log_sanding, log_hot_press, log_grading, log_packing,
     get_daily_production, get_lam_efficacy_report,
     get_sanding_defect_report, get_ncg_by_reason_report,
@@ -326,19 +324,6 @@ class EmployeeIn(BaseModel):
     emp_id: Optional[str] = None
     emp_name: str; department: str; role: str = ""
     line_id: Optional[str] = None; active: int = 1
-
-class MfgOrderIn(BaseModel):
-    sku_code: str; line_id: str; qty_ordered: int
-    po_ref: str = ""; customer_code: str = ""; due_date: str = ""
-
-class ProdBatchIn(BaseModel):
-    sku_code: str; line_id: str; qty_planned: int
-    order_id: Optional[str] = None
-    production_date: Optional[str] = None
-    shift: str = "MORNING"
-
-class BatchAdvanceIn(BaseModel):
-    next_status: str
 
 class GlueMixIn(BaseModel):
     batch_id: str; recipe_code: str; qty_kg: float
@@ -1815,40 +1800,6 @@ def edit_employee(emp_id: str, body: EmployeeIn):
 @app.delete("/api/employees/{emp_id}")
 def remove_employee(emp_id: str): delete_employee(emp_id); return {"ok": True}
 
-# Mfg orders
-@app.get("/api/mfg-orders")
-def list_mfg_orders(status: Optional[str] = None, line_id: Optional[str] = None):
-    return get_mfg_orders(status, line_id)
-
-@app.post("/api/mfg-orders", status_code=201)
-def add_mfg_order(body: MfgOrderIn): return create_mfg_order(body.dict())
-
-# Production batches
-@app.get("/api/prod-batches")
-def list_prod_batches(
-    line_id: Optional[str] = None,
-    status: Optional[str] = None,
-    date: Optional[str] = None,
-    order_id: Optional[str] = None
-):
-    return get_prod_batches(line_id, status, date, order_id)
-
-@app.post("/api/prod-batches", status_code=201)
-def add_prod_batch(body: ProdBatchIn): return create_prod_batch(body.dict())
-
-@app.get("/api/prod-batches/{batch_id}")
-def get_one_prod_batch(batch_id: str):
-    b = get_prod_batch(batch_id)
-    if not b: raise HTTPException(404, "Batch not found")
-    return b
-
-@app.get("/api/prod-batches/{batch_id}/logs")
-def batch_logs(batch_id: str): return get_batch_station_logs(batch_id)
-
-@app.post("/api/prod-batches/{batch_id}/advance")
-def advance_batch(batch_id: str, body: BatchAdvanceIn):
-    advance_prod_batch_status(batch_id, body.next_status); return {"ok": True}
-
 # Station log endpoints.
 # These predate require_auth (defined further down), so they resolve the user
 # from the token inline to attribute the action for per-user Undo.
@@ -1861,11 +1812,6 @@ def _act(token, *, action_type, summary, undo_spec):
 
 def _del(table, col, val):
     return {"table": table, "col": col, "val": val}
-
-def _status_revert(batch_id, prev_status, cur_status):
-    # forward set status prev->cur; undo restores prev where it's still cur.
-    return {"table": "prod_batch", "set": {"status": prev_status},
-            "where": {"batch_id": batch_id, "status": cur_status}}
 
 def _record_undo(user, action_type, summary, result):
     """Record the reversal plan a warehouse function returned in result['undo'],
@@ -1893,16 +1839,11 @@ def post_laminating(body: LaminatingIn, x_auth_token: str = Header(None)):
          undo_spec={"deletes": [_del('laminating_log', 'lam_id', lid)]})
     return {"lam_id": lid}
 
-@app.post("/api/production/laminating/advance")
-def advance_lam(batch_id: str):
-    advance_laminating(batch_id); return {"ok": True}
-
 @app.post("/api/production/cold-press", status_code=201)
 def post_cold_press(body: ColdPressIn, x_auth_token: str = Header(None)):
     d = body.dict(); cid = log_cold_press(d)
     _act(x_auth_token, action_type='cold-press', summary=f"Cold press · batch {d.get('batch_id')}",
-         undo_spec={"deletes": [_del('cold_press_log', 'cp_id', cid)],
-                    "updates": [_status_revert(d.get('batch_id'), 'COLD_PRESS', 'REPAIR')]})
+         undo_spec={"deletes": [_del('cold_press_log', 'cp_id', cid)]})
     return {"cp_id": cid}
 
 @app.post("/api/production/repair", status_code=201)
@@ -1912,24 +1853,18 @@ def post_repair(body: RepairIn, x_auth_token: str = Header(None)):
          undo_spec={"deletes": [_del('repair_log', 'repair_id', rid)]})
     return {"repair_id": rid}
 
-@app.post("/api/production/repair/advance")
-def advance_rep(batch_id: str):
-    advance_repair(batch_id); return {"ok": True}
-
 @app.post("/api/production/sanding", status_code=201)
 def post_sanding(body: SandingIn, x_auth_token: str = Header(None)):
     d = body.dict(); sid = log_sanding(d)
     _act(x_auth_token, action_type='sanding', summary=f"Sanding log · batch {d.get('batch_id')}",
-         undo_spec={"deletes": [_del('sanding_log', 'sand_id', sid)],
-                    "updates": [_status_revert(d.get('batch_id'), 'SANDING', 'HOT_PRESS')]})
+         undo_spec={"deletes": [_del('sanding_log', 'sand_id', sid)]})
     return {"sand_id": sid}
 
 @app.post("/api/production/hot-press", status_code=201)
 def post_hot_press(body: HotPressIn, x_auth_token: str = Header(None)):
     d = body.dict(); hid = log_hot_press(d)
     _act(x_auth_token, action_type='hot-press', summary=f"Hot press · batch {d.get('batch_id')}",
-         undo_spec={"deletes": [_del('hot_press_log', 'hp_id', hid)],
-                    "updates": [_status_revert(d.get('batch_id'), 'HOT_PRESS', 'GRADING')]})
+         undo_spec={"deletes": [_del('hot_press_log', 'hp_id', hid)]})
     return {"hp_id": hid}
 
 @app.post("/api/production/grading", status_code=201)
@@ -1937,8 +1872,7 @@ def post_grading(body: GradingIn, x_auth_token: str = Header(None)):
     d = body.dict(); result = log_grading(d)
     gid = result.get('grade_id') if isinstance(result, dict) else result
     _act(x_auth_token, action_type='grading', summary=f"Grading log · batch {d.get('batch_id')}",
-         undo_spec={"deletes": [_del('grading_log', 'grade_id', gid)],
-                    "updates": [_status_revert(d.get('batch_id'), 'GRADING', 'COMPLETE')]})
+         undo_spec={"deletes": [_del('grading_log', 'grade_id', gid)]})
     return result
 
 @app.post("/api/production/grading/{grade_id}/ncg-issues", status_code=201)
@@ -1950,11 +1884,6 @@ def post_ncg_issues(grade_id: str, body: dict):
 @app.get("/api/production/grading/{grade_id}/ncg-issues")
 def fetch_ncg_issues(grade_id: str):
     return get_ncg_issues(grade_id)
-
-@app.get("/api/prod-batches/{batch_id}/full-history")
-def prod_batch_full_history(batch_id: str):
-    return get_batch_full_history(batch_id)
-    return {"request_id": rid, "ok": True}
 
 @app.post("/api/production/packing", status_code=201)
 def post_packing(body: PackingIn, x_auth_token: str = Header(None)):
@@ -2303,21 +2232,6 @@ def patch_batch(batch_id: int, body: dict):
     conn.execute(f"UPDATE batches SET {sets} WHERE id=?", vals)
     conn.commit()
     row = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
-    conn.close()
-    return row_to_dict(row)
-
-@app.patch("/api/prod-batches/{batch_id}")
-def patch_prod_batch(batch_id: str, body: dict):
-    conn = get_db()
-    allowed = {'qty_planned', 'notes', 'shift', 'production_date'}
-    updates = {k: v for k, v in body.items() if k in allowed}
-    if not updates:
-        conn.close(); raise HTTPException(400, "No valid fields to update")
-    sets = ", ".join(f"{k}=?" for k in updates)
-    vals = list(updates.values()) + [batch_id]
-    conn.execute(f"UPDATE prod_batch SET {sets} WHERE batch_id=?", vals)
-    conn.commit()
-    row = conn.execute("SELECT * FROM prod_batch WHERE batch_id=?", (batch_id,)).fetchone()
     conn.close()
     return row_to_dict(row)
 

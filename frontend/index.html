@@ -6195,34 +6195,7 @@ const NAV_SEC_ROLES = {
   <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveEmployee()">Save</button></div>
 </div></div></div>
 
-<!-- New Production Batch Modal -->
-<div class="modal fade" id="newBatchModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-  <div class="modal-header"><h5 class="modal-title">New Production Batch</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
-  <div class="modal-body">
-    <div class="mb-2"><label class="form-label small">SKU Code <span class="text-danger">*</span></label>
-      <input class="form-control form-control-sm" id="nb-sku" placeholder="e.g. 4ALM52A11" list="nb-sku-list" oninput="this.value=this.value.toUpperCase()">
-      <datalist id="nb-sku-list"></datalist>
-    </div>
-    <div class="row g-2 mb-2">
-      <div class="col-6"><label class="form-label small">Line <span class="text-danger">*</span></label>
-        <select class="form-select form-select-sm" id="nb-line"><option>P01</option><option>P02</option><option>P37</option><option>PUV</option><option>PVS</option><option>PSP</option></select>
-      </div>
-      <div class="col-6"><label class="form-label small">Shift <span class="text-danger">*</span></label>
-        <select class="form-select form-select-sm" id="nb-shift"><option>MORNING</option><option>AFTERNOON</option><option>NIGHT</option></select>
-      </div>
-    </div>
-    <div class="row g-2 mb-2">
-      <div class="col-6"><label class="form-label small">Qty Planned <span class="text-danger">*</span></label>
-        <input type="number" class="form-control form-control-sm" id="nb-qty" min="1"></div>
-      <div class="col-6"><label class="form-label small">Production Date</label>
-        <input type="date" class="form-control form-control-sm" id="nb-date"></div>
-    </div>
-    <div class="mb-2"><label class="form-label small">Work Order (optional)</label>
-      <select class="form-select form-select-sm" id="nb-order"><option value="">— No WO —</option></select>
-    </div>
-  </div>
-  <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="createNewBatch()">Create Batch</button></div>
-</div></div></div>
+<!-- New Production Batch Modal removed in v2.21.76 (legacy prod_batch create flow, retired). -->
 
 </body>
 </html>

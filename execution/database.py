@@ -897,34 +897,13 @@ def init_db():
             reason_code TEXT PRIMARY KEY,
             description TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS mfg_order (
-            order_id      TEXT PRIMARY KEY,
-            po_ref        TEXT DEFAULT '',
-            customer_code TEXT NOT NULL DEFAULT '',
-            sku_code      TEXT NOT NULL,
-            line_id       TEXT NOT NULL REFERENCES manufacturing_line(line_id),
-            qty_ordered   INTEGER NOT NULL CHECK (qty_ordered > 0),
-            due_date      TEXT DEFAULT '',
-            status        TEXT NOT NULL DEFAULT 'OPEN'
-                              CHECK (status IN ('OPEN','IN_PROGRESS','COMPLETED','CANCELLED')),
-            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS prod_batch (
-            batch_id        TEXT PRIMARY KEY,
-            order_id        TEXT REFERENCES mfg_order(order_id),
-            sku_code        TEXT NOT NULL,
-            line_id         TEXT NOT NULL REFERENCES manufacturing_line(line_id),
-            qty_planned     INTEGER NOT NULL CHECK (qty_planned > 0),
-            production_date TEXT NOT NULL DEFAULT (date('now')),
-            shift           TEXT NOT NULL CHECK (shift IN ('MORNING','AFTERNOON','NIGHT')),
-            status          TEXT NOT NULL DEFAULT 'GLUE_MIX'
-                                CHECK (status IN (
-                                    'GLUE_MIX','LAMINATING','COLD_PRESS',
-                                    'REPAIR','SANDING','HOT_PRESS',
-                                    'GRADING','PACKING','COMPLETE')),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            notes           TEXT DEFAULT ''
-        );
+        -- mfg_order + prod_batch (legacy "System A") were retired in v2.21.76.
+        -- The live production system keys everything off `batches` /
+        -- `production_orders` (System B); these two tables were dead (mfg_order
+        -- empty, prod_batch 2 stale rows, no live create/read path). Existing
+        -- databases drop them in the WS3a-2 retirement block further down in
+        -- init_db (after the *_log foreign keys that referenced prod_batch are
+        -- stripped). Do not re-add them here.
         CREATE TABLE IF NOT EXISTS prod_machine (
             machine_id   TEXT PRIMARY KEY,
             machine_type TEXT NOT NULL,
@@ -1134,7 +1113,6 @@ def init_db():
         "ALTER TABLE sanding_records ADD COLUMN veneer_side TEXT DEFAULT ''",
         "ALTER TABLE repair_records ADD COLUMN veneer_side TEXT DEFAULT ''",
         "ALTER TABLE grading_records ADD COLUMN veneer_side TEXT DEFAULT ''",
-        "ALTER TABLE prod_batch ADD COLUMN notes TEXT DEFAULT ''",
         "ALTER TABLE laminating_log ADD COLUMN time_minutes INTEGER DEFAULT 0",
         "ALTER TABLE laminating_log ADD COLUMN material_role TEXT DEFAULT ''",
         # Component → station-stock material mapping for glue recipes
@@ -1416,6 +1394,68 @@ def init_db():
         except Exception:
             pass  # column already exists
 
+    # ── WS3a-2 (v2.21.76): retire the dead "System A" tables prod_batch +
+    #    mfg_order. The live Station Hub keys the per-station *_log tables by
+    #    batches.batch_number (System B); these two tables were dead (mfg_order
+    #    empty, prod_batch a couple of stale rows, no live create/read path).
+    #    Older databases have *_log tables (every station log, incl. packing_log)
+    #    that declare `REFERENCES prod_batch(batch_id)` — the source CREATEs are
+    #    already FK-free, so fresh DBs are clean. With foreign keys enforced that
+    #    dangling reference makes every *_log write fail the moment prod_batch is
+    #    dropped, so, with FK off, rebuild EVERY table that still references
+    #    prod_batch (discovered by scanning, not a hardcoded list) to strip just
+    #    that one FK, then drop the two tables. legacy_alter_table=ON makes the
+    #    table-rename skip re-validating views (a legacy one-off `packing_bom`
+    #    view referenced the already-dropped `suppliers` table and would
+    #    otherwise abort the rename — that view is rebuilt cleanly in the
+    #    reporting-views block below). Idempotent + self-healing: runs whenever
+    #    prod_batch still exists OR any table still carries a dangling prod_batch
+    #    FK (so a half-applied migration is completed on the next startup).
+    try:
+        import re as _re
+        _all_tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        _pb_tables = []
+        for _t in _all_tables:
+            try:
+                if any(r[2] == 'prod_batch'
+                       for r in conn.execute(f'PRAGMA foreign_key_list("{_t}")').fetchall()):
+                    _pb_tables.append(_t)
+            except Exception:
+                pass
+        _pb_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='prod_batch'").fetchone()
+        if _pb_tables or _pb_exists:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("PRAGMA legacy_alter_table=ON")
+            for _t in _pb_tables:
+                _idx = [r[0] for r in conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                    (_t,)).fetchall()]
+                _ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (_t,)).fetchone()[0]
+                _clean = _re.sub(r"\s+REFERENCES\s+prod_batch\s*\([^)]*\)", "", _ddl)
+                _clean = _re.sub(r'(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?)' + _re.escape(_t) + r'("?)',
+                                 r'\g<1>' + _t + r'__rb\g<2>', _clean, count=1)
+                conn.execute(f'DROP TABLE IF EXISTS "{_t}__rb"')
+                conn.execute(_clean)
+                conn.execute(f'INSERT INTO "{_t}__rb" SELECT * FROM "{_t}"')
+                conn.execute(f'DROP TABLE "{_t}"')
+                conn.execute(f'ALTER TABLE "{_t}__rb" RENAME TO "{_t}"')
+                for _ix in _idx:
+                    conn.execute(_ix)
+            conn.execute("DROP TABLE IF EXISTS prod_batch")
+            conn.execute("DROP TABLE IF EXISTS mfg_order")
+            conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try:
+            conn.execute("PRAGMA legacy_alter_table=OFF")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+
     # Enforce unique material codes at the DB level (case-insensitive). Best
     # effort: if the table still contains pre-existing duplicate codes the index
     # can't be created — startup continues (the app layer also blocks dupes on
@@ -1591,6 +1631,25 @@ def init_db():
         LEFT JOIN sanding_log sl ON sl.batch_id = g.batch_id
         LEFT JOIN hot_press_log hp ON hp.batch_id = g.batch_id
         WHERE g.pcs_ncg > 0 OR g.pcs_reject > 0 GROUP BY g.grade_id;
+
+        -- packing_bom: per-packing-SKU material lines + costs. A legacy one-off
+        -- migration created this view with a `LEFT JOIN suppliers`, but the
+        -- suppliers table was dropped (WS1) which left the view broken — every
+        -- query against it raised "no such table: suppliers", taking the
+        -- Packing BOM feature down. Recreated here (so fresh DBs have it too)
+        -- without the suppliers join; the supplier column is reported blank.
+        DROP VIEW IF EXISTS packing_bom;
+        CREATE VIEW packing_bom AS
+        SELECT ps.code AS packing_sku_code, ps.name AS packing_sku_name,
+               pl.seq, m.code AS mat_code, m.name_th, m.name AS mat_name,
+               m.unit, m.price AS unit_price,
+               pl.qty, pl.qty_unit,
+               ROUND(m.price * pl.qty, 4) AS line_cost,
+               '' AS supplier, pl.id AS packing_line_id
+        FROM packing_lines pl
+        JOIN packing_skus ps ON ps.id = pl.packing_sku_id
+        JOIN materials    m  ON m.id  = pl.material_id
+        ORDER BY ps.code, pl.seq;
         """)
         conn.commit()
     except Exception:
@@ -5071,61 +5130,9 @@ def _batch_id():
 def _new_log_id(prefix):
     return f"{prefix}-{uuid.uuid4().hex[:8].upper()}"
 
-def get_mfg_orders(status=None, line_id=None):
-    conn = get_db(); params = []
-    q = "SELECT * FROM mfg_order WHERE 1=1"
-    if status: q += " AND status=?"; params.append(status)
-    if line_id: q += " AND line_id=?"; params.append(line_id)
-    rows = conn.execute(q + " ORDER BY created_at DESC", params).fetchall()
-    conn.close(); return rows_to_list(rows)
-
-def create_mfg_order(data):
-    conn = get_db()
-    oid = _wo_id()
-    conn.execute(
-        """INSERT INTO mfg_order (order_id,po_ref,customer_code,sku_code,line_id,qty_ordered,due_date)
-           VALUES (?,?,?,?,?,?,?)""",
-        (oid,data.get('po_ref',''),data.get('customer_code',''),
-         data['sku_code'],data['line_id'],data['qty_ordered'],data.get('due_date','')))
-    conn.commit()
-    row = conn.execute("SELECT * FROM mfg_order WHERE order_id=?", (oid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def get_prod_batches(line_id=None, status=None, date_=None, order_id=None):
-    conn = get_db(); params = []
-    q = """SELECT pb.*, mo.sku_code as order_sku, mo.po_ref, mo.customer_code
-           FROM prod_batch pb
-           LEFT JOIN mfg_order mo ON mo.order_id = pb.order_id
-           WHERE 1=1"""
-    if line_id: q += " AND pb.line_id=?"; params.append(line_id)
-    if status:  q += " AND pb.status=?";  params.append(status)
-    if date_:   q += " AND pb.production_date=?"; params.append(date_)
-    if order_id: q += " AND pb.order_id=?"; params.append(order_id)
-    rows = conn.execute(q + " ORDER BY pb.created_at DESC", params).fetchall()
-    conn.close(); return rows_to_list(rows)
-
-def create_prod_batch(data):
-    conn = get_db()
-    bid = _batch_id()
-    conn.execute(
-        """INSERT INTO prod_batch (batch_id,order_id,sku_code,line_id,qty_planned,production_date,shift)
-           VALUES (?,?,?,?,?,?,?)""",
-        (bid,data.get('order_id'),data['sku_code'],data['line_id'],data['qty_planned'],
-         data.get('production_date') or datemod.today().isoformat(),
-         data.get('shift') or 'MORNING'))
-    conn.commit()
-    row = conn.execute("SELECT * FROM prod_batch WHERE batch_id=?", (bid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def advance_prod_batch_status(batch_id, new_status):
-    conn = get_db()
-    conn.execute("UPDATE prod_batch SET status=? WHERE batch_id=?", (new_status, batch_id))
-    conn.commit(); conn.close()
-
-def get_prod_batch(batch_id):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM prod_batch WHERE batch_id=?", (batch_id,)).fetchone()
-    conn.close(); return row_to_dict(row)
+# mfg_order + prod_batch ("System A") CRUD was removed in v2.21.76 — the tables
+# were dead (see the retirement block in init_db). The live production system
+# uses `batches` / `production_orders` (System B) exclusively.
 
 # ═══════════════════════════════════════════════════════════════
 # PRODUCTION MODULE — Station Logs
@@ -7361,7 +7368,7 @@ def get_qc_summary() -> dict:
 _UNDO_TABLES = {
     'laminating_log', 'cold_press_log', 'repair_log', 'sanding_log',
     'hot_press_log', 'grading_log', 'glue_mix_log', 'glue_mix_batches',
-    'packing_log', 'production_logs', 'prod_batch', 'orders',
+    'packing_log', 'production_logs', 'orders',
     # Warehouse actions (Undo Phase 2)
     'materials', 'material_lots', 'pr_shipments', 'purchase_requests',
     'wh_stock_transfers', 'wh_move_requests', 'fg_location_moves', 'batches',
@@ -9140,16 +9147,6 @@ def log_laminating(data):
         try: conn.close()
         except Exception: pass
 
-def advance_laminating(batch_id):
-    conn = get_db()
-    try:
-        conn.execute("UPDATE prod_batch SET status='COLD_PRESS' WHERE batch_id=? AND status='LAMINATING'",
-                     (batch_id,))
-        conn.commit()
-    finally:
-        try: conn.close()
-        except Exception: pass
-
 def log_cold_press(data):
     conn = get_db()
     try:
@@ -9161,8 +9158,6 @@ def log_cold_press(data):
             (cid,data['batch_id'],data['machine_id'],
              data.get('operator_id'),data.get('operator_name',''),
              data.get('pressure_bar'),data.get('dwell_min'),data['pcs_in'],data['pcs_out']))
-        conn.execute("UPDATE prod_batch SET status='REPAIR' WHERE batch_id=? AND status='COLD_PRESS'",
-                     (data['batch_id'],))
         conn.commit()
         return cid
     finally:
@@ -9185,16 +9180,6 @@ def log_repair(data):
         try: conn.close()
         except Exception: pass
 
-def advance_repair(batch_id):
-    conn = get_db()
-    try:
-        conn.execute("UPDATE prod_batch SET status='SANDING' WHERE batch_id=? AND status='REPAIR'",
-                     (batch_id,))
-        conn.commit()
-    finally:
-        try: conn.close()
-        except Exception: pass
-
 def log_sanding(data):
     conn = get_db()
     try:
@@ -9207,8 +9192,6 @@ def log_sanding(data):
              data.get('operator_id'),data.get('operator_name',''),
              data['grit_setting'],data.get('feed_speed'),
              data['pcs_in'],data['pcs_out'],data.get('defect_count',0),data.get('notes')))
-        conn.execute("UPDATE prod_batch SET status='HOT_PRESS' WHERE batch_id=? AND status='SANDING'",
-                     (data['batch_id'],))
         conn.commit()
         return sid
     finally:
@@ -9227,8 +9210,6 @@ def log_hot_press(data):
              data.get('operator_id'),data.get('operator_name',''),
              data['temp_c'],data['pressure_bar'],data['press_time_min'],
              data['pcs_in'],data['pcs_out']))
-        conn.execute("UPDATE prod_batch SET status='GRADING' WHERE batch_id=? AND status='HOT_PRESS'",
-                     (data['batch_id'],))
         conn.commit()
         return hid
     finally:
@@ -9253,8 +9234,6 @@ def log_grading(data):
             (gid,data['batch_id'],data.get('grader_id'),data.get('grader_name',''),
              outcome,pcs_a,pcs_b,pcs_ncg,pcs_rej,
              data.get('ncg_reason_code'),data.get('notes')))
-        conn.execute("UPDATE prod_batch SET status='COMPLETE' WHERE batch_id=? AND status='GRADING'",
-                     (data['batch_id'],))
         conn.commit()
         backtrack = None
         if pcs_ncg > 0 or pcs_rej > 0:
