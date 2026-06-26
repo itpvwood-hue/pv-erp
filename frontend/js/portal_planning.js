@@ -6559,12 +6559,12 @@ async function importPdfLinesToPo(){
   // ── Step 2: build import payload from review table ─────────────────────────
   const lines=_pdfExtracted.lines||[];
   const toImport=lines
-    .filter(l=>l.product_id)
+    .filter(l=>l.sku_id)
     .map((l,i)=>{
       const pppEl=document.getElementById('pdf-ppp-'+i);
       const ppp=pppEl?parseInt(pppEl.value)||null:l.pcs_per_unit||null;
       return {
-        product_id:    l.product_id,
+        sku_id:        l.sku_id,
         quantity:      l.unit||1,
         pcs_per_pallet: ppp||null,
         unit_price:    l.price_per_msf||0,
@@ -6817,14 +6817,9 @@ async function savePoLine(){
   const sel=document.getElementById('pol-product-id');
   const fg=_polFgAll.find(s=>String(s.id)===String(sel.value));
   if(!fg){toast('Please select an FG code','danger');return;}
-  let prodRow=(products||[]).find(p=>p.sku===fg.code);
-  if(!prodRow){
-    const all=await api('/api/products');
-    prodRow=all.find(p=>p.sku===fg.code);
-  }
-  if(!prodRow){toast(`FG ${fg.code} not linked to a product record yet`,'danger');return;}
+  // _polFgAll is the skus (FG) catalog — send sku_id directly.
   body.po_id=selectedPoId;
-  body.product_id=prodRow.id;
+  body.sku_id=fg.id;
   try{
     await api('/api/po-lines','POST',body);
     bootstrap.Modal.getInstance(document.getElementById('poLineModal')).hide();
@@ -7001,7 +6996,7 @@ async function saveProdOrder(release){
   const notesBase=document.getElementById('pord-notes').value||'';
   const partialNote=(palletsRaw%1!==0)?`[${palletsRaw} pallets ordered]`:'';
   const finalNotes=partialNote && !notesBase.includes(partialNote)?(notesBase?notesBase+' '+partialNote:partialNote):notesBase;
-  const body={prod_order_number:'PO-'+Date.now(),product_id:line.product_id||0,production_line:line.production_line||'P01',quantity:qty,po_line_id:lineId,po_id:selectedPoId,planned_start:document.getElementById('pord-start').value,notes:finalNotes,status:'draft',priority:2};
+  const body={prod_order_number:'PO-'+Date.now(),sku_id:line.sku_id,production_line:line.production_line||'P01',quantity:qty,po_line_id:lineId,po_id:selectedPoId,planned_start:document.getElementById('pord-start').value,notes:finalNotes,status:'draft',priority:2};
   try{
     const ord=await api('/api/production-orders','POST',body);
     if(release) await api(`/api/production-orders/${ord.id}/release`,'POST');
@@ -7039,7 +7034,7 @@ async function releaseSelectedPoLines(poId){
     const ppp = l.pcs_per_pallet || 1;
     const body = {
       prod_order_number: 'PO-'+Date.now()+'-'+l.id,
-      product_id: l.product_id,
+      sku_id: l.sku_id,
       production_line: l.production_line || 'P01',
       quantity: l.quantity,            // pallets
       po_line_id: l.id,

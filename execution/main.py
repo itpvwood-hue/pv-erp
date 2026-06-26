@@ -68,8 +68,6 @@ from database import (
     # Core
     get_all_materials, get_material, create_material, update_material, delete_material, bulk_upsert_material,
     delete_fg_bom,
-    get_all_products, get_product, create_product, update_product, delete_product,
-    get_bom_for_product, get_all_bom, create_bom_entry, update_bom_entry, delete_bom_entry, bulk_upsert_bom,
     get_all_machines, get_machine, create_machine, update_machine, delete_machine,
     get_all_orders, get_order, create_order, update_order, delete_order,
     get_all_production_logs, create_production_log, delete_production_log,
@@ -281,15 +279,7 @@ class MaterialIn(BaseModel):
     face_back: Optional[str] = None
     fsc: Optional[str] = None
 
-class ProductIn(BaseModel):
-    name: str; sku: str; description: str = ""; unit: str = "sheet"; selling_price: float = 0
-
-class BomIn(BaseModel):
-    product_id: int; material_id: int; quantity_per_unit: float
-    waste_factor: float = 0.05; veneer_role: str = ""; notes: str = ""
-
-class BomUpdate(BaseModel):
-    quantity_per_unit: float; waste_factor: float = 0.05; notes: str = ""
+# (WS3b-3) ProductIn / BomIn / BomUpdate removed with the legacy products + bom endpoints.
 
 class MachineIn(BaseModel):
     name: str
@@ -522,36 +512,9 @@ def remove_fg_bom(sku_code: str):
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-# ── Products ──────────────────────────────────────────────────
-@app.get("/api/products")
-def list_products(): return get_all_products()
-
-@app.post("/api/products", status_code=201)
-def add_product(body: ProductIn): return create_product(body.dict())
-
-@app.put("/api/products/{pid}")
-def edit_product(pid: int, body: ProductIn):
-    if not get_product(pid): raise HTTPException(404,"Product not found")
-    return update_product(pid, body.dict())
-
-@app.delete("/api/products/{pid}")
-def remove_product(pid: int): delete_product(pid); return {"ok":True}
-
-# ── BOM ───────────────────────────────────────────────────────
-@app.get("/api/bom")
-def list_bom(): return get_all_bom()
-
-@app.get("/api/bom/product/{pid}")
-def get_product_bom(pid: int): return get_bom_for_product(pid)
-
-@app.post("/api/bom", status_code=201)
-def add_bom_entry(body: BomIn): return create_bom_entry(body.dict())
-
-@app.put("/api/bom/{bid}")
-def edit_bom_entry(bid: int, body: BomUpdate): return update_bom_entry(bid, body.dict())
-
-@app.delete("/api/bom/{bid}")
-def remove_bom_entry(bid: int): delete_bom_entry(bid); return {"ok":True}
+# ── Products + legacy per-product BOM endpoints removed in v2.21.79 (WS3b-3).
+#    FG identity lives in skus; BOM lives in the BOM Builder (/api/bom-builder,
+#    /api/skus, bom_lines). The `products` + `bom` tables are retired. ──
 
 # ── Production Lines / Departments / Line Flow ────────────────
 # Replaces the hardcoded ['P01','P02','P37','PUV','PVS','PSP'], DEPARTMENTS
@@ -1111,6 +1074,8 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
 
 @app.post("/api/upload/bom")
 async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
+    # (WS3b-3) The legacy per-product BOM (products + bom tables) is retired.
+    raise HTTPException(410, "The legacy BOM CSV upload has been retired — define BOMs in the BOM Builder (per SKU).")
     content = await file.read()
     try:
         text = content.decode('utf-8-sig')
@@ -1459,8 +1424,13 @@ async def upload_po_pdf(file: UploadFile = File(...)):
         raise HTTPException(400, "Only PDF files are accepted")
     pdf_bytes = await file.read()
 
-    # Pass known SKUs so Claude can match them
-    products = get_all_products()
+    # Pass known SKUs so Claude can match them (FG catalog = skus)
+    import sqlite3 as _sq0
+    _db0 = _sq0.connect(str(__import__('pathlib').Path(__file__).parent.parent / 'erp.db'))
+    _db0.row_factory = _sq0.Row
+    products = [{'id': r['id'], 'sku': r['code'], 'name': r['name']}
+                for r in _db0.execute("SELECT id, code, name FROM skus")]
+    _db0.close()
     known_skus = [p['sku'] for p in products if p.get('sku')]
 
     result = extract_po_from_pdf(pdf_bytes, known_skus=known_skus)
@@ -1476,9 +1446,6 @@ async def upload_po_pdf(file: UploadFile = File(...)):
     ).fetchall()
     _db.close()
     bom_skus = {r[0] for r in bom_skus_rows}
-    # Also include legacy bom table
-    bom_all = get_all_bom()
-    bom_skus |= {b['sku'] for b in bom_all if b.get('sku')}
     product_skus = {p['sku']: p for p in products}
 
     # ── Validate each line and attach product_id ─────────────────────────────
@@ -1490,7 +1457,7 @@ async def upload_po_pdf(file: UploadFile = File(...)):
     for i, line in enumerate(raw_lines):
         sku = (line.get('sku') or '').strip()
         if sku in product_skus:
-            line['product_id'] = product_skus[sku]['id']
+            line['sku_id'] = product_skus[sku]['id']
         if not sku:
             sku_warnings.append({
                 "line": i + 1, "sku": "",

@@ -53,26 +53,10 @@ def init_db():
             supplier TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            sku TEXT UNIQUE NOT NULL,
-            description TEXT DEFAULT '',
-            unit TEXT DEFAULT 'sheet',
-            selling_price REAL DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS bom (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER NOT NULL,
-            material_id INTEGER NOT NULL,
-            quantity_per_unit REAL NOT NULL,
-            waste_factor REAL DEFAULT 0.05,
-            notes TEXT DEFAULT '',
-            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
-            FOREIGN KEY (material_id) REFERENCES materials(id),
-            UNIQUE(product_id, material_id)
-        );
+        -- products + bom (legacy per-product FG catalog + BOM) retired in
+        -- v2.21.79 (WS3b-3). FG identity lives in `skus`, BOM in `bom_lines`
+        -- (BOM Builder). Existing databases drop them in the WS3b-3 block in
+        -- init_db. Do not re-add them here.
         CREATE TABLE IF NOT EXISTS machines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -1487,6 +1471,62 @@ def init_db():
             try: conn.rollback()
             except Exception: pass
 
+    # ── WS3b phase 3 (contract): retire the legacy `products` table (FG identity
+    #    now lives in `skus`, reached via sku_id) and the legacy per-product `bom`
+    #    table (BOM Builder uses bom_lines). Runs AFTER the sku_id backfill above.
+    #    With FK off + legacy_alter_table on: rebuild every table that still has a
+    #    foreign key to products to strip that FK and relax product_id NOT NULL
+    #    (so new rows omit product_id and key off sku_id), then drop products+bom.
+    #    Self-healing + idempotent (runs whenever products exists OR a dangling
+    #    products FK remains). `bom` is dropped outright, not rebuilt. ──
+    try:
+        import re as _re2
+        _ptabs = []
+        for _t in [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]:
+            try:
+                if any(r[2] == 'products'
+                       for r in conn.execute(f'PRAGMA foreign_key_list("{_t}")').fetchall()):
+                    _ptabs.append(_t)
+            except Exception:
+                pass
+        _has_products = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='products'").fetchone()
+        if _ptabs or _has_products:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("PRAGMA legacy_alter_table=ON")
+            for _t in _ptabs:
+                if _t == 'bom':
+                    continue  # dropped outright below
+                _idx = [r[0] for r in conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                    (_t,)).fetchall()]
+                _ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (_t,)).fetchone()[0]
+                _c = _re2.sub(r',\s*FOREIGN KEY\s*\([^)]*\)\s*REFERENCES\s+products\s*\([^)]*\)(\s+ON\s+\w+\s+\w+)*', '', _ddl)
+                _c = _re2.sub(r'\s+REFERENCES\s+products\s*\([^)]*\)', '', _c)
+                _c = _re2.sub(r'(product_id\s+INTEGER)\s+NOT\s+NULL', r'\1', _c)
+                _c = _re2.sub(r'(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?)' + _re2.escape(_t) + r'("?)',
+                              r'\g<1>' + _t + r'__rb\g<2>', _c, count=1)
+                conn.execute(f'DROP TABLE IF EXISTS "{_t}__rb"')
+                conn.execute(_c)
+                conn.execute(f'INSERT INTO "{_t}__rb" SELECT * FROM "{_t}"')
+                conn.execute(f'DROP TABLE "{_t}"')
+                conn.execute(f'ALTER TABLE "{_t}__rb" RENAME TO "{_t}"')
+                for _ix in _idx:
+                    conn.execute(_ix)
+            conn.execute("DROP TABLE IF EXISTS bom")
+            conn.execute("DROP TABLE IF EXISTS products")
+            conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try:
+            conn.execute("PRAGMA legacy_alter_table=OFF")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+
     # Enforce unique material codes at the DB level (case-insensitive). Best
     # effort: if the table still contains pre-existing duplicate codes the index
     # can't be created — startup continues (the app layer also blocks dupes on
@@ -2103,20 +2143,16 @@ def delete_fg_bom(sku_code: str) -> dict:
         if not sk:
             raise ValueError("BOM not found")
         sku_id = sk[0]
-        prod = conn.execute("SELECT id FROM products WHERE sku=?", (code,)).fetchone()
-        if prod:
-            pid = prod[0]
-            n_po = conn.execute("SELECT COUNT(*) FROM po_lines WHERE product_id=?", (pid,)).fetchone()[0]
-            n_prod = conn.execute("SELECT COUNT(*) FROM production_orders WHERE product_id=?", (pid,)).fetchone()[0]
-            refs = []
-            if n_po:   refs.append(f"{n_po} sales-PO line(s)")
-            if n_prod: refs.append(f"{n_prod} production order(s)")
-            if refs:
-                raise ValueError("Cannot delete — SKU is used by " + ", ".join(refs) +
-                                 ". This BOM is in active use.")
+        n_po = conn.execute("SELECT COUNT(*) FROM po_lines WHERE sku_id=?", (sku_id,)).fetchone()[0]
+        n_prod = conn.execute("SELECT COUNT(*) FROM production_orders WHERE sku_id=?", (sku_id,)).fetchone()[0]
+        refs = []
+        if n_po:   refs.append(f"{n_po} sales-PO line(s)")
+        if n_prod: refs.append(f"{n_prod} production order(s)")
+        if refs:
+            raise ValueError("Cannot delete — SKU is used by " + ", ".join(refs) +
+                             ". This BOM is in active use.")
         conn.execute("DELETE FROM bom_lines WHERE sku_id=?", (sku_id,))
         conn.execute("DELETE FROM skus WHERE id=?", (sku_id,))
-        conn.execute("DELETE FROM products WHERE sku=?", (code,))
         conn.commit()
         return {"ok": True, "deleted": code}
     finally:
@@ -2288,123 +2324,10 @@ def purge_unused_materials(scope_types, keep_codes) -> dict:
 # ═══════════════════════════════════════════════════════════════
 # PRODUCTS
 # ═══════════════════════════════════════════════════════════════
-def get_all_products():
-    conn = get_db()
-    rows = conn.execute("SELECT * FROM products ORDER BY name").fetchall()
-    conn.close(); return rows_to_list(rows)
-
-def get_product(pid):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM products WHERE id=?",(pid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def create_product(data):
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO products (name,sku,description,unit,selling_price) VALUES (?,?,?,?,?)",
-        (data['name'],data['sku'],data.get('description',''),data.get('unit','sheet'),data.get('selling_price',0))
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM products WHERE id=?",(cur.lastrowid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def update_product(pid, data):
-    conn = get_db()
-    conn.execute(
-        "UPDATE products SET name=?,sku=?,description=?,unit=?,selling_price=? WHERE id=?",
-        (data['name'],data['sku'],data.get('description',''),data.get('unit','sheet'),data.get('selling_price',0),pid)
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM products WHERE id=?",(pid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def delete_product(pid):
-    conn = get_db(); conn.execute("DELETE FROM products WHERE id=?",(pid,)); conn.commit(); conn.close()
-
-# ═══════════════════════════════════════════════════════════════
-# BOM
-# ═══════════════════════════════════════════════════════════════
-def get_bom_for_product(pid):
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT b.*,m.name as material_name,m.type as material_type,
-               m.unit as material_unit,m.current_stock,m.unit_cost
-        FROM bom b JOIN materials m ON b.material_id=m.id WHERE b.product_id=? ORDER BY m.type,m.name
-    """,(pid,)).fetchall()
-    conn.close(); return rows_to_list(rows)
-
-def get_all_bom():
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT b.*,p.name as product_name,p.sku,m.name as material_name,
-               m.type as material_type,m.unit as material_unit
-        FROM bom b JOIN products p ON b.product_id=p.id JOIN materials m ON b.material_id=m.id
-        ORDER BY p.name,m.type
-    """).fetchall()
-    conn.close(); return rows_to_list(rows)
-
-def create_bom_entry(data):
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO bom (product_id,material_id,quantity_per_unit,waste_factor,notes) VALUES (?,?,?,?,?)",
-        (data['product_id'],data['material_id'],data['quantity_per_unit'],data.get('waste_factor',0.05),data.get('notes',''))
-    )
-    conn.commit()
-    row = conn.execute("""SELECT b.*,m.name as material_name,m.type as material_type,
-        m.unit as material_unit,m.current_stock,m.unit_cost FROM bom b JOIN materials m ON b.material_id=m.id WHERE b.id=?
-    """,(cur.lastrowid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def update_bom_entry(bid, data):
-    conn = get_db()
-    conn.execute("UPDATE bom SET quantity_per_unit=?,waste_factor=?,notes=? WHERE id=?",
-                 (data['quantity_per_unit'],data.get('waste_factor',0.05),data.get('notes',''),bid))
-    conn.commit()
-    row = conn.execute("""SELECT b.*,m.name as material_name,m.type as material_type,
-        m.unit as material_unit,m.current_stock,m.unit_cost FROM bom b JOIN materials m ON b.material_id=m.id WHERE b.id=?
-    """,(bid,)).fetchone()
-    conn.close(); return row_to_dict(row)
-
-def delete_bom_entry(bid):
-    conn = get_db(); conn.execute("DELETE FROM bom WHERE id=?",(bid,)); conn.commit(); conn.close()
-
-def bulk_upsert_bom(data):
-    conn = get_db()
-    product = conn.execute("SELECT * FROM products WHERE sku=?",(data['product_sku'],)).fetchone()
-    if not product:
-        conn.close(); return {'error':f"SKU '{data['product_sku']}' not found",'row':data}
-    # Look up material by code first, then by name
-    mat_code = data.get('material_code','').strip()
-    material = None
-    if mat_code:
-        material = conn.execute("SELECT * FROM materials WHERE code=?",(mat_code,)).fetchone()
-    if not material:
-        material = conn.execute("SELECT * FROM materials WHERE name=?",(data['material_name'],)).fetchone()
-    if not material:
-        cur = conn.execute("INSERT INTO materials (code,name,type,unit) VALUES (?,?,?,?)",
-                           (mat_code,data['material_name'],data.get('material_type','other'),data.get('unit','pcs')))
-        material_id = cur.lastrowid; mat_action='created'
-    else:
-        material_id = material['id']; mat_action='found'
-    veneer_role = data.get('veneer_role','').strip().lower()
-    if veneer_role not in ('face','back',''):
-        veneer_role = ''
-    # Upsert: if same product+material+veneer_role exists update it; otherwise insert
-    existing = conn.execute(
-        "SELECT * FROM bom WHERE product_id=? AND material_id=? AND veneer_role=?",
-        (product['id'],material_id,veneer_role)).fetchone()
-    qty = float(data.get('qty_per_unit', data.get('quantity_per_unit',1)))
-    waste = float(data.get('waste_factor',0.05))
-    if existing:
-        conn.execute("UPDATE bom SET quantity_per_unit=?,waste_factor=?,notes=? WHERE id=?",
-                     (qty,waste,data.get('notes',''),existing['id'])); bom_action='updated'
-    else:
-        conn.execute(
-            "INSERT INTO bom (product_id,material_id,quantity_per_unit,waste_factor,veneer_role,notes) VALUES (?,?,?,?,?,?)",
-            (product['id'],material_id,qty,waste,veneer_role,data.get('notes',''))); bom_action='created'
-    conn.commit(); conn.close()
-    return {'product_sku':data['product_sku'],'material_name':data['material_name'],
-            'veneer_role':veneer_role,'material_action':mat_action,'bom_action':bom_action}
+# (WS3b-3) Removed legacy Products + per-product BOM CRUD (get_all_products,
+# get_product, create/update/delete_product, get_bom_for_product, get_all_bom,
+# create/update/delete_bom_entry, bulk_upsert_bom). The `products` and `bom`
+# tables are retired; the live FG catalog + BOM live in skus / bom_lines.
 
 # ═══════════════════════════════════════════════════════════════
 # MACHINES
@@ -3096,17 +3019,20 @@ def _sku_id_for_product(conn, product_id):
     sku_id populated (reads key off sku_id). Returns None if there's no match."""
     if not product_id:
         return None
-    r = conn.execute(
-        "SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku)=UPPER(s.code) WHERE p.id=?",
-        (product_id,)).fetchone()
-    return r[0] if r else None
+    try:
+        r = conn.execute(
+            "SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku)=UPPER(s.code) WHERE p.id=?",
+            (product_id,)).fetchone()
+        return r[0] if r else None
+    except Exception:
+        return None  # legacy products table retired (WS3b-3)
 
 def create_po_line(data):
     conn = get_db()
     sku_id = data.get('sku_id') or _sku_id_for_product(conn, data.get('product_id'))
     cur = conn.execute(
         "INSERT INTO po_lines (po_id,product_id,sku_id,quantity,unit_price,production_line,notes,packing_sku_id,pcs_per_pallet) VALUES (?,?,?,?,?,?,?,?,?)",
-        (data['po_id'], data['product_id'], sku_id, data['quantity'], data.get('unit_price', 0),
+        (data['po_id'], data.get('product_id'), sku_id, data['quantity'], data.get('unit_price', 0),
          data.get('production_line', 'P01'), data.get('notes', ''), data.get('packing_sku_id'),
          data.get('pcs_per_pallet') or None)
     )
@@ -3170,7 +3096,7 @@ def create_production_order(data):
            (prod_order_number,po_line_id,po_id,product_id,sku_id,production_line,quantity,status,priority,planned_start,planned_end,notes)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data['prod_order_number'],data.get('po_line_id'),data.get('po_id'),
-         data['product_id'],sku_id,data['production_line'],data['quantity'],
+         data.get('product_id'),sku_id,data['production_line'],data['quantity'],
          data.get('status','planned'),data.get('priority',3),
          data.get('planned_start',''),data.get('planned_end',''),data.get('notes',''))
     )
@@ -3311,7 +3237,7 @@ def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -
     import difflib, datetime as _dt
     conn = get_db()
     try:
-        valid_skus  = {r[0]: r[1] for r in conn.execute("SELECT sku, id FROM products").fetchall()}
+        valid_skus  = {r[0]: r[1] for r in conn.execute("SELECT code, id FROM skus").fetchall()}
         sku_with_bom = {r[0] for r in conn.execute("SELECT code FROM skus").fetchall()}
         valid_lines = [r[0] for r in conn.execute("SELECT line_id FROM manufacturing_line WHERE COALESCE(active,1)=1").fetchall()]
         valid_depts = [r[0] for r in conn.execute("SELECT code FROM departments WHERE COALESCE(is_active,1)=1").fetchall()]
@@ -3875,7 +3801,7 @@ def get_dashboard_stats():
     conn = get_db()
     today = datemod.today().isoformat()
     stats = {
-        "total_products": conn.execute("SELECT COUNT(*) FROM products").fetchone()[0],
+        "total_products": conn.execute("SELECT COUNT(*) FROM skus").fetchone()[0],
         "total_materials": conn.execute("SELECT COUNT(*) FROM materials").fetchone()[0],
         "active_orders": conn.execute("SELECT COUNT(*) FROM orders WHERE status IN ('pending','in_progress')").fetchone()[0],
         "active_pos": conn.execute("SELECT COUNT(*) FROM purchase_orders WHERE status IN ('open','in_production')").fetchone()[0],
@@ -3904,12 +3830,16 @@ def get_dashboard_stats():
 def get_full_bom_context():
     conn = get_db()
     ctx = {
-        "products": rows_to_list(conn.execute("SELECT * FROM products").fetchall()),
+        "products": rows_to_list(conn.execute("SELECT id, code AS sku, name FROM skus").fetchall()),
         "materials": rows_to_list(conn.execute("SELECT * FROM materials").fetchall()),
         "bom": rows_to_list(conn.execute("""
-            SELECT b.*,p.name as product_name,p.sku,m.name as material_name,
-                   m.type as material_type,m.unit as material_unit,m.current_stock,m.unit_cost
-            FROM bom b JOIN products p ON b.product_id=p.id JOIN materials m ON b.material_id=m.id
+            SELECT bl.sku_id, s.code AS sku, s.name AS product_name,
+                   COALESCE(m.name, gr.name) AS material_name,
+                   m.type AS material_type, m.unit AS material_unit,
+                   m.current_stock, m.unit_cost
+            FROM bom_lines bl JOIN skus s ON s.id=bl.sku_id
+            LEFT JOIN materials m ON m.id=bl.material_id
+            LEFT JOIN glue_recipes gr ON gr.id=bl.glue_recipe_id
         """).fetchall()),
     }
     conn.close(); return ctx
@@ -3954,16 +3884,21 @@ def get_fc_material_requirements(prod_order_id):
     if not order:
         conn.close(); return None
 
+    # BOM material requirements come from the BOM Builder (bom_lines, keyed by
+    # sku_id). (WS3b-3: was the retired legacy per-product `bom` table.)
     bom_rows = rows_to_list(conn.execute("""
-        SELECT b.id, b.quantity_per_unit, b.waste_factor, b.veneer_role, b.notes as bom_notes,
+        SELECT bl.id,
+               COALESCE(bl.qty_override, bl.usage_g_per_face, 0) as quantity_per_unit,
+               COALESCE(bl.waste_factor, 0.05) as waste_factor, '' as veneer_role,
+               bl.notes as bom_notes,
                m.id as material_id, m.code as material_code,
                m.name as material_name, m.type as material_type,
                m.unit, m.current_stock, m.fc_stock, m.reorder_point, m.unit_cost, m.supplier
-        FROM bom b
-        JOIN materials m ON m.id = b.material_id
-        WHERE b.product_id = ?
-        ORDER BY b.veneer_role DESC, m.type, m.name
-    """, (order['product_id'],)).fetchall())
+        FROM bom_lines bl
+        JOIN materials m ON m.id = bl.material_id
+        WHERE bl.sku_id = ?
+        ORDER BY m.type, m.name
+    """, (order.get('sku_id'),)).fetchall())
 
     FC_STOCK_TYPES = {'veneer_sheet', 'core_board'}
     qty = order.get('quantity', 0)
@@ -5012,16 +4947,8 @@ def _save_bom_for_sku_impl(conn, data):
                 (sku_id, mid, grp_id, seq, usage_g))
 
     conn.commit()
-
-    # Sync to legacy products table so order intake can find this FG
-    prod = conn.execute("SELECT id FROM products WHERE sku=?", (code,)).fetchone()
-    if prod:
-        conn.execute("UPDATE products SET name=? WHERE sku=?",
-                     (data.get('sku_name',''), code))
-    else:
-        conn.execute("INSERT INTO products (name, sku, description) VALUES (?,?,'fg')",
-                     (data.get('sku_name',''), code))
-    conn.commit()
+    # (WS3b-3) Legacy `products` auto-sync removed — order/production intake now
+    # references skus directly via sku_id.
     conn.close()
 
     return get_structured_bom(code)
@@ -7854,10 +7781,12 @@ def get_fc_aggregate_requirements() -> dict:
 # ════════════════════════════════════════════════════════════════
 def _vcmx_ensure_paired_records(conn, sku_code: str, sku_name: str,
                                 dims: dict = None) -> tuple:
-    """Make sure both a materials row (type='vcmx') and a products row exist for
-    this SKU. The materials row gets code=sku_code + board_type='VCMX' + dims so
-    it surfaces inside the FG BOM Builder base-board picker.
-    Returns (material_id, product_id)."""
+    """Make sure both a materials row (type='vcmx') and a skus row exist for this
+    VCMX SKU. The materials row gets code=sku_code + board_type='VCMX' + dims so
+    it surfaces inside the FG BOM Builder base-board picker; the skus row is the
+    unified FG-catalog entry that production orders reference via sku_id.
+    Returns (material_id, sku_id)."""
+    dims = dims or {}
     dims = dims or {}
     # Narrow lookup: only consider existing VCMX rows so we never overwrite a
     # non-VCMX material that happens to share the SKU code.
@@ -7886,16 +7815,18 @@ def _vcmx_ensure_paired_records(conn, sku_code: str, sku_name: str,
             (sku_code, sku_name,
              dims.get('thickness_mm'), dims.get('width_mm'), dims.get('length_mm')))
         material_id = cur.lastrowid
-    prod = conn.execute("SELECT id FROM products WHERE sku=?", (sku_code,)).fetchone()
-    if prod:
-        product_id = prod[0]
+    # WS3b-3: VCMX finished-goods live in `skus` (unified FG catalog) so VCMX
+    # production orders get a normal sku_id. The detailed BOM stays in vcmx_boms.
+    sk = conn.execute("SELECT id FROM skus WHERE UPPER(code)=UPPER(?)", (sku_code,)).fetchone()
+    if sk:
+        sku_id = sk[0]
     else:
         cur = conn.execute(
-            "INSERT INTO products (name, sku, description, unit) "
-            "VALUES (?, ?, 'VCMX substrate (plywood core + MDF face/back)', 'pcs')",
-            (sku_name, sku_code))
-        product_id = cur.lastrowid
-    return material_id, product_id
+            "INSERT INTO skus (code, name, thickness_mm, width_mm, length_mm, pallet_qty, notes) "
+            "VALUES (?, ?, ?, ?, ?, 1, 'VCMX substrate (plywood core + MDF face/back)')",
+            (sku_code, sku_name, dims.get('thickness_mm'), dims.get('width_mm'), dims.get('length_mm')))
+        sku_id = cur.lastrowid
+    return material_id, sku_id
 
 
 def create_vcmx_bom(*, sku_code: str, sku_name: str, core_material_id: int,
@@ -8060,9 +7991,12 @@ def create_vcmx_production_order(*, vcmx_bom_id: int, quantity: int,
         bom = dict(conn.execute("SELECT * FROM vcmx_boms WHERE id=?",
                                 (vcmx_bom_id,)).fetchone() or {})
         if not bom: raise ValueError("BOM not found")
-        # Ensure paired product exists
-        material_id, product_id = _vcmx_ensure_paired_records(
-            conn, bom['sku_code'], bom['sku_name'])
+        # Ensure paired materials + skus records exist for this VCMX FG
+        material_id, sku_id = _vcmx_ensure_paired_records(
+            conn, bom['sku_code'], bom['sku_name'],
+            dims={'thickness_mm': bom.get('thickness_mm'),
+                  'width_mm': bom.get('width_mm'),
+                  'length_mm': bom.get('length_mm')})
         # Update BOM material_id if it was missing
         if bom.get('material_id') is None:
             conn.execute("UPDATE vcmx_boms SET material_id=? WHERE id=?",
@@ -8070,11 +8004,11 @@ def create_vcmx_production_order(*, vcmx_bom_id: int, quantity: int,
         num = _next_prod_order_number(conn, prefix='VCMX')
         cur = conn.execute("""
             INSERT INTO production_orders
-              (prod_order_number, product_id, production_line, quantity, status,
+              (prod_order_number, sku_id, production_line, quantity, status,
                priority, planned_start, planned_end, notes,
                is_vcmx, vcmx_bom_id, is_make_to_stock)
             VALUES (?,?,?,?,?, ?,?,?,?, 1,?,1)
-        """, (num, product_id, production_line, int(quantity), 'in_progress',
+        """, (num, sku_id, production_line, int(quantity), 'in_progress',
               int(priority), planned_start, planned_end, notes, vcmx_bom_id))
         order_id = cur.lastrowid
         # Auto-release: create a single batch sitting at the VCMX-Lam station

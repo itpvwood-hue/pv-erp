@@ -5948,7 +5948,7 @@ function catalogDeptIcon(code){
 }
 
 async function preload(){
-  if(!products.length)  products  = await api('/api/products').catch(()=>[]);
+  if(!products.length)  products  = (await api('/api/skus').catch(()=>[])).map(s=>({id:s.id,sku:s.code,name:s.name}));
   if(!materials.length) materials = await api('/api/materials').catch(()=>[]);
   // Catalog: lines + departments + flow. Fetched once; cheap, ~100 rows total.
   if(!_catalogLines.length){
