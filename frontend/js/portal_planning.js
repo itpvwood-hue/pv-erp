@@ -2503,11 +2503,11 @@ async function slhAuxOpenFcTransfer(){
 }
 
 // Station-scope labels shared by the buttons + header.
-const SLH_DEPT_LABEL = {fc:'FC / Cutting',production:'Production',glue_mix:'Glue Mixing',
+const SLH_DEPT_LABEL = {fc:'Feed Center',production:'Production',glue_mix:'Glue Mixing',
   laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',
   hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
 // Short labels for the scope chip + dynamic header (FC shows as just "Cutting").
-const SLH_DEPT_SHORT = {...SLH_DEPT_LABEL, fc:'Cutting'};
+const SLH_DEPT_SHORT = {...SLH_DEPT_LABEL, fc:'FC'};
 
 // Department Leaders only operate the stations/lines they're assigned to, so the
 // free-choice dropdowns are hidden and replaced by buttons for exactly those
@@ -2792,9 +2792,10 @@ function slhSetScope(){
     if(lineEl){ lineEl.value = ''; lineEl.disabled = true; }
     line = '';
   }else if(dept === 'fc'){
-    // FC / Cutting is its OWN independent line: every production line's batches
-    // centralise here for cutting, then FC feeds back into each line. Scope the
-    // FC station to the 'FC' line (not P01) and lock the selector.
+    // FC = Feed Center: its OWN node (a material-prep/QC/staging operation that
+    // feeds the lines), not a per-line stage. Every line's batches centralise here
+    // for veneer selection/grading, then FC releases them to the line's laminating.
+    // Scope the FC view to the 'FC' line (not P01) and lock the selector.
     if(lineEl){ lineEl.value = 'FC'; lineEl.disabled = true; }
     line = 'FC';
   }else{

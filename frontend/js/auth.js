@@ -273,7 +273,7 @@ const DEPT_OPTIONS = [
   {label:'Sanding',     value:'SANDING'},
   {label:'Hot Press',   value:'HOT_PRESS'},
   {label:'Grading',     value:'GRADING'},
-  {label:'FC / Cutting',value:'FC'},
+  {label:'Feed Center',value:'FC'},
   {label:'Packing',     value:'PACKING'},
 ];
 // LINE_OPTIONS is the canonical list of physical production lines (main +

@@ -1855,10 +1855,13 @@ def _seed_real_glue_recipes(conn):
 # All inserts are upserts keyed by primary key so re-running init_db is safe.
 
 # (code, label, line_type, sort_order)
-# FC / Cutting is its OWN line (a shared upstream prep operation that feeds the
-# lamination lines) — not a station owned by P01/P02/P37.
+# FC = Feed Center: a material-prep / QC / staging node between the warehouse and
+# the production lines (screens + grades/regrades incoming material, keeps
+# components like VCMX, then feeds approved material to the lines). It is its OWN
+# line, NOT a station owned by P01/P02/P37, and NOT a production stage.
+# Full model: directives/fc_station_department_model.md
 _DEFAULT_LINES = [
-    ('FC',  'FC / Cutting',        'prep', 0),
+    ('FC',  'Feed Center',         'prep', 0),
     ('P01', 'Production Line 01', 'main', 1),
     ('P02', 'Production Line 02', 'main', 2),
     ('P37', 'Production Line 37', 'main', 3),
@@ -1869,7 +1872,7 @@ _DEFAULT_LINES = [
 
 # (code, label, icon, is_centralised, sort_order)
 _DEFAULT_DEPARTMENTS = [
-    ('fc',            'FC / Cutting',  'bi-box-seam',    0,  1),
+    ('fc',            'Feed Center',   'bi-box-seam',    0,  1),
     ('laminating',    'Laminating',    'bi-layers',      0,  2),
     ('cold_press',    'Cold Press',    'bi-snow',        0,  3),
     ('hot_press',     'Hot Press',     'bi-fire',        0,  4),

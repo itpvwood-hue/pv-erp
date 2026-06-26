@@ -488,7 +488,7 @@ async function umOpenEdit(uid){
 // so it can be picked straight from the Role dropdown. PUV/PVS/PSP get a single
 // generic 'PRODUCTION' station for now (their real flow is a later development).
 const SL_ROLE_PRESETS = {
-  SL_FC:  {label:'FC / Cutting',         depts:[{department:'FC',         line_id:null}]},
+  SL_FC:  {label:'Feed Center',         depts:[{department:'FC',         line_id:null}]},
   SL_PUV: {label:'PUV — UV Line',        depts:[{department:'PRODUCTION', line_id:'PUV'}]},
   SL_PVS: {label:'PVS — Veneer Slicing', depts:[{department:'PRODUCTION', line_id:'PVS'}]},
   SL_PSP: {label:'PSP — Veneer Splicing',depts:[{department:'PRODUCTION', line_id:'PSP'}]},
