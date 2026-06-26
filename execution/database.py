@@ -1509,44 +1509,69 @@ def init_db():
     except Exception:
         pass
 
-    # ── Reporting views. Created on dev via a one-off migration but never added
-    #    to init_db, so the Reports pages 500'd on freshly-built databases.
-    #    Idempotent (CREATE VIEW IF NOT EXISTS). ──
+    # ── Reporting views. The Station Leader Hub logs production into the *_log
+    #    tables keyed by batches.batch_number (System B). The original views
+    #    joined the legacy `prod_batch` table (System A) on batch_id, which the
+    #    live logs no longer match — so the Reports + NCG backtracking returned
+    #    almost nothing for real batches. Re-pointed onto batches +
+    #    production_orders (+ products for the SKU code), which restores them.
+    #    line_id <- production_orders.production_line; sku_code <- products.sku;
+    #    production_date <- DATE(<log timestamp>); shift has no System-B
+    #    equivalent so it is reported blank. DROP+CREATE (not IF NOT EXISTS) so
+    #    existing databases pick up the re-pointed definitions on restart. ──
     try:
         conn.executescript("""
-        CREATE VIEW IF NOT EXISTS v_lam_efficacy AS
-        SELECT l.table_id, pb.line_id, pb.sku_code, pb.production_date, pb.shift,
+        DROP VIEW IF EXISTS v_lam_efficacy;
+        CREATE VIEW v_lam_efficacy AS
+        SELECT l.table_id, po.production_line AS line_id, pr.sku AS sku_code,
+               DATE(l.shift_start) AS production_date, '' AS shift,
                l.emp_code_1, l.emp_code_2, l.pcs_target, l.pcs_actual,
                ROUND(l.pcs_actual*100.0/NULLIF(l.pcs_target,0),1) AS efficacy_pct
-        FROM laminating_log l JOIN prod_batch pb ON pb.batch_id = l.batch_id;
+        FROM laminating_log l
+        JOIN batches b ON b.batch_number = l.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
+        LEFT JOIN products pr ON pr.id = po.product_id;
 
-        CREATE VIEW IF NOT EXISTS v_sanding_defect_rate AS
-        SELECT COALESCE(sl.operator_id, sl.operator_name) AS operator, pb.line_id,
+        DROP VIEW IF EXISTS v_sanding_defect_rate;
+        CREATE VIEW v_sanding_defect_rate AS
+        SELECT COALESCE(sl.operator_id, sl.operator_name) AS operator, po.production_line AS line_id,
                COUNT(DISTINCT sl.sand_id) AS runs, SUM(sl.pcs_in) AS total_pcs,
                SUM(sl.defect_count) AS total_defects,
                ROUND(SUM(sl.defect_count)*100.0/NULLIF(SUM(sl.pcs_in),0),2) AS defect_rate_pct
-        FROM sanding_log sl JOIN prod_batch pb ON pb.batch_id = sl.batch_id
-        GROUP BY COALESCE(sl.operator_id, sl.operator_name), pb.line_id;
+        FROM sanding_log sl
+        JOIN batches b ON b.batch_number = sl.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
+        GROUP BY COALESCE(sl.operator_id, sl.operator_name), po.production_line;
 
-        CREATE VIEW IF NOT EXISTS v_daily_production AS
-        SELECT pb.production_date, pb.line_id, pb.sku_code,
-               COUNT(DISTINCT pb.batch_id) AS batches, SUM(pb.qty_planned) AS qty_planned,
+        DROP VIEW IF EXISTS v_daily_production;
+        CREATE VIEW v_daily_production AS
+        SELECT DATE(g.graded_at) AS production_date, po.production_line AS line_id, pr.sku AS sku_code,
+               COUNT(DISTINCT g.batch_id) AS batches,
+               SUM(g.pcs_grade_a + g.pcs_grade_b + g.pcs_ncg + g.pcs_reject) AS qty_planned,
                SUM(g.pcs_grade_a + g.pcs_grade_b) AS qty_good, SUM(g.pcs_ncg) AS qty_ncg,
                SUM(g.pcs_reject) AS qty_reject,
                ROUND(SUM(g.pcs_ncg)*100.0/
                    NULLIF(SUM(g.pcs_grade_a+g.pcs_grade_b+g.pcs_ncg+g.pcs_reject),0),2) AS ncg_rate_pct
-        FROM prod_batch pb LEFT JOIN grading_log g ON g.batch_id = pb.batch_id
-        GROUP BY pb.production_date, pb.line_id, pb.sku_code;
+        FROM grading_log g
+        JOIN batches b ON b.batch_number = g.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
+        LEFT JOIN products pr ON pr.id = po.product_id
+        GROUP BY DATE(g.graded_at), po.production_line, pr.sku;
 
-        CREATE VIEW IF NOT EXISTS v_ncg_by_reason AS
-        SELECT g.ncg_reason_code, nr.description, pb.line_id,
+        DROP VIEW IF EXISTS v_ncg_by_reason;
+        CREATE VIEW v_ncg_by_reason AS
+        SELECT g.ncg_reason_code, nr.description, po.production_line AS line_id,
                COUNT(DISTINCT g.grade_id) AS ncg_batches, SUM(g.pcs_ncg) AS total_ncg_pcs
-        FROM grading_log g JOIN prod_batch pb ON pb.batch_id = g.batch_id
+        FROM grading_log g
+        JOIN batches b ON b.batch_number = g.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
         JOIN ncg_reason nr ON nr.reason_code = g.ncg_reason_code
-        WHERE g.pcs_ncg > 0 GROUP BY g.ncg_reason_code, pb.line_id;
+        WHERE g.pcs_ncg > 0 GROUP BY g.ncg_reason_code, po.production_line;
 
-        CREATE VIEW IF NOT EXISTS v_ncg_backtrack AS
-        SELECT g.grade_id, g.batch_id, pb.sku_code, pb.line_id, pb.production_date, pb.shift,
+        DROP VIEW IF EXISTS v_ncg_backtrack;
+        CREATE VIEW v_ncg_backtrack AS
+        SELECT g.grade_id, g.batch_id, pr.sku AS sku_code, po.production_line AS line_id,
+               DATE(g.graded_at) AS production_date, '' AS shift,
                g.pcs_ncg, g.pcs_reject, g.ncg_reason_code, g.graded_at,
                COALESCE(g.grader_id, g.grader_name) AS grader,
                GROUP_CONCAT(DISTINCT l.table_id) AS lam_tables,
@@ -1556,7 +1581,10 @@ def init_db():
                GROUP_CONCAT(DISTINCT r.emp_code_1 || '+' || r.emp_code_2 || '(' || r.repair_type || ')') AS repair_pairs,
                sl.operator_name AS sanding_operator, sl.defect_count AS sanding_defects, sl.grit_setting,
                hp.operator_name AS hotpress_operator, hp.temp_c, hp.pressure_bar AS hp_pressure, hp.press_time_min
-        FROM grading_log g JOIN prod_batch pb ON pb.batch_id = g.batch_id
+        FROM grading_log g
+        JOIN batches b ON b.batch_number = g.batch_id
+        JOIN production_orders po ON po.id = b.prod_order_id
+        LEFT JOIN products pr ON pr.id = po.product_id
         LEFT JOIN laminating_log l ON l.batch_id = g.batch_id
         LEFT JOIN glue_mix_log lm ON lm.batch_id = g.batch_id
         LEFT JOIN repair_log r ON r.batch_id = g.batch_id
@@ -5268,15 +5296,16 @@ def get_station_day_jobs(dept, line_id=None, date=None):
                    lg.{qty} AS qty, {defect_sel} AS defect,
                    COALESCE(lg.{op},'') AS operator,
                    {notes_sel} AS notes, lg.{ts} AS logged_at,
-                   COALESCE(pb.line_id,'') AS line_id,
+                   COALESCE(po.production_line,'') AS line_id,
                    (SELECT COUNT(*) FROM station_job_flags f
                       WHERE f.department=? AND f.log_id=lg.{pk} AND f.cleared=0) AS flagged
             FROM {table} lg
-            LEFT JOIN prod_batch pb ON pb.batch_id = lg.batch_id
+            LEFT JOIN batches b ON b.batch_number = lg.batch_id
+            LEFT JOIN production_orders po ON po.id = b.prod_order_id
             WHERE DATE(lg.{ts}) = ?"""
     params = [deptl, date]
     if line_id:
-        q += " AND (pb.line_id = ? OR pb.line_id IS NULL)"
+        q += " AND (po.production_line = ? OR po.production_line IS NULL)"
         params.append(line_id)
     q += f" ORDER BY lg.{ts}"
     rows = rows_to_list(conn.execute(q, params).fetchall())
