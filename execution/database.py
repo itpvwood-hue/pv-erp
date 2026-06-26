@@ -4714,7 +4714,7 @@ def get_structured_bom(sku_code=None):
             SELECT bl.seq, bl.qty_override, bl.usage_g_per_face, bl.qty_unit,
                    bl.glue_recipe_id, bl.waste_factor,
                    m.code as mat_code, m.name as mat_name, m.name_th,
-                   m.type as mat_type, m.unit, m.price,
+                   m.type as mat_type, m.unit, COALESCE(m.unit_cost, m.price, 0) AS price,
                    gr.recipe_code as glue_code, gr.name as glue_name
             FROM bom_lines bl
             LEFT JOIN materials    m  ON m.id  = bl.material_id
@@ -4820,7 +4820,7 @@ def get_structured_bom(sku_code=None):
             ps = conn.execute("SELECT * FROM packing_skus WHERE id=?", (s['packing_sku_id'],)).fetchone()
             if ps:
                 pack_lines = conn.execute("""
-                    SELECT pl.qty, m.price, m.code as mat_code
+                    SELECT pl.qty, COALESCE(m.unit_cost, m.price, 0) AS price, m.code as mat_code
                     FROM packing_lines pl JOIN materials m ON m.id=pl.material_id
                     WHERE pl.packing_sku_id=?
                 """, (ps['id'],)).fetchall()
