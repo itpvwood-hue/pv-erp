@@ -2341,6 +2341,7 @@ async def laminating_material_request(body: dict, user: dict = Depends(require_a
 class LoginIn(BaseModel):
     username: str
     password: str
+    remember: bool = False   # "Keep me signed in" → long-lived session
 
 class UserIn(BaseModel):
     username: str; password: str; role: str; display_name: str
@@ -2401,7 +2402,8 @@ def login(body: LoginIn, request: Request = None):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user.get('active', 1):
         raise HTTPException(status_code=403, detail="Account is inactive. Contact your administrator.")
-    token = create_session(user['user_id'])
+    # "Keep me signed in" → 30-day session; otherwise the normal ~workday length.
+    token = create_session(user['user_id'], hours=720 if body.remember else 8.5)
     depts = get_user_departments(user['user_id'])
     # Record login audit event
     ip = None

@@ -41,6 +41,12 @@ function loginClearError(fieldId){
   }
 }
 
+// Restore the "Keep me signed in" choice on this browser (default off).
+try{
+  const _rb=document.getElementById('login-remember');
+  if(_rb) _rb.checked = localStorage.getItem('erp_remember')==='1';
+}catch{}
+
 let _loginAttempts=0;
 async function doLogin(){
   const btn=document.getElementById('login-btn');
@@ -60,11 +66,15 @@ async function doLogin(){
   btn.innerHTML='<span class="spinner-border spinner-border-sm me-2"></span>Signing in...';
   document.getElementById('login-error').classList.add('d-none');
 
+  // "Keep me signed in" → long-lived session; remember the choice per browser.
+  const remember = !!document.getElementById('login-remember')?.checked;
+  try{ localStorage.setItem('erp_remember', remember?'1':'0'); }catch{}
+
   try{
     const r=await fetch('/api/auth/login',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({username:u,password:p})
+      body:JSON.stringify({username:u,password:p,remember})
     });
 
     if(r.status===401){
