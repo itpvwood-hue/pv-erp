@@ -1074,90 +1074,77 @@ async def upload_inventory(file: UploadFile = File(...), mode: str = "add",
 
 @app.post("/api/upload/bom")
 async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
-    # (WS3b-3) The legacy per-product BOM (products + bom tables) is retired.
-    raise HTTPException(410, "The legacy BOM CSV upload has been retired — define BOMs in the BOM Builder (per SKU).")
+    """Bulk FG-BOM upload — one row per FG SKU, matching the Export CSV / template
+    columns. Writes through the BOM Builder (skus + bom_lines) via save_bom_for_sku,
+    which upserts the SKU and replaces its BOM lines. 'add' and 'replace' both
+    upsert per SKU (the legacy 'replace' only wiped the SKUs present in the file,
+    which save_bom_for_sku does anyway); neither deletes SKUs absent from the file.
+    Re-pointed off the retired products/bom tables onto skus/bom_lines (v2.21.85)."""
     content = await file.read()
     try:
         text = content.decode('utf-8-sig')
     except Exception:
         text = content.decode('latin-1')
-    all_rows_raw = list(csv.DictReader(io.StringIO(text)))
-    if mode == "replace":
-        conn = get_db()
-        skus_in_csv = [r.get('product_sku','').strip() for r in all_rows_raw if r.get('product_sku','').strip()]
-        for sku_code in set(skus_in_csv):
-            prod = conn.execute("SELECT id FROM products WHERE sku=?", (sku_code,)).fetchone()
-            if prod:
-                conn.execute("DELETE FROM bom WHERE product_id=?", (prod['id'],))
-        conn.commit(); conn.close()
-    results = []; errors = []
-    for i, row in enumerate(all_rows_raw, 1):
-        row = {k.strip().lower().replace(' ','_'): v.strip() for k,v in row.items()}
-        sku = row.get('product_sku', '').strip()
+    rows = list(csv.DictReader(io.StringIO(text)))
+
+    def _num(v):
+        v = (v or '').strip()
+        if not v:
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
+    # Known codes (for friendly "skipped — code not found" warnings, since
+    # save_bom_for_sku silently skips a component whose code doesn't resolve).
+    conn = get_db()
+    known_mat = {r[0].upper() for r in conn.execute(
+        "SELECT code FROM materials WHERE COALESCE(code,'')!=''").fetchall()}
+    known_glue = {r[0].upper() for r in conn.execute(
+        "SELECT recipe_code FROM glue_recipes WHERE COALESCE(recipe_code,'')!=''").fetchall()}
+    conn.close()
+
+    results, errors, warnings = [], [], []
+    for i, raw in enumerate(rows, 1):
+        row = {(k or '').strip().lower().replace(' ', '_'): (v or '').strip()
+               for k, v in raw.items()}
+        sku = row.get('product_sku') or row.get('sku_code') or ''
         if not sku:
             errors.append(f"Row {i}: missing product_sku"); continue
-
-        # ── New flat format: one row per SKU, component codes in columns ──
-        if 'base_board_code' in row or 'face_veneer_code' in row:
-            try:
-                ppu = int(row.get('pieces_per_unit') or 1)
-            except ValueError:
-                ppu = 1
-            try:
-                base_qty = int(row.get('base_board_qty') or ppu)
-            except ValueError:
-                base_qty = ppu
-
-            def _qty(key, default):
-                try: return float(row.get(key) or default)
-                except ValueError: return float(default)
-
-            face_vnr_qty  = _qty('face_veneer_qty',  ppu)
-            back_vnr_qty  = _qty('back_veneer_qty',  ppu)
-            face_glue_qty = _qty('face_glue_qty',    1)
-            back_glue_qty = _qty('back_glue_qty',    1)
-
-            components = []
-            if row.get('base_board_code'):
-                components.append({'material_code': row['base_board_code'], 'qty': base_qty,      'veneer_role': ''})
-            if row.get('face_veneer_code'):
-                components.append({'material_code': row['face_veneer_code'], 'qty': face_vnr_qty, 'veneer_role': 'face'})
-            if row.get('face_glue_code'):
-                components.append({'material_code': row['face_glue_code'],  'qty': face_glue_qty, 'veneer_role': 'face'})
-            if row.get('back_veneer_code'):
-                components.append({'material_code': row['back_veneer_code'], 'qty': back_vnr_qty, 'veneer_role': 'back'})
-            if row.get('back_glue_code'):
-                components.append({'material_code': row['back_glue_code'],  'qty': back_glue_qty, 'veneer_role': 'back'})
-
-            for comp in components:
-                bom_data = {
-                    'product_sku': sku,
-                    'material_code': comp['material_code'],
-                    'material_name': comp['material_code'],  # fallback: name = code
-                    'veneer_role': comp['veneer_role'],
-                    'qty_per_unit': comp['qty'],
-                    'waste_factor': float(row.get('waste_factor') or 0.05),
-                    'notes': row.get('notes', ''),
-                }
-                r = bulk_upsert_bom(bom_data)
-                if 'error' in r:
-                    errors.append(f"Row {i} ({sku}/{comp['material_code']}): {r['error']}")
-                else:
-                    results.append(r)
-
-        # ── Legacy format: one row per material ──
-        else:
-            if not row.get('material_name'):
-                errors.append(f"Row {i}: missing material_name"); continue
-            try:
-                r = bulk_upsert_bom(row)
-                if 'error' in r:
-                    errors.append(f"Row {i}: {r['error']}")
-                else:
-                    results.append(r)
-            except Exception as e:
-                errors.append(f"Row {i}: {str(e)}")
-    return {"processed": len(results), "errors": errors, "results": results, "mode": mode}
+        data = {
+            'sku_code':          sku,
+            'sku_name':          row.get('sku_name', ''),
+            'pallet_qty':        int(_num(row.get('pieces_per_unit')) or 1),
+            'thickness_mm':      _num(row.get('thickness_mm')),
+            'width_mm':          _num(row.get('width_mm')),
+            'length_mm':         _num(row.get('length_mm')),
+            'base_board_code':   row.get('base_board_code', ''),
+            'base_board_qty':    _num(row.get('base_board_qty')),
+            'face_veneer_code':  row.get('face_veneer_code', ''),
+            'face_veneer_qty':   _num(row.get('face_veneer_qty')),
+            'back_veneer_code':  row.get('back_veneer_code', ''),
+            'back_veneer_qty':   _num(row.get('back_veneer_qty')),
+            'face_glue_code':    row.get('face_glue_code', ''),
+            'face_glue_usage_g': _num(row.get('face_glue_usage_g')),
+            'back_glue_code':    row.get('back_glue_code', ''),
+            'back_glue_usage_g': _num(row.get('back_glue_usage_g')),
+            'packing_sku_code':  row.get('packing_sku_code', ''),
+        }
+        for key in ('base_board_code', 'face_veneer_code', 'back_veneer_code'):
+            c = (data[key] or '').upper()
+            if c and c not in known_mat:
+                warnings.append(f"Row {i} ({sku}): material '{data[key]}' not found — that line skipped.")
+        for key in ('face_glue_code', 'back_glue_code'):
+            c = (data[key] or '').upper()
+            if c and c not in known_glue and c not in known_mat:
+                warnings.append(f"Row {i} ({sku}): glue '{data[key]}' not found — that line skipped.")
+        try:
+            save_bom_for_sku(data)
+            results.append(sku)
+        except Exception as e:
+            errors.append(f"Row {i} ({sku}): {e}")
+    return {"processed": len(results), "errors": errors, "warnings": warnings, "mode": mode}
 
 def _esc_csv(v):
     if v is None: return ''
