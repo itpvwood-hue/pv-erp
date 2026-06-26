@@ -1887,14 +1887,15 @@ _DEFAULT_DEPARTMENTS = [
 
 # Production flow per line. Aux lines have no flow (they're request-only hubs).
 # Each list = department code sequence the line traverses.
-# FC's own flow is just the cutting step (so the FC line owns the FC station).
-# The main lines still LIST fc at seq 0 so a batch starts at FC, but they no
-# longer own a per-line FC station (see the station seed below).
+# FC = Feed Center: its own node (the FC line), NOT a per-line production stage, so
+# it is NOT in the main lines' flow. A batch still STARTS at the FC gate
+# (current_department='fc', set explicitly on batch creation) and is released to
+# laminating via the FC Hub; the production flow itself begins at laminating.
 _DEFAULT_FLOW = {
     'FC':  ['fc'],
-    'P01': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
-    'P02': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
-    'P37': ['fc', 'laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P01': ['laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P02': ['laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
+    'P37': ['laminating', 'cold_press', 'hot_press', 'bleach', 'repair', 'sanding', 'grading', 'packing', 'fg_warehouse'],
 }
 
 def _seed_lines_and_departments(conn):

@@ -1554,8 +1554,9 @@ function ftraceRender(r){
 // ═══════════════════════════════════════════════════════
 // KANBAN (read-only)
 // ═══════════════════════════════════════════════════════
+// FC (Feed Center) is a material-prep node, not a per-line production stage — no board column.
 const KAN_DEPTS = [
-  'fc','laminating','cold_press','repair','sanding','hot_press','grading','packing','fg_receiving','fg_warehouse'
+  'laminating','cold_press','repair','sanding','hot_press','grading','packing','fg_receiving','fg_warehouse'
 ];
 const DEPT_LABEL = {fc:'Feed Center',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
   sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing',

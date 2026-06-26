@@ -5886,16 +5886,21 @@ let lbLine='all';
 let dragBatchId=null;
 let dashChart=null;
 
-const DEPTS=['fc','laminating','cold_press','hot_press','bleach','repair','sanding','grading','packing','fg_warehouse'];
+// FC (Feed Center) is intentionally NOT in this list: it's a material-prep/QC node,
+// not a per-line production stage, so it doesn't get a production-board column.
+// (It stays a valid `departments` row for the FC release gate + FC Hub.)
+const DEPTS=['laminating','cold_press','hot_press','bleach','repair','sanding','grading','packing','fg_warehouse'];
 const DLBL={fc:'FC',laminating:'Laminating',cold_press:'Cold Press',hot_press:'Hot Press',bleach:'Bleach',repair:'Repair',sanding:'Sanding',grading:'Grading',packing:'Packing',fg_warehouse:'FG Warehouse'};
 const DICO={fc:'bi-box-seam',laminating:'bi-layers',cold_press:'bi-snow',hot_press:'bi-fire',bleach:'bi-droplet',repair:'bi-tools',sanding:'bi-circle-half',grading:'bi-stars',packing:'bi-box',fg_warehouse:'bi-building'};
 
 // Production line section sequences
+// FC (Feed Center) feeds the lines but is not a per-line production stage, so each
+// line's board flow starts at laminating (FC has its own line view + FC Hub).
 const LINE_FLOW={
-  P01:['fc','laminating','cold_press','hot_press','repair','sanding','grading'],
-  PM2:['fc','laminating','cold_press','hot_press','bleach','repair','sanding','grading'],
-  P37:['fc','laminating','cold_press','hot_press','repair','sanding','grading'],
-  all:['fc','laminating','cold_press','hot_press','bleach','repair','sanding','grading'],
+  P01:['laminating','cold_press','hot_press','repair','sanding','grading'],
+  PM2:['laminating','cold_press','hot_press','bleach','repair','sanding','grading'],
+  P37:['laminating','cold_press','hot_press','repair','sanding','grading'],
+  all:['laminating','cold_press','hot_press','bleach','repair','sanding','grading'],
 };
 
 // Navigation router lives in /static/js/nav.js. The PAGE_LOADERS dict is

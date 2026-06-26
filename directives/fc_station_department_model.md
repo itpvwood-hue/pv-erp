@@ -1,9 +1,18 @@
 # FC / Station / Department model — map & target
 
-**Status:** MAP & DOCUMENT only. No code changes have been made from this doc.
-It records the current ("as-is") model, the inconsistencies around **FC**, and
-the owner's intended ("to-be") model, plus a change-list for a *future*
-structural cleanup. Written 2026-06-26 (v2.21.82).
+**Status (updated 2026-06-26):**
+- ✅ **Label fix shipped (v2.21.83):** FC → "Feed Center" everywhere.
+- ✅ **Structural reclassification — option 1 shipped (v2.21.84):** FC removed from the
+  production boards + line flows (Kanban `DEPTS`, Line-Board `LINE_FLOW`, finance
+  `KAN_DEPTS`, catalog `line_flow` main lines). FC stays a valid `departments` row +
+  keeps its FC Hub; the batch still starts at the FC gate (`current_department='fc'`,
+  hard-set on creation) and releases to laminating via `/api/fc/laminating-material-request`.
+- ⬜ **Not done (deliberately):** giving the "at-FC" gate an explicit field instead of
+  reusing `current_department='fc'` (option 2); auditing/retiring the disabled per-line
+  `fc` `stations` rows; the secondary station-vs-department vocabulary cleanup.
+
+This doc records the as-is model, the FC inconsistencies, the owner's locked to-be model,
+and the change-list. Originally written 2026-06-26 (v2.21.82).
 
 ---
 
