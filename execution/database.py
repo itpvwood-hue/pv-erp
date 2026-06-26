@@ -821,11 +821,6 @@ def init_db():
             ip_address TEXT,
             logged_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        CREATE TABLE IF NOT EXISTS suppliers (
-            id    INTEGER PRIMARY KEY AUTOINCREMENT,
-            name  TEXT    NOT NULL UNIQUE,
-            notes TEXT
-        );
         CREATE TABLE IF NOT EXISTS employee (
             emp_id     TEXT PRIMARY KEY,
             emp_name   TEXT NOT NULL,
@@ -929,12 +924,6 @@ def init_db():
                                     'GRADING','PACKING','COMPLETE')),
             created_at      TEXT NOT NULL DEFAULT (datetime('now')),
             notes           TEXT DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS production_table (
-            table_id   TEXT PRIMARY KEY,
-            table_type TEXT NOT NULL,
-            line_id    TEXT NOT NULL REFERENCES manufacturing_line(line_id),
-            active     INTEGER NOT NULL DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS prod_machine (
             machine_id   TEXT PRIMARY KEY,
@@ -1092,6 +1081,9 @@ def init_db():
     conn.commit()
 
     _migrations = [
+        # Drop dead tables (never read/written) from long-lived DBs.
+        "DROP TABLE IF EXISTS suppliers",
+        "DROP TABLE IF EXISTS production_table",
         "ALTER TABLE materials ADD COLUMN code TEXT DEFAULT ''",
         "ALTER TABLE materials ADD COLUMN fc_stock REAL DEFAULT 0",
         # Extended material attributes (Thai/Chinese names, veneer/board specs,

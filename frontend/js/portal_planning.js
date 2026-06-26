@@ -2506,6 +2506,8 @@ async function slhAuxOpenFcTransfer(){
 const SLH_DEPT_LABEL = {fc:'FC / Cutting',production:'Production',glue_mix:'Glue Mixing',
   laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',
   hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
+// Short labels for the scope chip + dynamic header (FC shows as just "Cutting").
+const SLH_DEPT_SHORT = {...SLH_DEPT_LABEL, fc:'Cutting'};
 
 // Department Leaders only operate the stations/lines they're assigned to, so the
 // free-choice dropdowns are hidden and replaced by buttons for exactly those
@@ -2805,8 +2807,7 @@ function slhSetScope(){
   if(f) f.value = dept;
   const chip = document.getElementById('sl-scope-chip');
   if(chip){
-    const lbl = ({fc:'Cutting',production:'Production',glue_mix:'Glue Mixing',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
-                  sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing'})[dept] || dept;
+    const lbl = SLH_DEPT_SHORT[dept] || dept;
     chip.textContent = (dept === 'packing') ? `ALL LINES · ${lbl}`
                      : (dept === 'fc') ? `FC LINE · ${lbl}`
                      : `${line} · ${lbl}`;
@@ -2831,12 +2832,7 @@ function slhUpdateHeader(){
   const dept = (document.getElementById('sl-dept-scope')?.value || 'laminating').trim();
   const lineSel = document.getElementById('sl-line');
   const line = (lineSel?.value || 'P01').trim();
-  const deptLabel = {
-    fc:'Cutting', production:'Production', glue_mix:'Glue Mixing',
-    laminating:'Laminating', cold_press:'Cold Press',
-    repair:'Repair', sanding:'Sanding', hot_press:'Hot Press',
-    grading:'Grading', packing:'Packing',
-  }[dept] || dept;
+  const deptLabel = SLH_DEPT_SHORT[dept] || dept;
   const linePart = (dept === 'packing') ? 'ALL LINES' : (dept === 'fc') ? 'FC LINE' : line;
   el.innerHTML =
     `<span class="badge bg-primary me-2" style="font-size:.85rem">${linePart}</span>`+
@@ -4683,17 +4679,7 @@ async function gmSubmitMix(){
 }
 
 // ── Glue Recipe CRUD ─────────────────────────────────────────
-// Component definitions matching the PV Wood spreadsheet
-const GM_COMPONENTS_NEW=[
-  {key:'e0',     label:'E0 Glue',         field:'e0_glue_kg'},
-  {key:'latex',  label:'Latex G312',      field:'latex_g312_kg'},
-  {key:'flour',  label:'Flour',           field:'flour_kg'},
-  {key:'yellow', label:'Yellow Pigment',  field:'yellow_pigment_kg'},
-  {key:'hard',   label:'Hardener',        field:'hardener_kg'},
-  {key:'red',    label:'Red Pigment',     field:'red_pigment_kg'},
-  {key:'black',  label:'Black Pigment',   field:'black_pigment_kg'},
-  {key:'ti',     label:'Titanium dioxide',field:'titanium_kg'},
-];
+// (GM_COMPONENTS_NEW removed — it was an unused duplicate of GM_COMPONENTS above.)
 
 function _gmFmtKg(v){return (v==null||v===0||v==='')?'—':Number(v).toFixed(2);}
 
