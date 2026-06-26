@@ -298,7 +298,7 @@ class OrderIn(BaseModel):
     produced_qty: int = 0; due_date: str; status: str = "pending"; priority: int = 3; notes: str = ""
 
 class ProductionLogIn(BaseModel):
-    log_date: str; shift: str; product_id: int; machine_id: int
+    log_date: str; shift: str; sku_id: Optional[int] = None; machine_id: int
     order_id: Optional[int] = None; planned_qty: int; actual_qty: int
     downtime_minutes: int = 0; downtime_reason: str = ""; operator_count: int = 1
     material_usage: dict = {}; notes: str = ""

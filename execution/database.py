@@ -2499,10 +2499,10 @@ def create_production_log(data):
     conn = get_db()
     cur = conn.execute(
         """INSERT INTO production_logs
-           (log_date,shift,product_id,machine_id,order_id,planned_qty,actual_qty,
+           (log_date,shift,sku_id,machine_id,order_id,planned_qty,actual_qty,
             downtime_minutes,downtime_reason,operator_count,material_usage,notes)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (data['log_date'],data['shift'],data['product_id'],data['machine_id'],
+        (data['log_date'],data['shift'],data.get('sku_id'),data['machine_id'],
          data.get('order_id'),data['planned_qty'],data['actual_qty'],
          data.get('downtime_minutes',0),data.get('downtime_reason',''),
          data.get('operator_count',1),json.dumps(data.get('material_usage',{})),data.get('notes',''))
@@ -3940,28 +3940,18 @@ def get_fc_material_requirements(prod_order_id):
     if not order:
         conn.close(); return None
 
-    # BOM material requirements come from the BOM Builder (bom_lines, keyed by
-    # sku_id). (WS3b-3: was the retired legacy per-product `bom` table.)
-    bom_rows = rows_to_list(conn.execute("""
-        SELECT bl.id,
-               COALESCE(bl.qty_override, bl.usage_g_per_face, 0) as quantity_per_unit,
-               COALESCE(bl.waste_factor, 0.05) as waste_factor, '' as veneer_role,
-               bl.notes as bom_notes,
-               m.id as material_id, m.code as material_code,
-               m.name as material_name, m.type as material_type,
-               m.unit, m.current_stock, m.fc_stock, m.reorder_point, m.unit_cost, m.supplier
-        FROM bom_lines bl
-        JOIN materials m ON m.id = bl.material_id
-        WHERE bl.sku_id = ?
-        ORDER BY m.type, m.name
-    """, (order.get('sku_id'),)).fetchall())
-
     FC_STOCK_TYPES = {'veneer_sheet', 'core_board'}
     qty = order.get('quantity', 0)
     requirements = []
     all_ok = True
 
-    # ── If old BOM table has no entries, fall back to new skus+bom_lines system ──
+    # Material requirements come from the BOM Builder (bom_lines, keyed by sku_id),
+    # using the canonical per-pallet computation below. (WS3b-3 retired the legacy
+    # per-product `bom` table this function used to read primarily; an interim
+    # repoint of that primary query flattened glue [g/face] and boards
+    # [sheets/pallet] into one figure — wrong — so the primary path is dropped and
+    # only the correct path runs. `bom_rows` stays empty as the guard.)
+    bom_rows = []
     if not bom_rows:
         product_sku = order.get('product_sku') or ''
         sku_row = row_to_dict(conn.execute(
@@ -4030,31 +4020,6 @@ def get_fc_material_requirements(prod_order_id):
                     'shortfall': max(0, round(required - stock, 2)),
                     'status': status,
                 })
-    else:
-        for item in bom_rows:
-            # Glue formulas are managed by Glue Mix Station — not FC's responsibility
-            if (item.get('material_type') or '') == 'glue_formula':
-                continue
-            wf = item.get('waste_factor') or 0.05
-            required = round(item['quantity_per_unit'] * qty * (1 + wf), 2)
-            # Veneers and boards are checked against FC station stock; consumables use WH stock
-            use_fc = item.get('material_type') in FC_STOCK_TYPES
-            stock = float(item.get('fc_stock') or 0) if use_fc else float(item.get('current_stock') or 0)
-            if stock >= required:
-                status = 'ok'
-            elif stock >= required * 0.7:
-                status = 'low'; all_ok = False
-            else:
-                status = 'insufficient'; all_ok = False
-            requirements.append({
-                **item,
-                'required_qty': required,
-                'available_qty': stock,
-                'stock_location': 'fc_station' if use_fc else 'main_warehouse',
-                'shortfall': max(0, round(required - stock, 2)),
-                'status': status,
-            })
-
     # Veneer options for face/back selection: only show those with FC station stock
     # Include species/grade/face_back for grade-mix UI suggestions
     veneer_options = rows_to_list(conn.execute("""

@@ -1417,7 +1417,7 @@ function openLogModal(){
   populateSel('log-prod',products,'id','name');
 }
 async function saveLog(){
-  const body={log_date:document.getElementById('log-date').value,shift:document.getElementById('log-shift').value,machine_id:parseInt(document.getElementById('log-mach').value),product_id:parseInt(document.getElementById('log-prod').value),planned_qty:parseInt(document.getElementById('log-planned').value),actual_qty:parseInt(document.getElementById('log-actual').value),notes:document.getElementById('log-notes').value};
+  const body={log_date:document.getElementById('log-date').value,shift:document.getElementById('log-shift').value,machine_id:parseInt(document.getElementById('log-mach').value),sku_id:parseInt(document.getElementById('log-prod').value),planned_qty:parseInt(document.getElementById('log-planned').value),actual_qty:parseInt(document.getElementById('log-actual').value),notes:document.getElementById('log-notes').value};
   try{await api('/api/production-logs','POST',body);bootstrap.Modal.getInstance(document.getElementById('logModal')).hide();toast('Saved');loadLogs();}catch(e){toast(e.message,'danger');}
 }
 
