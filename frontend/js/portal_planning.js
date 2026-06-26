@@ -7124,38 +7124,28 @@ function renderLbBoard(flow){
     const batches=flow[dept]||[];
     return `<div class="lb-col">
       <div class="lb-col-head"><span><i class="bi ${DICO[dept]} me-1"></i>${DLBL[dept]}</span><span class="cnt">${batches.length}</span></div>
-      <div class="lb-col-body" id="lb-body-${dept}"
-        ondragover="event.preventDefault();this.closest('.lb-col').classList.add('drag-over')"
-        ondragleave="this.closest('.lb-col').classList.remove('drag-over')"
-        ondrop="lbDrop(event,'${dept}')">
+      <div class="lb-col-body" id="lb-body-${dept}">
         ${batches.map(b=>lbCard(b)).join('')}
       </div>
     </div>`;
   }).join('');
 }
 
+// Line Board card — read-only planning view. Click opens batch details (read-only);
+// priority can be tweaked inline. Stage moves are done in the Station Leader Hub.
 function lbCard(b){
-  return `<div class="bc p${b.priority||2}" draggable="true"
-    ondragstart="dragBatchId=${b.id};event.dataTransfer.effectAllowed='move'"
-    ondragend="document.querySelectorAll('.lb-col').forEach(c=>c.classList.remove('drag-over'))"
-    oncontextmenu="event.preventDefault();deptBatchDetail(${b.id},'${b.current_department}');return false;"
-    title="Click to open · Right-click for details">
-    <div style="cursor:pointer" onclick="deptBatchDetail(${b.id},'${b.current_department}')">
-      <div class="bc-num d-flex justify-content-between align-items-center">
-        <span>${b.batch_number||'B#'+b.id}${b.parent_batch_id?` <span class="badge bg-warning text-dark" style="font-size:.58rem">SPLIT</span>`:''}</span>
-        ${prioBadge(b.priority||2)}
-      </div>
-      <div class="bc-prod">${b.product_name||b.product_sku||''}</div>
-      <div class="bc-qty">${fmt(b.quantity)} plt · ${fmt(b.total_pcs ?? b.pcs_actual ?? ((b.quantity||0)*(b.pallet_qty||1)))} pcs</div>
-      ${b.po_number?`<div style="font-size:.65rem;color:#94a3b8">PO: ${b.po_number}</div>`:''}
+  return `<div class="bc p${b.priority||2}" style="cursor:pointer"
+    onclick="deptBatchDetail(${b.id},'${b.current_department}',true)"
+    title="Click for batch details (planning view)">
+    <div class="bc-num d-flex justify-content-between align-items-center">
+      <span>${b.batch_number||'B#'+b.id}${b.parent_batch_id?` <span class="badge bg-warning text-dark" style="font-size:.58rem">SPLIT</span>`:''}</span>
+      ${prioBadge(b.priority||2)}
     </div>
+    <div class="bc-prod">${b.product_name||b.product_sku||''}</div>
+    <div class="bc-qty">${fmt(b.quantity)} plt · ${fmt(b.total_pcs ?? b.pcs_actual ?? ((b.quantity||0)*(b.pallet_qty||1)))} pcs</div>
+    ${b.po_number?`<div style="font-size:.65rem;color:#94a3b8">PO: ${b.po_number}</div>`:''}
+    <div class="mt-1" onclick="event.stopPropagation()">${prioSelect(b.priority||2, b.id, 'batch', 'loadLineBoard()')}</div>
   </div>`;
-}
-
-function lbDrop(e,dept){
-  e.preventDefault();
-  e.currentTarget.closest('.lb-col').classList.remove('drag-over');
-  if(dragBatchId) openMove(dragBatchId,null,null,dept);
 }
 
 
@@ -7166,27 +7156,28 @@ function lbDrop(e,dept){
 // ══════════════════════════════════════════════════════════
 // KANBAN
 // ══════════════════════════════════════════════════════════
+// Kanban is a read-only PLANNING viewer: it shows where every batch sits in the
+// production flow and lets planners tweak priority. Actual stage moves / splits
+// happen in the Station Leader Hub (logged via /api/production/*), never here.
 async function loadKanban(){
   const flow=await api('/api/planning/flow').catch(()=>({}));
   document.getElementById('kanban-board').innerHTML=DEPTS.map(dept=>{
     const bs=flow[dept]||[];
-    return `<div class="kanban-col" ondragover="event.preventDefault();this.classList.add('drag-over')" ondrop="kanbanDrop(event,'${dept}')" ondragleave="this.classList.remove('drag-over')">
+    return `<div class="kanban-col">
       <div class="col-head"><span><i class="bi ${DICO[dept]} me-1"></i>${DLBL[dept]}</span><span class="badge bg-secondary">${bs.length}</span></div>
-      ${bs.map(b=>`<div class="batch-card priority-${b.priority||2}" draggable="true"
-        ondragstart="dragBatchId=${b.id};event.dataTransfer.effectAllowed='move'"
-        ondragend="document.querySelectorAll('.kanban-col').forEach(c=>c.classList.remove('drag-over'))">
-        <div class="fw-bold" style="font-size:.75rem">${b.batch_number||'B#'+b.id}</div>
+      ${bs.map(b=>`<div class="batch-card priority-${b.priority||2}" style="cursor:pointer"
+        onclick="deptBatchDetail(${b.id},'${dept}',true)" title="Click for batch details (planning view)">
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="fw-bold" style="font-size:.75rem">${b.batch_number||'B#'+b.id}</span>
+          ${prioBadge(b.priority||2)}
+        </div>
         <div style="font-size:.7rem;color:#64748b">${b.product_name||''}</div>
         <div style="font-size:.72rem;color:#1f4a1f;font-weight:600">${fmt(b.quantity)} plt · ${fmt(b.total_pcs ?? b.pcs_actual ?? ((b.quantity||0)*(b.pallet_qty||1)))} pcs</div>
-        <div class="d-flex gap-1 mt-1">
-          <button class="btn btn-outline-primary btn-sm" style="padding:1px 6px;font-size:.67rem" onclick="openMove(${b.id},'${dept}',${b.quantity})">Move</button>
-          <button class="btn btn-outline-warning btn-sm" style="padding:1px 6px;font-size:.67rem" onclick="openSplit(${b.id},${b.quantity})">Split</button>
-        </div>
+        <div class="mt-1" onclick="event.stopPropagation()">${prioSelect(b.priority||2, b.id, 'batch', 'loadKanban()')}</div>
       </div>`).join('')}
     </div>`;
   }).join('');
 }
-function kanbanDrop(e,dept){e.preventDefault();e.currentTarget.classList.remove('drag-over');if(dragBatchId)openMove(dragBatchId,null,null,dept);}
 
 
 
@@ -8476,10 +8467,10 @@ const DEPT_EXTRAS={
 // ══════════════════════════════════════════════════════════════
 // DEPT BATCH DETAIL OFFCANVAS
 // ══════════════════════════════════════════════════════════════
-let _bdcBatch=null, _bdcDept=null, _bdcActiveTab='info';
+let _bdcBatch=null, _bdcDept=null, _bdcActiveTab='info', _bdcReadOnly=false;
 
-async function deptBatchDetail(batchId, dept){
-  _bdcDept=dept; _bdcActiveTab='info';
+async function deptBatchDetail(batchId, dept, readOnly=false){
+  _bdcDept=dept; _bdcActiveTab='info'; _bdcReadOnly=!!readOnly;
   // Show offcanvas immediately with loader
   const oc=bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('batchDetailCanvas'));
   document.getElementById('bdc-title').innerHTML=`<i class="bi bi-layers me-2"></i>Batch #${batchId}`;
@@ -8538,8 +8529,9 @@ function bdcRender(tab, b, hist){
           ${b?.split_reason?`<tr><th class="text-muted fw-normal">Split reason</th><td class="fst-italic">${b.split_reason}</td></tr>`:''}
         </table>
         <div class="d-flex gap-2 flex-wrap mt-2">
+          ${_bdcReadOnly?`<div class="small text-muted fst-italic"><i class="bi bi-eye me-1"></i>Planning view — production moves &amp; splits are done in the Station Leader Hub.</div>`:`
           <button class="btn btn-sm btn-outline-primary" onclick="openMove(${b?.id},'${_bdcDept}',${b?.quantity})"><i class="bi bi-arrow-right-circle me-1"></i>Move</button>
-          <button class="btn btn-sm btn-outline-warning" onclick="openSplit(${b?.id},${b?.quantity})"><i class="bi bi-scissors me-1"></i>Split</button>
+          <button class="btn btn-sm btn-outline-warning" onclick="openSplit(${b?.id},${b?.quantity})"><i class="bi bi-scissors me-1"></i>Split</button>`}
           ${canEdit?`<button class="btn btn-sm btn-outline-secondary" onclick="bdcTab('edit')"><i class="bi bi-pencil me-1"></i>Edit</button>`:''}
         </div>
       </div>`;

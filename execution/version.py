@@ -11,11 +11,12 @@ BUILD_DATE to today, and prepend a 1-line entry to CHANGELOG below.
 """
 from datetime import date
 
-VERSION    = "2.21.73"
-BUILD_DATE = "2026-06-25"
+VERSION    = "2.21.74"
+BUILD_DATE = "2026-06-26"
 
 # Newest first. Format: ("X.Y.Z", "YYYY-MM-DD", "one-line description")
 CHANGELOG = [
+    ("2.21.74", "2026-06-26", "Streamlining workstream 2: the Kanban and Line Board are now read-only PLANNING viewers — production stage moves & splits happen only in the Station Leader Hub (logged via /api/production/*). Removed drag-and-drop and the on-card Move/Split buttons from both boards; cards now click through to a read-only batch detail. Planners can still tweak PRIORITY inline on every card (PATCH /api/batches/{id}/priority). The shared batch-detail offcanvas gained a read-only mode (deptBatchDetail(id,dept,true)) that hides Move/Split and shows a 'moves are done in the Station Leader Hub' hint; the dept pages, Station Hub and packing views keep their existing actions. Removed the now-dead kanbanDrop/lbDrop handlers."),
     ("2.21.73", "2026-06-25", "Streamlining workstream 1 (safe cleanup, no behavior change): removed the unused GM_COMPONENTS_NEW duplicate constant; dropped two dead tables (suppliers, production_table — never read/written) from the schema + a DROP migration for existing DBs; consolidated the two identical Station-Hub short-label maps into one SLH_DEPT_SHORT (derived from SLH_DEPT_LABEL). Note: legacy Products/BOM removal was DEFERRED — the sales PO-line flow still binds FG->products.id, so it needs a migration to skus, not a plain delete."),
     ("2.21.72", "2026-06-25", "Login: 'Keep me signed in on this computer' checkbox. When ticked the session lasts 30 days (vs the normal ~8.5h), so re-opening the app on the same computer skips the login. The token already persists in localStorage; this just extends the server session. LoginIn gained remember; login() passes hours=720 when set. The checkbox choice is remembered per browser. Default off."),
     ("2.21.71", "2026-06-25", "Fix: Glue BOM edits/deletes reverted on restart. _seed_real_glue_recipes ran on every startup and UPDATE-ed the 14 canonical recipes (wiping user edits + forcing is_active=1) or re-INSERTed missing ones (resurrecting deleted recipes), so a redeploy reset the Glue BOMs. It now seeds the defaults ONLY when the recipe catalog is empty (fresh DB); after that the user owns their Glue BOMs and edits/deactivations/deletions persist. Legacy GLU-% placeholder cleanup still runs."),
