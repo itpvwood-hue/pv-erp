@@ -1063,6 +1063,13 @@ def init_db():
         # Drop dead tables (never read/written) from long-lived DBs.
         "DROP TABLE IF EXISTS suppliers",
         "DROP TABLE IF EXISTS production_table",
+        # WS3b phase 1 (expand): sku_id on the tables that bridge to the legacy
+        # `products` table, so the FG identity can move from products -> skus.
+        # Backfilled below from products.sku = skus.code; used by later phases.
+        "ALTER TABLE production_orders ADD COLUMN sku_id INTEGER",
+        "ALTER TABLE po_lines ADD COLUMN sku_id INTEGER",
+        "ALTER TABLE orders ADD COLUMN sku_id INTEGER",
+        "ALTER TABLE production_logs ADD COLUMN sku_id INTEGER",
         "ALTER TABLE materials ADD COLUMN code TEXT DEFAULT ''",
         "ALTER TABLE materials ADD COLUMN fc_stock REAL DEFAULT 0",
         # Extended material attributes (Thai/Chinese names, veneer/board specs,
@@ -1455,6 +1462,29 @@ def init_db():
             conn.execute("PRAGMA foreign_keys=ON")
         except Exception:
             pass
+
+    # ── WS3b phase 1 (backfill): populate the new sku_id columns from the legacy
+    #    products bridge (products.sku == skus.code, case-insensitive). Idempotent
+    #    — only fills rows whose sku_id is still NULL and that have a matching sku.
+    #    Rows with no skus match (VCMX production orders, which carry vcmx_bom_id,
+    #    and legacy production_logs rows pointing at deleted products) stay NULL.
+    #    No behavior change yet; later phases re-point reads/writes onto sku_id. ──
+    try:
+        for _t in ('production_orders', 'po_lines', 'orders', 'production_logs'):
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_t,)).fetchone():
+                continue
+            conn.execute(f"""
+                UPDATE {_t} SET sku_id = (
+                    SELECT s.id FROM skus s JOIN products p ON UPPER(p.sku) = UPPER(s.code)
+                    WHERE p.id = {_t}.product_id)
+                WHERE sku_id IS NULL AND product_id IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM skus s JOIN products p
+                              ON UPPER(p.sku) = UPPER(s.code) WHERE p.id = {_t}.product_id)""")
+        conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
 
     # Enforce unique material codes at the DB level (case-insensitive). Best
     # effort: if the table still contains pre-existing duplicate codes the index
