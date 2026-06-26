@@ -1527,6 +1527,62 @@ def init_db():
         except Exception:
             pass
 
+    # ── Heal dangling foreign keys. Several legacy tables were dropped over the
+    #    streamlining (suppliers, production_table, prod_batch, mfg_order,
+    #    products, bom), but other tables still declared a FOREIGN KEY pointing
+    #    at them (e.g. materials.supplier_id -> suppliers). With FK enforcement
+    #    on, an INSERT into such a table fails outright with "no such table: X"
+    #    (this was silently breaking material creation). Rebuild any table whose
+    #    FK references a table that no longer exists, stripping just those dead
+    #    FK clauses (inline + trailing, incl. ON DELETE/UPDATE actions). With FK
+    #    off + legacy_alter_table on (skip view re-validation). Idempotent +
+    #    self-healing — a table is rebuilt only while it has a dangling FK. ──
+    try:
+        import re as _re4
+        _allt = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        _ON = r"(?:\s+ON\s+(?:DELETE|UPDATE)\s+(?:SET\s+NULL|SET\s+DEFAULT|NO\s+ACTION|CASCADE|RESTRICT))*"
+        _heal = {}
+        for _t in _allt:
+            try:
+                _dead = {r[2] for r in conn.execute(f'PRAGMA foreign_key_list("{_t}")').fetchall()
+                         if r[2] not in _allt}
+            except Exception:
+                _dead = set()
+            if _dead:
+                _heal[_t] = _dead
+        if _heal:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("PRAGMA legacy_alter_table=ON")
+            for _t, _dead in _heal.items():
+                _idx = [r[0] for r in conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                    (_t,)).fetchall()]
+                _ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (_t,)).fetchone()[0]
+                _cl = _ddl
+                for _d in _dead:
+                    _cl = _re4.sub(rf',\s*FOREIGN KEY\s*\([^)]*\)\s*REFERENCES\s+"?{_re4.escape(_d)}"?\s*\([^)]*\){_ON}', '', _cl)
+                    _cl = _re4.sub(rf'\s+REFERENCES\s+"?{_re4.escape(_d)}"?\s*\([^)]*\){_ON}', '', _cl)
+                _cl = _re4.sub(r'(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?)' + _re4.escape(_t) + r'("?)',
+                               r'\g<1>' + _t + r'__hb\g<2>', _cl, count=1)
+                conn.execute(f'DROP TABLE IF EXISTS "{_t}__hb"')
+                conn.execute(_cl)
+                conn.execute(f'INSERT INTO "{_t}__hb" SELECT * FROM "{_t}"')
+                conn.execute(f'DROP TABLE "{_t}"')
+                conn.execute(f'ALTER TABLE "{_t}__hb" RENAME TO "{_t}"')
+                for _ix in _idx:
+                    conn.execute(_ix)
+            conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try:
+            conn.execute("PRAGMA legacy_alter_table=OFF")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+
     # Enforce unique material codes at the DB level (case-insensitive). Best
     # effort: if the table still contains pre-existing duplicate codes the index
     # can't be created — startup continues (the app layer also blocks dupes on
@@ -7787,7 +7843,6 @@ def _vcmx_ensure_paired_records(conn, sku_code: str, sku_name: str,
     unified FG-catalog entry that production orders reference via sku_id.
     Returns (material_id, sku_id)."""
     dims = dims or {}
-    dims = dims or {}
     # Narrow lookup: only consider existing VCMX rows so we never overwrite a
     # non-VCMX material that happens to share the SKU code.
     mat = conn.execute(
@@ -7820,6 +7875,15 @@ def _vcmx_ensure_paired_records(conn, sku_code: str, sku_name: str,
     sk = conn.execute("SELECT id FROM skus WHERE UPPER(code)=UPPER(?)", (sku_code,)).fetchone()
     if sk:
         sku_id = sk[0]
+        conn.execute("""UPDATE skus
+                        SET name=?,
+                            thickness_mm=COALESCE(?, thickness_mm),
+                            width_mm    =COALESCE(?, width_mm),
+                            length_mm   =COALESCE(?, length_mm),
+                            updated_at  =datetime('now')
+                        WHERE id=?""",
+                     (sku_name, dims.get('thickness_mm'), dims.get('width_mm'),
+                      dims.get('length_mm'), sku_id))
     else:
         cur = conn.execute(
             "INSERT INTO skus (code, name, thickness_mm, width_mm, length_mm, pallet_qty, notes) "
