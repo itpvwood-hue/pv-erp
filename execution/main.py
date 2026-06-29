@@ -1126,9 +1126,13 @@ async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
             'back_veneer_code':  row.get('back_veneer_code', ''),
             'back_veneer_qty':   _num(row.get('back_veneer_qty')),
             'face_glue_code':    row.get('face_glue_code', ''),
-            'face_glue_usage_g': _num(row.get('face_glue_usage_g')),
+            # Glue usage (g/face): the Download Template names this column
+            # face_glue_qty, the Export uses face_glue_usage_g — accept either so
+            # both template-based and export-based CSVs import the real value
+            # (otherwise save_bom_for_sku falls back to its 45 g default).
+            'face_glue_usage_g': _num(row.get('face_glue_usage_g') or row.get('face_glue_qty')),
             'back_glue_code':    row.get('back_glue_code', ''),
-            'back_glue_usage_g': _num(row.get('back_glue_usage_g')),
+            'back_glue_usage_g': _num(row.get('back_glue_usage_g') or row.get('back_glue_qty')),
             'packing_sku_code':  row.get('packing_sku_code', ''),
         }
         for key in ('base_board_code', 'face_veneer_code', 'back_veneer_code'):
@@ -1266,9 +1270,9 @@ def export_bom():
     lines = ["product_sku,sku_name,pieces_per_unit,thickness_mm,width_mm,length_mm,"
              "base_board_code,base_board_qty,"
              "face_veneer_code,face_veneer_qty,"
-             "face_glue_code,face_glue_usage_g,"
+             "face_glue_code,face_glue_qty,"
              "back_veneer_code,back_veneer_qty,"
-             "back_glue_code,back_glue_usage_g,"
+             "back_glue_code,back_glue_qty,"
              "packing_sku_code"]
     def v(x): return str(x) if x is not None else ""
     def esc(x): return '"'+str(x or '').replace('"','""')+'"'
