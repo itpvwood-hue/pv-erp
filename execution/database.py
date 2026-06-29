@@ -341,6 +341,30 @@ def init_db():
             FOREIGN KEY (to_material_id)   REFERENCES materials(id)
         )
     """)
+    # ── Board Resize Log ───────────────────────────────────────
+    # Cutting/resizing a core board from one code into another at FC.
+    # Unlike a veneer regrade (1:1 reclassify), a resize has independent
+    # quantities — one source board can yield several smaller target boards
+    # (qty_out) plus offcut waste — so the source value is conserved and
+    # re-blended into the target's weighted-average unit cost.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS board_resize_log (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id        TEXT UNIQUE NOT NULL,
+            from_material_id INTEGER NOT NULL,
+            to_material_id   INTEGER NOT NULL,
+            qty_in           REAL NOT NULL,
+            qty_out          REAL NOT NULL,
+            from_unit_cost      REAL,
+            to_unit_cost_before REAL,
+            to_unit_cost_after  REAL,
+            resized_by       TEXT NOT NULL,
+            notes            TEXT DEFAULT '',
+            created_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (from_material_id) REFERENCES materials(id),
+            FOREIGN KEY (to_material_id)   REFERENCES materials(id)
+        )
+    """)
     # ── Production Order Veneer Grade Mix ─────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS prod_order_veneer_alloc (
@@ -4290,6 +4314,25 @@ def get_fc_movements(limit=50, mat_type=None):
             LIMIT ?
         """, (limit,)).fetchall()
         rows.extend([dict(r) for r in regrade])
+
+    # 3b. Board resizes within FC (boards only)
+    if not mat_type or mat_type == 'core_board':
+        resize = conn.execute("""
+            SELECT 'RESIZE' as kind, rl.record_id as ref,
+                   rl.created_at as ts, rl.qty_out as qty,
+                   tm.id as material_id, tm.code as material_code, tm.name as material_name,
+                   tm.type as material_type, tm.unit,
+                   '' as requested_by, rl.resized_by as actor,
+                   rl.notes,
+                   'FC ' || COALESCE(fm.code,'') || ' (−' || rl.qty_in || ')' as from_loc,
+                   'FC ' || COALESCE(tm.code,'') as to_loc
+            FROM board_resize_log rl
+            JOIN materials fm ON fm.id = rl.from_material_id
+            JOIN materials tm ON tm.id = rl.to_material_id
+            ORDER BY rl.created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        rows.extend([dict(r) for r in resize])
 
     # 4. Batch releases (FC → laminating) — shows what batches left FC for production
     releases = conn.execute("""
@@ -10091,7 +10134,8 @@ def get_fc_stock_materials() -> list:
                current_stock AS wh_stock,
                fc_stock,
                reorder_point, unit_cost, supplier,
-               species, grade, face_back, cut_type, matching
+               species, grade, face_back, cut_type, matching,
+               thickness_mm, width_mm, length_mm
         FROM materials
         WHERE type IN ('veneer_sheet', 'core_board')
         ORDER BY type, name
@@ -10210,6 +10254,114 @@ def get_veneer_regrade_log(material_id: int = None, limit: int = 50) -> list:
         JOIN materials fm ON fm.id = r.from_material_id
         JOIN materials tm ON tm.id = r.to_material_id
         LEFT JOIN users u ON u.user_id = r.graded_by
+        WHERE 1=1
+    """
+    params = []
+    if material_id:
+        q += " AND (r.from_material_id=? OR r.to_material_id=?)"
+        params += [material_id, material_id]
+    rows = conn.execute(q + " ORDER BY r.created_at DESC LIMIT ?", params + [limit]).fetchall()
+    conn.close(); return rows_to_list(rows)
+
+
+# ═══════════════════════════════════════════════════════════════
+# BOARD RESIZING  (cut a core board from one code into another)
+# ═══════════════════════════════════════════════════════════════
+
+def _new_resize_id() -> str:
+    today = datemod.today().strftime('%Y%m%d')
+    conn = get_db()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM board_resize_log WHERE record_id LIKE ?",
+        (f'RSZ-{today}-%',)
+    ).fetchone()[0]
+    conn.close(); return f"RSZ-{today}-{n+1:04d}"
+
+
+def create_board_resize(data: dict) -> dict:
+    """
+    Resize a core board within FC station: consume qty_in of from_material and
+    produce qty_out of to_material, both in fc_stock. Independent quantities so
+    one source board can yield several smaller boards (+ offcut waste).
+
+    Costing is value-conserving: the consumed pieces carry their total value
+    (qty_in × source unit_cost) into the target, distributed over the produced
+    pieces and weighted-average-blended into the target's existing on-hand cost.
+    The source's per-unit cost is unchanged.
+    """
+    conn = get_db()
+    from_mat = row_to_dict(conn.execute(
+        "SELECT * FROM materials WHERE id=?", (data['from_material_id'],)
+    ).fetchone())
+    to_mat = row_to_dict(conn.execute(
+        "SELECT * FROM materials WHERE id=?", (data['to_material_id'],)
+    ).fetchone())
+    if not from_mat or not to_mat:
+        conn.close(); raise ValueError("Material not found")
+    if from_mat.get('type') != 'core_board' or to_mat.get('type') != 'core_board':
+        conn.close(); raise ValueError("Board resize is only for core boards")
+
+    qty_in  = float(data['qty_in'])
+    qty_out = float(data['qty_out'])
+    if qty_in <= 0 or qty_out <= 0:
+        conn.close(); raise ValueError("Quantities must be greater than zero")
+
+    src_stock = float(from_mat.get('fc_stock') or 0)
+    if qty_in > src_stock:
+        conn.close()
+        raise ValueError(f"Insufficient FC stock: only {src_stock} available")
+
+    # ── Value-conserving weighted-average costing ─────────────────────
+    from_cost = float(from_mat.get('unit_cost') or 0)
+    to_cost_before = float(to_mat.get('unit_cost') or 0)
+    tgt_total = float(to_mat.get('fc_stock') or 0) + float(to_mat.get('current_stock') or 0)
+    incoming_value = qty_in * from_cost          # total value moved out of source
+    new_total = tgt_total + qty_out
+    to_cost_after = round(((tgt_total * to_cost_before) + incoming_value) / new_total, 4) \
+        if new_total > 0 else to_cost_before
+
+    # Deduct consumed from source fc_stock, add produced to target fc_stock; reprice target.
+    conn.execute("UPDATE materials SET fc_stock=MAX(0,fc_stock-?) WHERE id=?",
+                 (qty_in, data['from_material_id']))
+    conn.execute("UPDATE materials SET fc_stock=fc_stock+?, unit_cost=? WHERE id=?",
+                 (qty_out, to_cost_after, data['to_material_id']))
+
+    rid = _new_resize_id()
+    conn.execute(
+        """INSERT INTO board_resize_log
+           (record_id, from_material_id, to_material_id, qty_in, qty_out,
+            from_unit_cost, to_unit_cost_before, to_unit_cost_after, resized_by, notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (rid, data['from_material_id'], data['to_material_id'], qty_in, qty_out,
+         round(from_cost, 4), round(to_cost_before, 4), to_cost_after,
+         data['resized_by'], data.get('notes', ''))
+    )
+    conn.commit()
+    row = conn.execute("""
+        SELECT r.*,
+               fm.name AS from_material_name, fm.code AS from_material_code, fm.unit AS unit,
+               tm.name AS to_material_name, tm.code AS to_material_code,
+               u.display_name AS resized_by_name
+        FROM board_resize_log r
+        JOIN materials fm ON fm.id = r.from_material_id
+        JOIN materials tm ON tm.id = r.to_material_id
+        LEFT JOIN users u ON u.user_id = r.resized_by
+        WHERE r.record_id=?
+    """, (rid,)).fetchone()
+    conn.close(); return row_to_dict(row)
+
+
+def get_board_resize_log(material_id: int = None, limit: int = 50) -> list:
+    conn = get_db()
+    q = """
+        SELECT r.*,
+               fm.name AS from_material_name, fm.code AS from_material_code, fm.unit AS unit,
+               tm.name AS to_material_name, tm.code AS to_material_code,
+               u.display_name AS resized_by_name
+        FROM board_resize_log r
+        JOIN materials fm ON fm.id = r.from_material_id
+        JOIN materials tm ON tm.id = r.to_material_id
+        LEFT JOIN users u ON u.user_id = r.resized_by
         WHERE 1=1
     """
     params = []

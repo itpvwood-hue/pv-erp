@@ -134,8 +134,9 @@ from database import (
     get_po_document_trace, get_po_document_trace_files, DOCS_DIR,
     create_fc_transfer_request, create_fc_return_request,
     fulfill_fc_transfer_request, cancel_fc_transfer_request, adjust_fc_stock,
-    # FC re-grading & veneer grade-mix allocation
+    # FC re-grading, board resizing & veneer grade-mix allocation
     create_veneer_regrade, get_veneer_regrade_log,
+    create_board_resize, get_board_resize_log,
     save_veneer_alloc_and_confirm, get_veneer_alloc,
     # Proper BOM module
     get_all_skus, get_sku, get_sku_bom, get_sku_cost,
@@ -2258,6 +2259,13 @@ class VeneerRegradeIn(BaseModel):
     qty: float
     notes: Optional[str] = None
 
+class BoardResizeIn(BaseModel):
+    from_material_id: int
+    to_material_id: int
+    qty_in: float      # consumed from source board
+    qty_out: float     # produced of target board (yield)
+    notes: Optional[str] = None
+
 class VeneerAllocItem(BaseModel):
     material_id: int
     qty_allocated: float
@@ -3821,6 +3829,21 @@ def fc_regrade(body: VeneerRegradeIn, user: dict = Depends(require_auth)):
 def fc_regrade_log(material_id: Optional[int] = None, limit: int = 50,
                    user: dict = Depends(require_auth)):
     return get_veneer_regrade_log(material_id=material_id, limit=limit)
+
+# ── Board Resizing ──────────────────────────────────────────────
+@app.post("/api/fc/resize", status_code=201)
+def fc_resize(body: BoardResizeIn, user: dict = Depends(require_auth)):
+    data = body.dict()
+    data['resized_by'] = user['user_id']
+    try:
+        return create_board_resize(data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/fc/resize-log")
+def fc_resize_log(material_id: Optional[int] = None, limit: int = 50,
+                  user: dict = Depends(require_auth)):
+    return get_board_resize_log(material_id=material_id, limit=limit)
 
 # ── Production Order Veneer Grade-Mix Allocation ────────────────
 @app.post("/api/production-orders/{order_id}/veneer-allocation", status_code=201)

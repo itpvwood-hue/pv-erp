@@ -434,11 +434,17 @@
         <small class="text-muted">Veneers &amp; core boards at FC station. Request WH transfers or re-grade veneers between grades.</small>
       </div>
       <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-outline-dark btn-sm" onclick="fcPrintDailyReport()" title="Print/PDF the FC daily stock + activity report">
+          <i class="bi bi-printer me-1"></i>Daily Report
+        </button>
         <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#fc-dt-collapse">
           <i class="bi bi-tools me-1"></i>Data Tools
         </button>
         <button class="btn btn-outline-warning btn-sm" onclick="fcOpenRegradeModal()">
           <i class="bi bi-arrow-left-right me-1"></i>Re-grade
+        </button>
+        <button class="btn btn-outline-warning btn-sm" onclick="fcOpenResizeModal()">
+          <i class="bi bi-scissors me-1"></i>Resize Board
         </button>
         <button class="btn btn-outline-danger btn-sm" onclick="fcOpenReturnModal()">
           <i class="bi bi-arrow-up-circle me-1"></i>Return to WH
@@ -544,6 +550,7 @@
           <option value="TRANSFER_IN">↓ Transfers In</option>
           <option value="RETURN_TO_WH">↑ Returns to WH</option>
           <option value="REGRADE">⇄ Regrades</option>
+          <option value="RESIZE">✂ Resizes</option>
           <option value="RELEASE_TO_LAM">→ Released to Lam</option>
         </select>
         <select class="form-select form-select-sm" id="fc-mvmt-type" style="width:120px;font-size:.75rem" onchange="fcLoadMovements()">
@@ -564,6 +571,15 @@
       <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="fcLoadRegradeLog()">Refresh</button>
     </div>
     <div id="fc-regrade-log">
+      <div class="text-muted small text-center py-2">Loading...</div>
+    </div>
+
+    <!-- Resize History (boards only) -->
+    <div class="d-flex justify-content-between align-items-center mt-4 mb-2">
+      <div class="fw-semibold"><i class="bi bi-scissors me-1 text-warning"></i>Recent Resizes <small class="text-muted ms-1" style="font-size:.7rem">— boards only</small></div>
+      <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="fcLoadResizeLog()">Refresh</button>
+    </div>
+    <div id="fc-resize-log">
       <div class="text-muted small text-center py-2">Loading...</div>
     </div>
     </div><!-- /fci-sub-pane-movements -->
@@ -617,6 +633,67 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-warning btn-sm" onclick="rgrSubmit()"><i class="bi bi-check-lg me-1"></i>Confirm Re-grade</button>
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Board Resize Modal -->
+<div class="modal fade" id="fcResizeModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-scissors me-2 text-warning"></i>Resize Board</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-warning py-1 small mb-3">
+          <i class="bi bi-info-circle me-1"></i>Cut a board from one code into another at FC. Enter how much you
+          <b>consume</b> from the source and how much you <b>produce</b> of the target (one board can yield several).
+          Both stay in FC stock; the source's value is carried into the target's cost.
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Source Board (From) <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="rsz-from-mat" onchange="rszOnFromChange()">
+              <option value="">— Select source board —</option>
+            </select>
+            <div class="small text-muted mt-1" id="rsz-from-stock"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Target Board (To) <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="rsz-to-mat" onchange="rszOnToChange()">
+              <option value="">— Select target board —</option>
+            </select>
+            <div class="small text-muted mt-1" id="rsz-to-stock"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Qty Consumed (Source) <span class="text-danger">*</span></label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" id="rsz-qty-in" min="0.01" step="0.01" oninput="rszUpdateSummary()">
+              <span class="input-group-text" id="rsz-in-unit">pcs</span>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Qty Produced (Target) <span class="text-danger">*</span></label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" id="rsz-qty-out" min="0.01" step="0.01" oninput="rszUpdateSummary()">
+              <span class="input-group-text" id="rsz-out-unit">pcs</span>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label small fw-semibold">Reason / Notes</label>
+            <input type="text" class="form-control form-control-sm" id="rsz-notes" placeholder="e.g. Cut 1 sheet 1220×2440 → 2 boards 1220×1220">
+          </div>
+        </div>
+        <div class="mt-3 p-2 rounded" id="rsz-summary" style="background:#f8f9fa;display:none">
+          <div class="small fw-semibold mb-1">Summary</div>
+          <div class="small" id="rsz-summary-text"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-warning btn-sm" onclick="rszSubmit()"><i class="bi bi-check-lg me-1"></i>Confirm Resize</button>
         <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
       </div>
     </div>

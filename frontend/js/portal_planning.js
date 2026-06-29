@@ -7680,6 +7680,10 @@ function fcRenderGrid(){
                   <button class="btn btn-outline-warning btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
                     title="Re-grade within FC station"
                     onclick="fcOpenRegradeModal(${m.id},'prep')">Regrade</button>` : ''}
+                  ${m.type==='core_board' && m.fc_stock>0 ? `
+                  <button class="btn btn-outline-warning btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
+                    title="Resize/cut this board into another board code"
+                    onclick="fcOpenResizeModal(${m.id})">Resize</button>` : ''}
                   ${m.fc_stock>0 ? `
                   <button class="btn btn-outline-danger btn-xs py-0 px-1" style="font-size:.6rem;line-height:1.3"
                     title="Flag as non-conforming (rejected when sorting)"
@@ -7716,8 +7720,9 @@ async function fcLoadStock(){
 
   fcRenderGrid();
 
-  // Also load regrade log + unified movement log
+  // Also load regrade log + resize log + unified movement log
   fcLoadRegradeLog();
+  fcLoadResizeLog();
   fcLoadMovements();
 
   // Transfer requests
@@ -8041,6 +8046,221 @@ async function fcLoadRegradeLog(){
   </table></div>`;
 }
 
+// ── Board Resize Modal ─────────────────────────────────────────
+// _rszAllBoards: cached full core-board list for the resize target dropdown
+let _rszAllBoards = [];
+
+/**
+ * Open the board resize modal.
+ * @param {number|null} preselectedId - material id to pre-select as source (from a card button)
+ */
+async function fcOpenResizeModal(preselectedId=null){
+  // Refresh FC stock for accurate source options; fetch all boards for targets.
+  _fcStockMats = await api('/api/fc/stock').catch(()=>_fcStockMats||[]);
+  const fcBoards = _fcStockMats.filter(m=>m.type==='core_board' && (m.fc_stock||0)>0);
+  _rszAllBoards = await api('/api/materials?type=core_board').catch(()=>fcBoards);
+
+  const dims = m => [m.width_mm,m.length_mm].filter(Boolean).join('×') || '';
+  const srcOpt = m => `<option value="${m.id}" data-fc="${m.fc_stock||0}" data-wh="${m.wh_stock||0}" data-unit="${m.unit||'pcs'}">`
+    + `${m.name}${dims(m)?' '+dims(m):''} (${m.code||''}) — FC:${fmt(m.fc_stock||0)} WH:${fmt(m.wh_stock||0)}</option>`;
+  const tgtOpt = m => {
+    const wh = m.wh_stock??m.current_stock??0, fc = m.fc_stock??0;
+    return `<option value="${m.id}" data-fc="${fc}" data-wh="${wh}" data-unit="${m.unit||'pcs'}">`
+      + `${m.name}${dims(m)?' '+dims(m):''} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}</option>`;
+  };
+
+  document.getElementById('rsz-from-mat').innerHTML =
+    '<option value="">— Select source board —</option>' + fcBoards.map(srcOpt).join('');
+  document.getElementById('rsz-to-mat').innerHTML =
+    '<option value="">— Select target board —</option>' + (_rszAllBoards.length?_rszAllBoards:fcBoards).map(tgtOpt).join('');
+
+  if(preselectedId){ document.getElementById('rsz-from-mat').value = preselectedId; }
+  document.getElementById('rsz-qty-in').value = '';
+  document.getElementById('rsz-qty-out').value = '';
+  document.getElementById('rsz-notes').value = '';
+  document.getElementById('rsz-summary').style.display = 'none';
+  document.getElementById('rsz-to-stock').textContent = '';
+  rszOnFromChange();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('fcResizeModal')).show();
+}
+
+function rszOnFromChange(){
+  const sel = document.getElementById('rsz-from-mat');
+  const opt = sel.options[sel.selectedIndex];
+  const unit = opt?.dataset?.unit || 'pcs';
+  document.getElementById('rsz-in-unit').textContent = unit;
+  document.getElementById('rsz-from-stock').textContent = opt?.value
+    ? `FC stock: ${fmt(opt.dataset.fc||0)} | WH: ${fmt(opt.dataset.wh||0)} ${unit}` : '';
+  rszUpdateSummary();
+}
+
+function rszOnToChange(){
+  const sel = document.getElementById('rsz-to-mat');
+  const opt = sel.options[sel.selectedIndex];
+  const unit = opt?.dataset?.unit || 'pcs';
+  document.getElementById('rsz-out-unit').textContent = unit;
+  document.getElementById('rsz-to-stock').textContent = opt?.value
+    ? `Current FC stock: ${fmt(opt.dataset.fc||0)} ${unit}` : '';
+  rszUpdateSummary();
+}
+
+function rszUpdateSummary(){
+  const fromSel = document.getElementById('rsz-from-mat');
+  const toSel   = document.getElementById('rsz-to-mat');
+  const fromOpt = fromSel.options[fromSel.selectedIndex];
+  const toOpt   = toSel.options[toSel.selectedIndex];
+  const qtyIn   = parseFloat(document.getElementById('rsz-qty-in').value)||0;
+  const qtyOut  = parseFloat(document.getElementById('rsz-qty-out').value)||0;
+  const sumEl   = document.getElementById('rsz-summary');
+  const sumTxt  = document.getElementById('rsz-summary-text');
+  if(!fromOpt?.value || !toOpt?.value || !qtyIn || !qtyOut){ sumEl.style.display='none'; return; }
+  sumEl.style.display='';
+  const fromName = fromOpt.text?.split('—')[0]?.trim()||'?';
+  const toName   = toOpt.text?.split('—')[0]?.trim()||'?';
+  const fromUnit = fromOpt.dataset.unit||'pcs', toUnit = toOpt.dataset.unit||'pcs';
+  sumTxt.innerHTML = `
+    <span class="text-danger">−${fmt(qtyIn)} ${fromUnit} from <b>${fromName}</b> (FC)</span><br>
+    <span class="text-success">+${fmt(qtyOut)} ${toUnit} to <b>${toName}</b> (FC)</span>`;
+}
+
+async function rszSubmit(){
+  const fromId = parseInt(document.getElementById('rsz-from-mat').value)||0;
+  const toId   = parseInt(document.getElementById('rsz-to-mat').value)||0;
+  const qtyIn  = parseFloat(document.getElementById('rsz-qty-in').value)||0;
+  const qtyOut = parseFloat(document.getElementById('rsz-qty-out').value)||0;
+  const notes  = document.getElementById('rsz-notes').value;
+  if(!fromId||!toId||qtyIn<=0||qtyOut<=0){ toast('Fill in all required fields','warning'); return; }
+  if(fromId===toId){ toast('Source and target must be different boards','warning'); return; }
+  try{
+    const res = await api('/api/fc/resize','POST',{
+      from_material_id:fromId, to_material_id:toId,
+      qty_in:qtyIn, qty_out:qtyOut, notes:notes||null,
+    });
+    bootstrap.Modal.getInstance(document.getElementById('fcResizeModal')).hide();
+    const cb=res&&res.to_unit_cost_before, ca=res&&res.to_unit_cost_after;
+    const costMsg=(cb!=null&&ca!=null&&Number(cb)!==Number(ca))
+      ? ` · target cost ฿${fmt(cb)}→฿${fmt(ca)} (weighted avg)` : '';
+    toast(`Resize recorded — ${fmt(qtyIn)} in → ${fmt(qtyOut)} out${costMsg}`);
+    fcLoadStock();
+  }catch(e){ toast(e.message,'danger'); }
+}
+
+async function fcLoadResizeLog(){
+  const log = await api('/api/fc/resize-log?limit=20').catch(()=>[]);
+  const el = document.getElementById('fc-resize-log');
+  if(!el) return;
+  if(!log.length){
+    el.innerHTML='<div class="text-muted small text-center py-2">No resize records yet.</div>';
+    return;
+  }
+  el.innerHTML = `<div class="table-responsive"><table class="table table-sm table-hover mb-0" style="font-size:.78rem">
+    <thead class="table-light"><tr>
+      <th>Record</th><th>From</th><th>To</th><th class="text-end">In</th><th class="text-end">Out</th><th>By</th><th>Date</th>
+    </tr></thead>
+    <tbody>
+    ${log.map(r=>`<tr>
+      <td><code style="font-size:.7rem">${r.record_id}</code></td>
+      <td><span class="text-danger fw-semibold">${r.from_material_code||''}</span><br><span class="text-muted" style="font-size:.7rem">${r.from_material_name||''}</span></td>
+      <td><span class="text-success fw-semibold">${r.to_material_code||''}</span><br><span class="text-muted" style="font-size:.7rem">${r.to_material_name||''}</span></td>
+      <td class="text-end fw-bold text-danger">−${fmt(r.qty_in)}</td>
+      <td class="text-end fw-bold text-success">+${fmt(r.qty_out)}</td>
+      <td class="small text-muted">${r.resized_by_name||r.resized_by||'—'}</td>
+      <td class="small text-muted">${(r.created_at||'').slice(0,10)}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+// ── FC Daily Printable Report ──────────────────────────────────
+// Reuses the shared SLH report helpers (_slhOpenPrint / _slhCompanyHeader /
+// _SLH_REPORT_CSS / _slhEsc). Shows current FC department stock (veneers +
+// boards, incl. any regraded/resized stock) plus today's FC activity.
+async function fcPrintDailyReport(){
+  let mats, mv;
+  try{
+    [mats, mv] = await Promise.all([
+      api('/api/fc/stock').catch(()=>[]),
+      api('/api/fc/movements?limit=200').catch(()=>[]),
+    ]);
+  }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
+
+  const esc = _slhEsc;
+  const today = new Date().toISOString().slice(0,10);
+  const num = n => (Number(n)||0).toLocaleString(undefined,{maximumFractionDigits:2});
+  const money = n => '฿'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const dims = m => [m.width_mm,m.length_mm].filter(Boolean).join('×');
+
+  const inFc = (mats||[]).filter(m=>(m.fc_stock||0)>0);
+  const veneers = inFc.filter(m=>m.type==='veneer_sheet');
+  const boards  = inFc.filter(m=>m.type==='core_board');
+
+  // ── Section 1: Veneers on hand ──
+  let vTot=0, vVal=0;
+  const vRows = veneers.map(m=>{
+    const val=(Number(m.fc_stock)||0)*(Number(m.unit_cost)||0); vTot+=Number(m.fc_stock)||0; vVal+=val;
+    return `<tr>
+      <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
+      <td>${esc(m.species||'')}</td><td>${esc(m.grade||'')}</td>
+      <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
+      <td class="num">${money(m.unit_cost)}</td><td class="num">${money(val)}</td></tr>`;
+  }).join('');
+  const vTbl = veneers.length
+    ? `<table><thead><tr><th>Code</th><th>Name</th><th>Species</th><th>Grade</th>`+
+      `<th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead>`+
+      `<tbody>${vRows}</tbody><tfoot><tr><td colspan="4">Total — ${veneers.length} veneer code(s)</td>`+
+      `<td class="num">${num(vTot)}</td><td></td><td></td><td class="num">${money(vVal)}</td></tr></tfoot></table>`
+    : `<div class="empty">No veneers currently at FC.</div>`;
+
+  // ── Section 2: Boards on hand ──
+  let bTot=0, bVal=0;
+  const bRows = boards.map(m=>{
+    const val=(Number(m.fc_stock)||0)*(Number(m.unit_cost)||0); bTot+=Number(m.fc_stock)||0; bVal+=val;
+    return `<tr>
+      <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
+      <td>${esc(dims(m))}</td>
+      <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
+      <td class="num">${money(m.unit_cost)}</td><td class="num">${money(val)}</td></tr>`;
+  }).join('');
+  const bTbl = boards.length
+    ? `<table><thead><tr><th>Code</th><th>Name</th><th>Dims (mm)</th>`+
+      `<th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead>`+
+      `<tbody>${bRows}</tbody><tfoot><tr><td colspan="3">Total — ${boards.length} board code(s)</td>`+
+      `<td class="num">${num(bTot)}</td><td></td><td></td><td class="num">${money(bVal)}</td></tr></tfoot></table>`
+    : `<div class="empty">No boards currently at FC.</div>`;
+
+  // ── Section 3: Today's FC activity ──
+  const kindLabel={TRANSFER_IN:'Transfer In (WH→FC)',RETURN_TO_WH:'Return to WH',
+    REGRADE:'Regrade',RESIZE:'Resize',RELEASE_TO_LAM:'Released to Lam'};
+  const todayMv = (mv||[]).filter(r=>(r.ts||'').slice(0,10)===today);
+  const aRows = todayMv.map(r=>`<tr>
+      <td>${esc((r.ts||'').replace('T',' ').slice(11,16))}</td>
+      <td>${esc(kindLabel[r.kind]||r.kind)}</td>
+      <td>${esc(r.material_name||'')}${r.material_code?' <small>('+esc(r.material_code)+')</small>':''}</td>
+      <td>${esc(r.from_loc||'')} → ${esc(r.to_loc||'')}</td>
+      <td class="num">${num(r.qty)} ${esc(r.unit||'')}</td>
+      <td>${esc(r.actor||r.requested_by||'')}</td>
+      <td>${esc(r.notes||'')}</td></tr>`).join('');
+  const aTbl = todayMv.length
+    ? `<table><thead><tr><th>Time</th><th>Activity</th><th>Item</th><th>From → To</th>`+
+      `<th class="num">Qty</th><th>By</th><th>Notes</th></tr></thead><tbody>${aRows}</tbody></table>`
+    : `<div class="empty">No FC activity recorded today.</div>`;
+
+  const body = `
+    ${_slhCompanyHeader()}
+    <h1>FC (Feed Center) Daily Report <small>รายงานประจำวัน — Feed Center</small></h1>
+    <div class="meta"><b>Date:</b> ${esc(today)} &nbsp;·&nbsp; <b>Total FC value:</b> ${money(vVal+bVal)}</div>
+    <h2>Veneers on hand <small>at FC station</small></h2>${vTbl}
+    <h2>Core Boards on hand <small>at FC station</small></h2>${bTbl}
+    <h2>Today's FC Activity <small>transfers · regrades · resizes · releases</small></h2>${aTbl}
+    <div class="sign">
+      <div class="box"><div class="line">FC — ลงชื่อ / วันที่</div></div>
+      <div class="box"><div class="line">ผู้ควบคุม — ลงชื่อ / วันที่</div></div>
+    </div>
+    <div class="foot">Generated by PVWood ERP — ${esc(new Date().toLocaleString())}</div>`;
+
+  _slhOpenPrint(body, `${today}_FC_daily_stock`);
+}
+
 async function fcLoadMovements(){
   const el=document.getElementById('fc-movement-log');
   if(!el) return;
@@ -8058,6 +8278,7 @@ async function fcLoadMovements(){
     TRANSFER_IN:   {icon:'bi-box-arrow-in-down', color:'success', label:'Transfer In',     dir:'WH → FC'},
     RETURN_TO_WH:  {icon:'bi-box-arrow-up',      color:'danger',  label:'Return to WH',    dir:'FC → WH'},
     REGRADE:       {icon:'bi-arrow-left-right',  color:'warning', label:'Regrade',         dir:'FC ⇄ FC'},
+    RESIZE:        {icon:'bi-scissors',          color:'warning', label:'Resize',          dir:'FC ✂ FC'},
     RELEASE_TO_LAM:{icon:'bi-arrow-right-circle',color:'primary', label:'Released to Lam', dir:'FC → Laminating'},
   };
   const typeBadge=t=>{
