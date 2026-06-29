@@ -7873,178 +7873,173 @@ async function fcCancelTransfer(rid){
   }catch(e){toast(e.message,'danger');}
 }
 
-// ── Veneer Re-grade Modal ──────────────────────────────────────
-// _rgrAllVeneers: cached full veneer list for regrade target dropdown
-let _rgrAllVeneers = [];
+// ── Veneer Re-grade Modal (multi-line, searchable) ─────────────
+// _rgrSrc: veneers physically at FC (fc_stock>0) — the valid re-grade sources.
+// _rgrAll: every veneer in the system — the valid re-grade targets (any grade).
+// _rgrSeq: monotonic row id so each line's controls have unique element ids.
+let _rgrSrc = [];
+let _rgrAll = [];
+let _rgrSeq = 0;
+
+function _rgrOpt(m){
+  const wh = (m.wh_stock!=null ? m.wh_stock : (m.current_stock!=null ? m.current_stock : 0));
+  const fc = m.fc_stock || 0;
+  const label = `${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name||''} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}`;
+  return `<option value="${m.id}" data-unit="${m.unit||'pcs'}" data-fc="${fc}" data-wh="${wh}">${label}</option>`;
+}
+function _rgrMatch(m, term){
+  if(!term) return true;
+  const s=[m.code,m.name,m.species,m.grade,m.matching,m.cut_type].filter(Boolean).join(' ').toLowerCase();
+  return s.includes(term.toLowerCase());
+}
+// (Re)build a row's source/target <select>, filtered by its search box, keeping
+// the current selection when it still matches the filter.
+function rgrRenderSelect(idx, which, term){
+  const sel = document.getElementById(`rgr-${which}-${idx}`);
+  if(!sel) return;
+  const list = (which==='from' ? _rgrSrc : _rgrAll).filter(m=>_rgrMatch(m, term||''));
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">— Select ${which==='from'?'source':'target'} veneer —</option>`
+    + list.map(_rgrOpt).join('');
+  if(cur && list.some(m=>String(m.id)===cur)) sel.value = cur;
+}
+function rgrFilter(idx, which, q){
+  rgrRenderSelect(idx, which, q);
+  rgrLineChange(idx);
+}
 
 /**
- * Open the re-grade modal.
- * @param {number|null} preselectedId  - material id to pre-select as source (from a card button)
- * @param {string} mode                - 'prep' (fc→fc, for future orders) | 'return' (fc→wh)
+ * Open the multi-line re-grade modal.
+ * @param {number|null} preselectedId - veneer id to pre-select as the first row's source
+ * @param {string} mode               - kept for call-site compatibility (regrade is always FC→FC)
  */
-async function fcOpenRegradeModal(preselectedId=null, mode='return'){
-  // Always refresh fc stock for accurate source options
-  _fcStockMats = await api('/api/fc/stock').catch(()=>[]);
-  const fcVeneers = _fcStockMats.filter(m=>m.type==='veneer_sheet');
+async function fcOpenRegradeModal(preselectedId=null, mode='prep'){
+  // Sources = veneers physically at FC; targets = every veneer (any grade).
+  _fcStockMats = await api('/api/fc/stock').catch(()=>_fcStockMats||[]);
+  _rgrSrc = _fcStockMats.filter(m=>m.type==='veneer_sheet' && (m.fc_stock||0)>0);
+  _rgrAll = await api('/api/materials?type=veneer_sheet').catch(()=>_rgrSrc);
 
-  // Fetch all veneers for target dropdown (any grade in system can receive a regrade)
-  _rgrAllVeneers = await api('/api/materials?type=veneer_sheet').catch(()=>fcVeneers);
-
-  // Build source options (only veneers with FC stock > 0)
-  const buildSourceOpts = (items, selectedId) => items.map(m=>`
-    <option value="${m.id}"
-      data-fc="${m.fc_stock||0}" data-wh="${m.wh_stock||0}"
-      data-unit="${m.unit||'pcs'}" data-species="${m.species||''}" data-grade="${m.grade||''}"
-      ${Number(m.id)===Number(selectedId)?'selected':''}>
-      ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(m.fc_stock||0)} WH:${fmt(m.wh_stock||0)}
-    </option>`).join('');
-
-  // Build target options — sort same-species to top when preselecting
-  const renderTargetOpts = arr => arr.map(m=>{
-    const wh = m.wh_stock??m.current_stock??0;
-    const fc = m.fc_stock??0;
-    return `<option value="${m.id}"
-      data-wh="${wh}" data-fc="${fc}" data-unit="${m.unit||'pcs'}"
-      data-species="${m.species||''}" data-grade="${m.grade||''}">
-      ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}
-    </option>`;
-  }).join('');
-  const buildTargetOpts = (items, filterSpecies='') => {
-    const same  = filterSpecies ? items.filter(m=>(m.species||'')===(filterSpecies)) : [];
-    const other = filterSpecies ? items.filter(m=>(m.species||'')!==(filterSpecies)) : items;
-    if(same.length && other.length)
-      return `<optgroup label="— Same species (${filterSpecies}) —">${renderTargetOpts(same)}</optgroup>`
-           + `<optgroup label="— Other species —">${renderTargetOpts(other)}</optgroup>`;
-    return renderTargetOpts(items);
-  };
-
-  // Get species of preselected source for smart target sorting
-  const preselectedMat = preselectedId ? fcVeneers.find(m=>m.id===preselectedId) : null;
-  const preSpecies = preselectedMat?.species || '';
-
-  document.getElementById('rgr-from-mat').innerHTML =
-    '<option value="">— Select source veneer —</option>' + buildSourceOpts(fcVeneers, preselectedId);
-
-  const targetPool = _rgrAllVeneers.length ? _rgrAllVeneers : fcVeneers;
-  document.getElementById('rgr-to-mat').innerHTML =
-    '<option value="">— Select target grade —</option>' + buildTargetOpts(targetPool, preSpecies);
-
-  // (Regrade always operates within FC station — fc_station→fc_station, hard-set
-  // in create_veneer_regrade. The old hidden rgr-from-loc/rgr-to-loc inputs were
-  // removed from the modal; setting them here threw a TypeError that stopped the
-  // modal from opening, so the location lines are gone.)
-
-  // Update modal title + context hint
-  const modeHint = document.getElementById('rgr-mode-hint');
-  if(modeHint){
-    if(mode==='prep'){
-      modeHint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Regraded veneers stay in FC stock — ready for future order allocations.';
-      modeHint.className = 'alert alert-primary py-1 small mb-3';
-    } else {
-      modeHint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Regraded veneers return to main Warehouse stock after quality re-classification.';
-      modeHint.className = 'alert alert-info py-1 small mb-3';
-    }
-  }
-
-  // Trigger from-stock display if preselected
-  document.getElementById('rgr-from-stock').textContent='';
-  document.getElementById('rgr-to-stock').textContent='';
-  if(preselectedMat){
-    document.getElementById('rgr-qty-unit').textContent = preselectedMat.unit||'pcs';
-    document.getElementById('rgr-from-stock').textContent =
-      `FC stock: ${fmt(preselectedMat.fc_stock||0)} | WH stock: ${fmt(preselectedMat.wh_stock||0)} ${preselectedMat.unit||'pcs'}`;
-  } else {
-    document.getElementById('rgr-qty-unit').textContent='pcs';
-  }
-  document.getElementById('rgr-qty').value='';
-  document.getElementById('rgr-notes').value='';
-  document.getElementById('rgr-summary').style.display='none';
-
+  document.getElementById('rgr-lines').innerHTML = '';
+  _rgrSeq = 0;
+  rgrAddLine(preselectedId);
+  document.getElementById('rgr-notes').value = '';
+  document.getElementById('rgr-summary').style.display = 'none';
   bootstrap.Modal.getOrCreateInstance(document.getElementById('fcRegradeModal')).show();
 }
 
-function rgrOnFromChange(){
-  const sel = document.getElementById('rgr-from-mat');
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('rgr-qty-unit').textContent = opt?.dataset?.unit||'pcs';
-  document.getElementById('rgr-from-stock').textContent = opt?.value
-    ? `FC stock: ${fmt(opt.dataset.fc||0)} | WH stock: ${fmt(opt.dataset.wh||0)} ${opt.dataset.unit||'pcs'}`
-    : '';
-  // Re-sort target dropdown to show same species at top
-  if(opt?.value && opt.dataset.species){
-    const targetPool = _rgrAllVeneers.length ? _rgrAllVeneers : _fcStockMats.filter(m=>m.type==='veneer_sheet');
-    const species = opt.dataset.species;
-    const same  = targetPool.filter(m=>(m.species||'')===species);
-    const other = targetPool.filter(m=>(m.species||'')!==species);
-    const renderOpt = m => {
-      const wh=m.wh_stock??m.current_stock??0; const fc=m.fc_stock??0;
-      return `<option value="${m.id}" data-wh="${wh}" data-fc="${fc}" data-unit="${m.unit||'pcs'}" data-species="${m.species||''}" data-grade="${m.grade||''}">
-        ${m.species?m.species+' ':''}${m.grade?'['+m.grade+'] ':''}${m.name} (${m.code||''}) — FC:${fmt(fc)} WH:${fmt(wh)}</option>`;
-    };
-    const toSel = document.getElementById('rgr-to-mat');
-    const currentToVal = toSel.value;
-    let html = '<option value="">— Select target grade —</option>';
-    if(same.length && other.length){
-      html += `<optgroup label="— Same species (${species}) —">${same.map(renderOpt).join('')}</optgroup>`
-            + `<optgroup label="— Other species —">${other.map(renderOpt).join('')}</optgroup>`;
-    } else {
-      html += targetPool.map(renderOpt).join('');
-    }
-    toSel.innerHTML = html;
-    if(currentToVal) toSel.value = currentToVal; // restore previous selection if still valid
+// Append one re-grade row: source + target, each with its own search box, a qty,
+// and a remove button.
+function rgrAddLine(preselectedSrcId){
+  const idx = ++_rgrSeq;
+  const div = document.createElement('div');
+  div.className = 'rgr-line card mb-2'; div.dataset.idx = idx;
+  div.innerHTML = `<div class="card-body py-2 px-2"><div class="row g-2 align-items-start">
+    <div class="col-md-5">
+      <input class="form-control form-control-sm mb-1" placeholder="Search source code / species…" oninput="rgrFilter(${idx},'from',this.value)" autocomplete="off">
+      <select class="form-select form-select-sm" id="rgr-from-${idx}" onchange="rgrLineChange(${idx})"></select>
+      <div class="small text-muted mt-1" id="rgr-from-stock-${idx}"></div>
+    </div>
+    <div class="col-md-5">
+      <input class="form-control form-control-sm mb-1" placeholder="Search target code / species…" oninput="rgrFilter(${idx},'to',this.value)" autocomplete="off">
+      <select class="form-select form-select-sm" id="rgr-to-${idx}" onchange="rgrLineChange(${idx})"></select>
+      <div class="small text-muted mt-1" id="rgr-to-stock-${idx}"></div>
+    </div>
+    <div class="col-md-2">
+      <div class="input-group input-group-sm">
+        <input type="number" class="form-control" id="rgr-qty-${idx}" min="0.01" step="0.01" placeholder="qty" oninput="rgrUpdateSummary()">
+        <span class="input-group-text px-1" id="rgr-qty-unit-${idx}" style="font-size:.7rem">pcs</span>
+      </div>
+      <button class="btn btn-sm btn-outline-danger mt-1 w-100 py-0" style="font-size:.7rem" onclick="rgrRemoveLine(${idx})" title="Remove row"><i class="bi bi-trash"></i></button>
+    </div>
+  </div></div>`;
+  document.getElementById('rgr-lines').appendChild(div);
+  rgrRenderSelect(idx,'from','');
+  rgrRenderSelect(idx,'to','');
+  if(preselectedSrcId){
+    const s = document.getElementById(`rgr-from-${idx}`);
+    if(s && _rgrSrc.some(m=>Number(m.id)===Number(preselectedSrcId))) s.value = preselectedSrcId;
   }
+  rgrLineChange(idx);
+}
+
+function rgrRemoveLine(idx){
+  const el = document.querySelector(`.rgr-line[data-idx="${idx}"]`);
+  if(el) el.remove();
+  if(!document.querySelectorAll('#rgr-lines .rgr-line').length) rgrAddLine();
   rgrUpdateSummary();
 }
 
-function rgrOnToChange(){
-  const sel = document.getElementById('rgr-to-mat');
-  const opt = sel.options[sel.selectedIndex];
-  if(!opt?.value){ document.getElementById('rgr-to-stock').textContent=''; rgrUpdateSummary(); return; }
-  const unit = opt.dataset.unit||'pcs';
-  // Regrade always stays in FC station
-  document.getElementById('rgr-to-stock').textContent =
-    `Current FC stock: ${fmt(opt.dataset.fc||0)} ${unit}`;
+// Refresh a row's stock notes + qty unit from its current selections.
+function rgrLineChange(idx){
+  const fs = document.getElementById(`rgr-from-${idx}`);
+  const ts = document.getElementById(`rgr-to-${idx}`);
+  if(!fs || !ts) return;
+  const fo = fs.options[fs.selectedIndex];
+  const to = ts.options[ts.selectedIndex];
+  const unit = fo?.dataset?.unit || 'pcs';
+  const uEl = document.getElementById(`rgr-qty-unit-${idx}`); if(uEl) uEl.textContent = unit;
+  const fNote = document.getElementById(`rgr-from-stock-${idx}`);
+  const tNote = document.getElementById(`rgr-to-stock-${idx}`);
+  if(fNote) fNote.textContent = fo?.value ? `FC: ${fmt(fo.dataset.fc||0)} | WH: ${fmt(fo.dataset.wh||0)} ${unit}` : '';
+  if(tNote) tNote.textContent = to?.value ? `Current FC: ${fmt(to.dataset.fc||0)} ${to.dataset.unit||'pcs'}` : '';
   rgrUpdateSummary();
+}
+
+// Collect every row's current values (for the summary + submit).
+function _rgrCollect(){
+  const out = [];
+  document.querySelectorAll('#rgr-lines .rgr-line').forEach(l=>{
+    const idx = l.dataset.idx;
+    const fs = document.getElementById(`rgr-from-${idx}`);
+    const ts = document.getElementById(`rgr-to-${idx}`);
+    if(!fs || !ts) return;
+    const fo = fs.options[fs.selectedIndex], to = ts.options[ts.selectedIndex];
+    out.push({
+      idx,
+      from:   parseInt(fs.value)||0,
+      target: parseInt(ts.value)||0,
+      qty:    parseFloat(document.getElementById(`rgr-qty-${idx}`).value)||0,
+      fromName: (fo?.text||'').split('—')[0].trim(),
+      toName:   (to?.text||'').split('—')[0].trim(),
+    });
+  });
+  return out;
 }
 
 function rgrUpdateSummary(){
-  const fromSel = document.getElementById('rgr-from-mat');
-  const toSel   = document.getElementById('rgr-to-mat');
-  const fromOpt = fromSel.options[fromSel.selectedIndex];
-  const toOpt   = toSel.options[toSel.selectedIndex];
-  const qty     = parseFloat(document.getElementById('rgr-qty').value)||0;
-  const sumEl   = document.getElementById('rgr-summary');
-  const sumTxt  = document.getElementById('rgr-summary-text');
-  if(!fromOpt?.value || !toOpt?.value || !qty){ sumEl.style.display='none'; return; }
-  sumEl.style.display='';
-  // Regrade always operates within FC Station stock
-  sumTxt.innerHTML = `
-    <span class="text-danger">−${fmt(qty)} from <b>${fromOpt.text?.split('—')[0]?.trim()||'?'}</b> (FC Station)</span><br>
-    <span class="text-success">+${fmt(qty)} to <b>${toOpt.text?.split('—')[0]?.trim()||'?'}</b> (FC Station)</span>
-  `;
+  const parts = _rgrCollect()
+    .filter(r=>r.from && r.target && r.qty>0 && r.from!==r.target)
+    .map(r=>`<div><span class="text-danger">−${fmt(r.qty)}</span> ${r.fromName} &nbsp;→&nbsp; <span class="text-success">+${fmt(r.qty)}</span> ${r.toName} <span class="text-muted">(within FC)</span></div>`);
+  const sumEl  = document.getElementById('rgr-summary');
+  const sumTxt = document.getElementById('rgr-summary-text');
+  if(parts.length){ sumEl.style.display=''; sumTxt.innerHTML = parts.join(''); }
+  else sumEl.style.display='none';
 }
 
 async function rgrSubmit(){
-  const fromId = parseInt(document.getElementById('rgr-from-mat').value)||0;
-  const toId   = parseInt(document.getElementById('rgr-to-mat').value)||0;
-  const qty    = parseFloat(document.getElementById('rgr-qty').value)||0;
-  const notes  = document.getElementById('rgr-notes').value;
-
-  if(!fromId||!toId||qty<=0){ toast('Fill in all required fields','warning'); return; }
-  if(fromId===toId){ toast('Source and target must be different materials','warning'); return; }
-
-  try{
-    const res = await api('/api/fc/regrade','POST',{
-      from_material_id:fromId, to_material_id:toId, qty,
-      notes:notes||null,
-    });
+  const notes = document.getElementById('rgr-notes').value || null;
+  // Drop fully-blank rows; validate the rest.
+  const rows = _rgrCollect().filter(r=>r.from || r.target || r.qty);
+  if(!rows.length){ toast('Add at least one re-grade row','warning'); return; }
+  for(const r of rows){
+    if(!r.from || !r.target || r.qty<=0){ toast('Each row needs a source, target and quantity','warning'); return; }
+    if(r.from===r.target){ toast('Source and target must differ in every row','warning'); return; }
+  }
+  let ok=0; const fails=[];
+  for(const r of rows){
+    try{
+      await api('/api/fc/regrade','POST',{from_material_id:r.from, to_material_id:r.target, qty:r.qty, notes});
+      ok++;
+    }catch(e){ fails.push(`${r.fromName}→${r.toName}: ${e.message||e}`); }
+  }
+  if(ok){
+    toast(`${ok} re-grade${ok>1?'s':''} recorded${fails.length?` · ${fails.length} failed`:''} (WH price unchanged)`,
+          fails.length?'warning':'success');
     bootstrap.Modal.getInstance(document.getElementById('fcRegradeModal')).hide();
-    const cb=res&&res.to_unit_cost_before, ca=res&&res.to_unit_cost_after;
-    const costMsg=(cb!=null&&ca!=null&&Number(cb)!==Number(ca))
-      ? ` · FC cost ฿${fmt(cb)}→฿${fmt(ca)} (weighted avg; WH price unchanged)` : '';
-    toast(`Re-grade recorded — ${fmt(qty)} units moved in FC stock${costMsg}`);
     fcLoadStock();
-  }catch(e){ toast(e.message,'danger'); }
+  } else {
+    toast('Re-grade failed: '+(fails[0]||'unknown error'),'danger');
+  }
 }
 
 async function fcLoadRegradeLog(){
