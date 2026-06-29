@@ -2396,7 +2396,12 @@ function boardRow(m){
 
 // ── Veneer row ─────────────────────────────────────────────────
 function veneerRow(m){
-  const dims = (m.width_mm&&m.length_mm)?`${m.width_mm}×${m.length_mm}`:'—';
+  // M2 veneers are priced/counted by area: each piece's width varies but the
+  // length is standard, so width_mm is blank. Show the standard length (with a
+  // "var" width marker) instead of a bare "—".
+  const dims = (m.width_mm && m.length_mm) ? `${m.width_mm}×${m.length_mm}`
+             : m.length_mm ? `var×${m.length_mm}`
+             : '—';
   const gradeMatch=[m.grade, m.matching].filter(Boolean).join(' / ')||'—';
   return `<tr>
     <td><code class="text-primary fw-semibold">${m.code||''}</code></td>
