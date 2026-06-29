@@ -1433,6 +1433,18 @@ let _bbPicked = {};
 let _bbAllFg = [];
 let _bbLoaded = false;
 
+// The BOM Builder is a single panel. For in-place editing we relocate it
+// directly beneath the edited card; this records its original home (right
+// above the list) so it can be moved back. Restored before any list re-render
+// so re-rendering bom-list's innerHTML never destroys the panel.
+let _bbPanelHome = null;
+function _bbRestorePanelHome(){
+  const panel = document.getElementById('bom-builder-panel');
+  if(!panel || !_bbPanelHome) return;
+  if(panel.parentElement === _bbPanelHome.parent && panel.nextElementSibling === _bbPanelHome.next) return;
+  _bbPanelHome.parent.insertBefore(panel, _bbPanelHome.next);
+}
+
 // Returns a promise that resolves once the builder is ready to pre-fill.
 // The previous version fired loadBomBuilder() without awaiting it, so an
 // edit-flow caller could call bbLoadFg before _bbMats.faceG was populated
@@ -1440,6 +1452,9 @@ let _bbLoaded = false;
 // the dropdown and wiped the user-visible selection.
 async function openBomBuilder(){
   const panel = document.getElementById('bom-builder-panel');
+  // "New / Edit BOM" opens the builder at the top (its home); in-place card
+  // edits relocate it via editBomCard instead.
+  _bbRestorePanelHome();
   bootstrap.Collapse.getOrCreateInstance(panel).show();
   if(!_bbLoaded) await loadBomBuilder();
 }
@@ -1720,15 +1735,21 @@ async function saveBomBuilder(){
     await api('/api/bom-builder','POST',body);
     toast('BOM saved for '+code);
     _bbAllFg = await api('/api/fg').catch(()=>_bbAllFg);
-    loadBom();
+    // Re-render first (restores the panel to its home), THEN collapse it — so an
+    // in-place edit closes cleanly instead of leaving the editor open mid-list.
+    await loadBom();
+    bootstrap.Collapse.getInstance(document.getElementById('bom-builder-panel'))?.hide();
   }catch(e){ toast('Save failed: '+e.message,'danger'); }
 }
 
 // BOM LIST — add Edit button to each card
 function renderBom(rows){
+  // Move the in-place editor back home first, so replacing bom-list's innerHTML
+  // below doesn't destroy the relocated builder panel.
+  _bbRestorePanelHome();
   document.getElementById('bom-count').textContent=`${rows.length} SKU${rows.length!==1?'s':''}`;
   document.getElementById('bom-list').innerHTML=rows.map(r=>`
-    <div class="card mb-2">
+    <div class="card mb-2" data-bomcard="${r.sku_code}">
       <div class="card-body py-2 px-3">
         <div class="d-flex justify-content-between align-items-start mb-2">
           <div>
@@ -1764,10 +1785,22 @@ async function deleteBomCard(skuCode){
 }
 
 async function editBomCard(skuCode){
+  const panel = document.getElementById('bom-builder-panel');
+  // Capture the builder's home position once, so it can be restored later.
+  if(panel && !_bbPanelHome){
+    _bbPanelHome = {parent: panel.parentElement, next: panel.nextElementSibling};
+  }
+  // Relocate the builder directly beneath the edited card BEFORE showing it, so
+  // the form expands in place — no scrolling to the top of the page.
+  const sel = (window.CSS && CSS.escape) ? CSS.escape(skuCode) : skuCode;
+  const card = document.querySelector('[data-bomcard="'+sel+'"]');
+  if(card && panel) card.insertAdjacentElement('afterend', panel);
+  bootstrap.Collapse.getOrCreateInstance(panel).show();
   // Wait for the picker options to load before populating the form, otherwise
-  // glue dropdown loses its selection when loadBomBuilder finishes late.
-  await openBomBuilder();
+  // the glue dropdown loses its selection when loadBomBuilder finishes late.
+  if(!_bbLoaded) await loadBomBuilder();
   await bbLoadFg(skuCode);
+  if(card && panel) panel.scrollIntoView({behavior:'smooth', block:'nearest'});
 }
 
 // ════════════════════════════════════════════════════════════
