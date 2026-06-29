@@ -1106,6 +1106,12 @@ def init_db():
         # WLWH — a second physical storage location (boards + veneers), alongside
         # current_stock (WH) and fc_stock (FC). WH staff move stock between them.
         "ALTER TABLE materials ADD COLUMN wlwh_stock REAL DEFAULT 0",
+        # FC cost basis: a weighted-average cost for the veneer's FC stock, kept
+        # SEPARATE from the warehouse unit_cost. Regrades within FC blend this (so
+        # repeated regrading never moves the global cost); it is realised into
+        # unit_cost only when veneers LEAVE FC (returned to WH or consumed by a
+        # production batch). NULL = no FC basis yet → treat as the WH unit_cost.
+        "ALTER TABLE materials ADD COLUMN fc_unit_cost REAL",
         # WLWH for finished goods: FG batches at the FG warehouse may physically
         # sit at the main FG warehouse ('FG') or at WLWH overflow storage ('WLWH').
         # The batch stays FG inventory either way — this is just where it is.
@@ -10069,27 +10075,49 @@ def fulfill_fc_transfer_request(request_id: str, qty_to_fulfill: float, fulfille
 
     direction = req.get('direction') or 'inbound'
     mat = dict(conn.execute(
-        "SELECT current_stock, fc_stock FROM materials WHERE id=?", (req['material_id'],)
+        "SELECT type, current_stock, fc_stock, unit_cost, fc_unit_cost "
+        "FROM materials WHERE id=?", (req['material_id'],)
     ).fetchone())
+    is_veneer = (mat.get('type') == 'veneer_sheet')
+    unit_cost = float(mat.get('unit_cost') or 0)
+    fc_cost   = float(mat['fc_unit_cost'] if mat.get('fc_unit_cost') is not None else unit_cost)
 
     if direction == 'inbound':
         # WH → FC: validate WH stock
         available = float(mat['current_stock'] or 0)
         if qty_to_fulfill > available:
             conn.close(); raise ValueError(f"Insufficient WH stock: only {available} available")
-        conn.execute(
-            "UPDATE materials SET current_stock=MAX(0,current_stock-?), fc_stock=fc_stock+? WHERE id=?",
-            (qty_to_fulfill, qty_to_fulfill, req['material_id'])
-        )
+        if is_veneer:
+            # Veneers enter FC at the WH cost — blend the FC cost basis (the global
+            # unit_cost is unchanged; it's only realised again when they leave FC).
+            new_fc_cost = _blend_cost(mat['fc_stock'], fc_cost, qty_to_fulfill, unit_cost)
+            conn.execute(
+                "UPDATE materials SET current_stock=MAX(0,current_stock-?), fc_stock=fc_stock+?, fc_unit_cost=? WHERE id=?",
+                (qty_to_fulfill, qty_to_fulfill, new_fc_cost, req['material_id'])
+            )
+        else:
+            conn.execute(
+                "UPDATE materials SET current_stock=MAX(0,current_stock-?), fc_stock=fc_stock+? WHERE id=?",
+                (qty_to_fulfill, qty_to_fulfill, req['material_id'])
+            )
     else:
         # FC → WH: validate FC stock
         available = float(mat['fc_stock'] or 0)
         if qty_to_fulfill > available:
             conn.close(); raise ValueError(f"Insufficient FC stock: only {available} available")
-        conn.execute(
-            "UPDATE materials SET fc_stock=MAX(0,fc_stock-?), current_stock=current_stock+? WHERE id=?",
-            (qty_to_fulfill, qty_to_fulfill, req['material_id'])
-        )
+        if is_veneer:
+            # Veneers leave FC → realise their FC cost basis into the warehouse
+            # unit_cost (weighted-average against the WH stock they join).
+            new_unit_cost = _blend_cost(mat['current_stock'], unit_cost, qty_to_fulfill, fc_cost)
+            conn.execute(
+                "UPDATE materials SET fc_stock=MAX(0,fc_stock-?), current_stock=current_stock+?, unit_cost=? WHERE id=?",
+                (qty_to_fulfill, qty_to_fulfill, new_unit_cost, req['material_id'])
+            )
+        else:
+            conn.execute(
+                "UPDATE materials SET fc_stock=MAX(0,fc_stock-?), current_stock=current_stock+? WHERE id=?",
+                (qty_to_fulfill, qty_to_fulfill, req['material_id'])
+            )
 
     new_fulfilled = req['qty_fulfilled'] + qty_to_fulfill
     new_status = 'FULFILLED' if new_fulfilled >= req['qty_requested'] else 'PARTIAL'
@@ -10138,7 +10166,7 @@ def get_fc_stock_materials() -> list:
         SELECT id, code, name, type, unit,
                current_stock AS wh_stock,
                fc_stock,
-               reorder_point, unit_cost, supplier,
+               reorder_point, unit_cost, fc_unit_cost, supplier,
                species, grade, face_back, cut_type, matching,
                thickness_mm, width_mm, length_mm
         FROM materials
@@ -10174,6 +10202,18 @@ def _new_regrade_id() -> str:
     conn.close(); return f"RGR-{today}-{n+1:04d}"
 
 
+def _blend_cost(q_existing, c_existing, q_in, c_in) -> float:
+    """Weighted-average unit cost when q_in units at c_in join q_existing units at
+    c_existing. Used for the FC veneer cost basis (and realising it into the WH
+    cost on exit). Falls back to the existing cost when the total is zero."""
+    qe = float(q_existing or 0); qi = float(q_in or 0)
+    ce = float(c_existing or 0); ci = float(c_in or 0)
+    tot = qe + qi
+    if tot <= 0:
+        return round(ce, 4)
+    return round((qe * ce + qi * ci) / tot, 4)
+
+
 def create_veneer_regrade(data: dict) -> dict:
     """
     Re-grade a veneer within FC station: reclassify from_material → to_material.
@@ -10197,27 +10237,30 @@ def create_veneer_regrade(data: dict) -> dict:
         conn.close()
         raise ValueError(f"Insufficient FC stock: only {src_stock} available")
 
-    # ── Weighted-average costing ──────────────────────────────────────
-    # The regraded pieces carry the SOURCE's unit cost into the target, and
-    # the target SKU's single unit_cost is re-blended over its TOTAL on-hand
-    # (FC + WH — there is no separate PSP bucket today) so the cost is correct
-    # for both up- and down-grades. The source's unit_cost is unchanged
-    # (removing pieces at a uniform average doesn't move the average).
+    # ── FC-only weighted-average costing ──────────────────────────────
+    # Regrading is internal to FC, so it must NOT move the global (warehouse)
+    # unit_cost — that price is only realised when veneers LEAVE FC. Instead we
+    # blend the target's FC cost basis (fc_unit_cost): the regraded pieces carry
+    # the SOURCE's FC cost into the target's FC average. The source's fc_unit_cost
+    # is unchanged (removing pieces at a uniform average doesn't move it). When a
+    # veneer has no FC basis yet (NULL), it starts from its warehouse unit_cost.
     tgt_full = row_to_dict(conn.execute(
         "SELECT * FROM materials WHERE id=?", (data['to_material_id'],)).fetchone())
-    from_cost = float(from_mat.get('unit_cost') or 0)
-    to_cost_before = float(tgt_full.get('unit_cost') or 0)
-    tgt_total = float(tgt_full.get('fc_stock') or 0) + float(tgt_full.get('current_stock') or 0)
-    incoming_value = qty * from_cost
-    new_total = tgt_total + qty
-    to_cost_after = round(((tgt_total * to_cost_before) + incoming_value) / new_total, 4) \
-        if new_total > 0 else to_cost_before
+    from_fc_cost = float(from_mat.get('fc_unit_cost') if from_mat.get('fc_unit_cost') is not None
+                         else (from_mat.get('unit_cost') or 0))
+    to_fc_before  = float(tgt_full.get('fc_unit_cost') if tgt_full.get('fc_unit_cost') is not None
+                          else (tgt_full.get('unit_cost') or 0))
+    tgt_fc_stock = float(tgt_full.get('fc_stock') or 0)
+    to_fc_after  = _blend_cost(tgt_fc_stock, to_fc_before, qty, from_fc_cost)
 
-    # Deduct from source fc_stock, add to target fc_stock; reprice the target.
+    # Deduct from source fc_stock, add to target fc_stock; reprice the target's
+    # FC basis only. Global unit_cost is left untouched on both sides.
     conn.execute("UPDATE materials SET fc_stock=MAX(0,fc_stock-?) WHERE id=?",
                  (qty, data['from_material_id']))
-    conn.execute("UPDATE materials SET fc_stock=fc_stock+?, unit_cost=? WHERE id=?",
-                 (qty, to_cost_after, data['to_material_id']))
+    conn.execute("UPDATE materials SET fc_stock=fc_stock+?, fc_unit_cost=? WHERE id=?",
+                 (qty, to_fc_after, data['to_material_id']))
+    # The regrade-log cost columns record the FC cost basis (not the WH cost).
+    from_cost = from_fc_cost; to_cost_before = to_fc_before; to_cost_after = to_fc_after
 
     rid = _new_regrade_id()
     conn.execute(
@@ -10438,10 +10481,24 @@ def save_veneer_alloc_and_confirm(prod_order_id: int, face_alloc: list, back_all
                 (prod_order_id, side, mid, qty, pct)
             )
             if deduct_fc_stock:
-                conn.execute(
-                    "UPDATE materials SET fc_stock=MAX(0,fc_stock-?) WHERE id=?",
-                    (qty, mid)
-                )
+                # Veneer leaves FC for a production batch → realise its FC cost
+                # basis into the warehouse unit_cost (weighted-average against WH
+                # stock), the same as a WH return; the pieces are consumed so WH
+                # quantity is unchanged. Non-veneers just deduct (no cost change).
+                mrow = conn.execute(
+                    "SELECT type, current_stock, unit_cost, fc_unit_cost FROM materials WHERE id=?",
+                    (mid,)).fetchone()
+                if mrow and mrow['type'] == 'veneer_sheet':
+                    uc  = float(mrow['unit_cost'] or 0)
+                    fcc = float(mrow['fc_unit_cost'] if mrow['fc_unit_cost'] is not None else uc)
+                    new_uc = _blend_cost(mrow['current_stock'], uc, qty, fcc)
+                    conn.execute(
+                        "UPDATE materials SET fc_stock=MAX(0,fc_stock-?), unit_cost=? WHERE id=?",
+                        (qty, new_uc, mid))
+                else:
+                    conn.execute(
+                        "UPDATE materials SET fc_stock=MAX(0,fc_stock-?) WHERE id=?",
+                        (qty, mid))
             if qty > best_qty:
                 best_qty = qty; best_id = mid
         if side == 'face':

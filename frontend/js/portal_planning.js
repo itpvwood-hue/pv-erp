@@ -8041,7 +8041,7 @@ async function rgrSubmit(){
     bootstrap.Modal.getInstance(document.getElementById('fcRegradeModal')).hide();
     const cb=res&&res.to_unit_cost_before, ca=res&&res.to_unit_cost_after;
     const costMsg=(cb!=null&&ca!=null&&Number(cb)!==Number(ca))
-      ? ` · target cost ฿${fmt(cb)}→฿${fmt(ca)} (weighted avg)` : '';
+      ? ` · FC cost ฿${fmt(cb)}→฿${fmt(ca)} (weighted avg; WH price unchanged)` : '';
     toast(`Re-grade recorded — ${fmt(qty)} units moved in FC stock${costMsg}`);
     fcLoadStock();
   }catch(e){ toast(e.message,'danger'); }
@@ -8228,15 +8228,20 @@ async function fcPrintDailyReport(){
   const veneers = inFc.filter(m=>m.type==='veneer_sheet');
   const boards  = inFc.filter(m=>m.type==='core_board');
 
+  // FC stock is valued at its FC cost basis (fc_unit_cost) — for veneers this is
+  // the running average of all regrades; for anything without an FC basis it
+  // falls back to the warehouse unit_cost.
+  const fcCost = m => (m.fc_unit_cost!=null ? Number(m.fc_unit_cost) : (Number(m.unit_cost)||0));
+
   // ── Section 1: Veneers on hand ──
   let vTot=0, vVal=0;
   const vRows = veneers.map(m=>{
-    const val=(Number(m.fc_stock)||0)*(Number(m.unit_cost)||0); vTot+=Number(m.fc_stock)||0; vVal+=val;
+    const uc=fcCost(m); const val=(Number(m.fc_stock)||0)*uc; vTot+=Number(m.fc_stock)||0; vVal+=val;
     return `<tr>
       <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
       <td>${esc(m.species||'')}</td><td>${esc(m.grade||'')}</td>
       <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
-      <td class="num">${money(m.unit_cost)}</td><td class="num">${money(val)}</td></tr>`;
+      <td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;
   }).join('');
   const vTbl = veneers.length
     ? `<table><thead><tr><th>Code</th><th>Name</th><th>Species</th><th>Grade</th>`+
@@ -8248,12 +8253,12 @@ async function fcPrintDailyReport(){
   // ── Section 2: Boards on hand ──
   let bTot=0, bVal=0;
   const bRows = boards.map(m=>{
-    const val=(Number(m.fc_stock)||0)*(Number(m.unit_cost)||0); bTot+=Number(m.fc_stock)||0; bVal+=val;
+    const uc=fcCost(m); const val=(Number(m.fc_stock)||0)*uc; bTot+=Number(m.fc_stock)||0; bVal+=val;
     return `<tr>
       <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
       <td>${esc(dims(m))}</td>
       <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
-      <td class="num">${money(m.unit_cost)}</td><td class="num">${money(val)}</td></tr>`;
+      <td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;
   }).join('');
   const bTbl = boards.length
     ? `<table><thead><tr><th>Code</th><th>Name</th><th>Dims (mm)</th>`+
@@ -8263,9 +8268,11 @@ async function fcPrintDailyReport(){
     : `<div class="empty">No boards currently at FC.</div>`;
 
   // ── Section 3: Today's FC activity ──
+  // Internal re-grading is intentionally EXCLUDED — the report only needs what
+  // enters/leaves FC and the final grade coming out, not the regrade churn.
   const kindLabel={TRANSFER_IN:'Transfer In (WH→FC)',RETURN_TO_WH:'Return to WH',
-    REGRADE:'Regrade',RESIZE:'Resize',RELEASE_TO_LAM:'Released to Lam'};
-  const todayMv = (mv||[]).filter(r=>(r.ts||'').slice(0,10)===today);
+    RESIZE:'Resize',RELEASE_TO_LAM:'Released to Lam'};
+  const todayMv = (mv||[]).filter(r=>(r.ts||'').slice(0,10)===today && r.kind!=='REGRADE');
   const aRows = todayMv.map(r=>`<tr>
       <td>${esc((r.ts||'').replace('T',' ').slice(11,16))}</td>
       <td>${esc(kindLabel[r.kind]||r.kind)}</td>
@@ -8285,7 +8292,7 @@ async function fcPrintDailyReport(){
     <div class="meta"><b>Date:</b> ${esc(today)} &nbsp;·&nbsp; <b>Total FC value:</b> ${money(vVal+bVal)}</div>
     <h2>Veneers on hand <small>at FC station</small></h2>${vTbl}
     <h2>Core Boards on hand <small>at FC station</small></h2>${bTbl}
-    <h2>Today's FC Activity <small>transfers · regrades · resizes · releases</small></h2>${aTbl}
+    <h2>Today's FC Activity <small>transfers in · resizes · releases / returns out</small></h2>${aTbl}
     <div class="sign">
       <div class="box"><div class="line">FC — ลงชื่อ / วันที่</div></div>
       <div class="box"><div class="line">ผู้ควบคุม — ลงชื่อ / วันที่</div></div>
