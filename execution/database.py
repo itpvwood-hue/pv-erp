@@ -5000,7 +5000,12 @@ def _save_bom_for_sku_impl(conn, data):
     ]:
         picked = data.get(code_key)
         if not picked: continue
-        usage_g = float(data.get(usage_key) or 45)
+        # Use the provided usage (g/face) verbatim; store NULL when none was given
+        # rather than silently injecting a 45 g/face default (which previously made
+        # uploads/builds without a usage show a misleading "45"). A NULL line shows
+        # "—" g/face and contributes 0 glue cost until a real value is entered.
+        raw_usage = data.get(usage_key)
+        usage_g = float(raw_usage) if raw_usage not in (None, '') else None
         rid = glue_recipe_id(picked)
         if rid:
             conn.execute(

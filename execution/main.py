@@ -2046,7 +2046,7 @@ def delete_glue_recipe_ep(rid: int):
         # a material keep the material and just lose the recipe link.
         conn.execute("DELETE FROM bom_lines WHERE glue_recipe_id=? AND material_id IS NULL", (rid,))
         conn.execute("UPDATE bom_lines SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
-        conn.execute("UPDATE bom       SET glue_recipe_id=NULL WHERE glue_recipe_id=?", (rid,))
+        # (legacy `bom` table was dropped in v2.21.79 — nothing else references the recipe)
         conn.execute("DELETE FROM glue_recipes WHERE id=?", (rid,))
         conn.commit()
         return {"ok": True, "deleted_id": rid}

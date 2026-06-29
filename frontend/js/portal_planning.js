@@ -1526,7 +1526,9 @@ function bbPick(comp, code){
   const pq = parseInt(document.getElementById('bb-pallet-qty').value)||0;
   const qi = document.getElementById('bb-qty-'+comp);
   if(qi && !qi.value){
-    qi.value = (comp==='faceG'||comp==='backG') ? 45 : (pq||'');
+    // Boards/veneers default to the pallet qty; glue is left blank so the user
+    // must enter the real g/face (no hard-coded 45 g default).
+    if(comp!=='faceG' && comp!=='backG') qi.value = pq||'';
   }
 
   // ── BASE BOARD: show dimension hint ──────────────────────────
@@ -7894,11 +7896,10 @@ async function fcOpenRegradeModal(preselectedId=null, mode='return'){
   document.getElementById('rgr-to-mat').innerHTML =
     '<option value="">— Select target grade —</option>' + buildTargetOpts(targetPool, preSpecies);
 
-  // Set mode defaults
-  const toLoc = document.getElementById('rgr-to-loc');
-  const fromLoc = document.getElementById('rgr-from-loc');
-  fromLoc.value = 'fc_station';
-  toLoc.value = mode === 'prep' ? 'fc_station' : 'main_warehouse';
+  // (Regrade always operates within FC station — fc_station→fc_station, hard-set
+  // in create_veneer_regrade. The old hidden rgr-from-loc/rgr-to-loc inputs were
+  // removed from the modal; setting them here threw a TypeError that stopped the
+  // modal from opening, so the location lines are gone.)
 
   // Update modal title + context hint
   const modeHint = document.getElementById('rgr-mode-hint');
