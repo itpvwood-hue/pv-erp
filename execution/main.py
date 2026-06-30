@@ -327,6 +327,9 @@ class LaminatingIn(BaseModel):
     pcs_target: int; pcs_actual: int
     time_minutes: Optional[int] = None
     glue_mix_ref: Optional[str] = None; notes: Optional[str] = None
+    # Real glue applied per face-press (defaults to BOM g/face, leader-confirmed)
+    face_glue_g_per_face: Optional[float] = None
+    back_glue_g_per_face: Optional[float] = None
 
 class ColdPressIn(BaseModel):
     batch_id: str; machine_id: str

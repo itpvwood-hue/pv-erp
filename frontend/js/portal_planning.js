@@ -4011,6 +4011,10 @@ let _lamRows=[], _repRows=[];
 function addLamRow(bid){
   const id=Date.now();
   _lamRows.push({id});
+  // Pre-fill the real glue g/face from the batch's BOM (leader edits to actual).
+  const _gi = (typeof _gmBatchGlueInfo!=='undefined' && _slActiveBatch) ? _gmBatchGlueInfo[_slActiveBatch.id] : null;
+  const _faceDef = (_gi && _gi.usage_g_per_face) ? _gi.usage_g_per_face : '';
+  const _backDef = (_gi && _gi.back_usage_g_per_face) ? _gi.back_usage_g_per_face : '';
   const area=document.getElementById('lam-rows-area');
   const div=document.createElement('div');
   div.className='border rounded p-2 mb-2 position-relative'; div.id=`lam-row-${id}`;
@@ -4038,6 +4042,10 @@ function addLamRow(bid){
           <span class="input-group-text" style="font-size:.7rem">min</span>
         </div>
       </div>
+      <div class="col-6 col-md-1"><label class="form-label small mb-1" title="Real glue applied per face press (default = BOM)">Glue/face F</label>
+        <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-gf-${id}" value="${_faceDef}" placeholder="g"></div>
+      <div class="col-6 col-md-1"><label class="form-label small mb-1" title="Real glue applied per back press (default = BOM)">Glue/face B</label>
+        <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-gb-${id}" value="${_backDef}" placeholder="g"></div>
       <div class="col-12 col-md-2"><label class="form-label small mb-1">Mix ref</label>
         <input class="form-control form-control-sm" id="lam-mix-${id}" placeholder="MIX-..."></div>
     </div>`;
@@ -4193,7 +4201,9 @@ async function submitAllLam(bid, moveAfter=false){
       pcs_target:parseInt(document.getElementById(`lam-tgt-${r.id}`).value)||0,
       pcs_actual:parseInt(document.getElementById(`lam-act-${r.id}`).value)||0,
       time_minutes:timeVal,
-      glue_mix_ref:document.getElementById(`lam-mix-${r.id}`).value||null};
+      glue_mix_ref:document.getElementById(`lam-mix-${r.id}`).value||null,
+      face_glue_g_per_face:parseFloat(document.getElementById(`lam-gf-${r.id}`)?.value)||null,
+      back_glue_g_per_face:parseFloat(document.getElementById(`lam-gb-${r.id}`)?.value)||null};
     if(!body.pcs_target)continue;
     try{await api('/api/production/laminating','POST',body);ok++; totalPcs += body.pcs_actual;}catch(e){toast(e.message,'danger');}
   }

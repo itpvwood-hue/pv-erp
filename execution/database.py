@@ -1180,6 +1180,11 @@ def init_db():
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_total_cost   REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_cost_per_kg  REAL",
         "ALTER TABLE glue_mix_log   ADD COLUMN actual_components   TEXT",  # JSON: [{material_id, name, kg, price, cost}]
+        # Real glue applied per face-press, confirmed by the laminating leader
+        # (defaults to the BOM g/face but editable). Feeds the daily glue
+        # utilization / waste calc.
+        "ALTER TABLE laminating_log ADD COLUMN face_glue_g_per_face REAL",
+        "ALTER TABLE laminating_log ADD COLUMN back_glue_g_per_face REAL",
         # po_lines gained packing-SKU + pcs/pallet on dev but the columns were
         # never added to fresh DBs — the PO-lines query and PO-line create/update
         # reference them, so both 500'd on a freshly-built database.
@@ -9208,18 +9213,24 @@ def get_batch_glue_info(batch_id: int) -> dict:
     sku = dict(sku)
     pallet_qty = float(sku['pallet_qty'] or 1) or 1
     qty = float(b['quantity'] or 0)
-    # Find glue line in BOM via the new glue_recipe_id column
+    # Find glue line(s) in BOM via the new glue_recipe_id column. seq 4 = face
+    # glue press, seq 5 = back glue press (each its own g/face).
     glue_lines = rows_to_list(conn.execute("""
-        SELECT bl.usage_g_per_face, bl.qty_override, bl.notes,
+        SELECT bl.seq, bl.usage_g_per_face, bl.qty_override, bl.notes,
                gr.id AS recipe_id, gr.recipe_code, gr.name AS recipe_name
         FROM bom_lines bl
         JOIN glue_recipes gr ON gr.id = bl.glue_recipe_id
         WHERE bl.sku_id=? AND bl.glue_recipe_id IS NOT NULL
+        ORDER BY bl.seq
     """, (sku['id'],)).fetchall())
     if not glue_lines:
         conn.close(); return {"error": "No glue line in BOM", "product_sku": b['product_sku']}
-    g = glue_lines[0]
+    g = next((x for x in glue_lines if x.get('seq') == 4), glue_lines[0])  # face
+    back = next((x for x in glue_lines if x.get('seq') == 5), None)        # back
     usage_g = float(g.get('usage_g_per_face') or 0)
+    back_usage_g = float(back.get('usage_g_per_face') or 0) if back else 0.0
+    # total_kg keeps its original face-only basis (the shortfall calc relies on it);
+    # back_usage_g is returned only to pre-fill the laminating g/face inputs.
     total_kg = round(usage_g / 1000.0 * qty * pallet_qty, 4)
     # Recipe is already known via the join
     recipe_row = conn.execute("SELECT * FROM glue_recipes WHERE id=?",
@@ -9232,6 +9243,8 @@ def get_batch_glue_info(batch_id: int) -> dict:
         "glue_code": g.get('recipe_code'),
         "glue_name": g.get('recipe_name'),
         "usage_g_per_face": usage_g,
+        "back_usage_g_per_face": back_usage_g,
+        "back_glue_code": back.get('recipe_code') if back else None,
         "total_kg": total_kg,
         "bom_notes": g.get('notes') or '',
         "recipe": recipe,
@@ -9430,11 +9443,12 @@ def log_laminating(data):
         conn.execute("PRAGMA foreign_keys = OFF")
         lid = _new_log_id("LAM")
         conn.execute(
-            """INSERT INTO laminating_log (lam_id,batch_id,table_id,emp_code_1,emp_code_2,glue_mix_ref,pcs_target,pcs_actual,time_minutes,notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO laminating_log (lam_id,batch_id,table_id,emp_code_1,emp_code_2,glue_mix_ref,pcs_target,pcs_actual,time_minutes,notes,face_glue_g_per_face,back_glue_g_per_face)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (lid,data['batch_id'],data['table_id'],data['emp_code_1'],data['emp_code_2'],
              data.get('glue_mix_ref'),data['pcs_target'],data['pcs_actual'],
-             data.get('time_minutes',0),data.get('notes')))
+             data.get('time_minutes',0),data.get('notes'),
+             data.get('face_glue_g_per_face'),data.get('back_glue_g_per_face')))
         conn.commit()
         return lid
     finally:
