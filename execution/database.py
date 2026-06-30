@@ -1834,6 +1834,17 @@ def init_db():
 
     conn.close()
 
+    # ── Self-heal: fold any legacy blank-line glue_mix station stock into P01 ──
+    # The pre-fix deduction path wrote glue-mix usage to a blank line_id, leaving
+    # negative phantom rows that displayed as a negative 'On Hand'. Fold them into
+    # the real P01 row on startup so the negatives clear automatically (idempotent
+    # — a no-op once clean — and uses its own connection, hence after conn.close).
+    try:
+        if fold_glue_mix_blank_stock('P01')['folded']:
+            pass
+    except Exception:
+        pass
+
 
 # ── Real PV Wood glue recipes (from spreadsheet) ─────────────────
 # Format: (recipe_code, name, veneer_thickness, wood_species, core_board,
@@ -9310,6 +9321,24 @@ def log_glue_mix_with_stock(data: dict) -> dict:
 
     # Deduct components from station_stock (separate path so a stock-write
     # failure doesn't lose the cost snapshot above).
+    # Resolve the line to deduct from — it must NEVER be blank. The legacy bug
+    # deducted to line_id='' (when the caller didn't supply a line), creating
+    # negative phantom rows that showed as a negative 'On Hand'. Preference:
+    #   1) the line the caller supplied, else
+    #   2) the line that actually holds this material's glue-mix stock, else
+    #   3) 'P01' (the centralised glue pool / fold target).
+    supplied_line = (data.get('line_id') or '').strip()
+    stock_line = {}
+    try:
+        _lc = get_db()
+        for r in _lc.execute(
+            "SELECT material_id, line_id FROM station_stock "
+            "WHERE department='glue_mix' AND COALESCE(line_id,'')<>'' "
+            "AND COALESCE(current_qty,0)<>0").fetchall():
+            stock_line[int(r[0])] = r[1]
+        _lc.close()
+    except Exception:
+        pass
     deductions = []
     skipped = []
     for c in actual_components:
@@ -9317,9 +9346,10 @@ def log_glue_mix_with_stock(data: dict) -> dict:
         if not mat_id or qty <= 0:
             skipped.append({"name": c.get('name'), "reason": "no material mapped"})
             continue
+        line_id = supplied_line or stock_line.get(int(mat_id)) or 'P01'
         try:
             log_station_stock_movement({
-                "department": "glue_mix", "line_id": data.get('line_id') or "",
+                "department": "glue_mix", "line_id": line_id,
                 "material_id": int(mat_id), "qty_change": qty,
                 "movement_type": "BATCH_USE",
                 "batch_ref": data['batch_id'], "reference": mid,
