@@ -1914,7 +1914,7 @@ _DEFAULT_LINES = [
 # (code, label, icon, is_centralised, sort_order)
 _DEFAULT_DEPARTMENTS = [
     ('fc',            'Feed Center',   'bi-box-seam',    0,  1),
-    ('laminating',    'Laminating',    'bi-layers',      0,  2),
+    ('laminating',    'Glue & Laminating', 'bi-layers',   0,  2),
     ('cold_press',    'Cold Press',    'bi-snow',        0,  3),
     ('hot_press',     'Hot Press',     'bi-fire',        0,  4),
     ('bleach',        'Bleach',        'bi-droplet',     0,  5),

@@ -2341,6 +2341,10 @@ async function loadStationLog(){
     const el = document.getElementById(id);
     if(el) el.style.display = canSetup ? '' : 'none';
   });
+  // Show the Glue & Laminating mix/laminate toggle when that's the current scope.
+  _slView = 'lam';
+  const _dept0 = document.getElementById('sl-dept-scope')?.value || 'laminating';
+  document.getElementById('sl-glue-toggle')?.classList.toggle('d-none', _dept0 !== 'laminating');
   await slLoadBatches();
   slhSwitchTab(_slhTab || 'dashboard');
 }
@@ -2539,10 +2543,11 @@ async function slhAuxOpenFcTransfer(){
 
 // Station-scope labels shared by the buttons + header.
 const SLH_DEPT_LABEL = {fc:'Feed Center',production:'Production',glue_mix:'Glue Mixing',
-  laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',
+  laminating:'Glue & Laminating',cold_press:'Cold Press',repair:'Repair',sanding:'Sanding',
   hot_press:'Hot Press',grading:'Grading',packing:'Packing'};
-// Short labels for the scope chip + dynamic header (FC shows as just "Cutting").
-const SLH_DEPT_SHORT = {...SLH_DEPT_LABEL, fc:'FC'};
+// Short labels for the scope chip + dynamic header (FC shows as just "FC";
+// the merged station shows the compact "Glue & Lam").
+const SLH_DEPT_SHORT = {...SLH_DEPT_LABEL, fc:'FC', laminating:'Glue & Lam'};
 
 // Department Leaders only operate the stations/lines they're assigned to, so the
 // free-choice dropdowns are hidden and replaced by buttons for exactly those
@@ -2568,7 +2573,8 @@ function slhRenderScopeButtons(){
   const seen = new Set();
   const scopes = [];
   depts.forEach(d => {
-    const dv = (d.department || '').toLowerCase();
+    let dv = (d.department || '').toLowerCase();
+    if(dv === 'glue_mix') dv = 'laminating';  // merged into Glue & Laminating
     if(!SLH_DEPT_LABEL[dv]) return;          // skip unknown/legacy dept codes
     const ln = d.line_id || '';
     const key = dv + '|' + ln;
@@ -2853,11 +2859,16 @@ function slhSetScope(){
   if(stDept) stDept.value = dept;
   if(stLine) stLine.value = line;
   _gmSelectedBatches = []; _gmActiveRecipe = null; _gmActiveBatch = null;
+  // Merged Glue & Laminating station: show the Laminate / Mix-glue toggle and
+  // default to Laminate; every other station hides it and stays in 'lam'.
+  _slView = 'lam';
+  const _glueTgl = document.getElementById('sl-glue-toggle');
+  if(_glueTgl) _glueTgl.classList.toggle('d-none', dept !== 'laminating');
+  document.getElementById('sl-view-lam')?.classList.add('active');
+  document.getElementById('sl-view-mix')?.classList.remove('active');
+  document.getElementById('sl-batch-filters')?.classList.remove('d-none');
   slhUpdateHeader();
   slhRefresh();
-  if(dept === 'glue_mix'){
-    setTimeout(()=>{ try{ slRenderGlueMixCard(); }catch{} }, 50);
-  }
 }
 
 // Dynamic page header: "[P01] [Cold Press] HUB" — or "[ALL LINES] [Packing] HUB"
@@ -3290,7 +3301,7 @@ async function slLoadBatches(){
       try{ _gmRecipes = await api('/api/glue-recipes?kind=glue') || []; }catch{}
     }
   }
-  if(dept === 'glue_mix') _gmBatches = _slBatches;
+  if(dept === 'glue_mix' || dept === 'laminating') _gmBatches = _slBatches;
   _slPopulateBatchFilterOptions();
   renderSlBatchList();
 }
@@ -3337,11 +3348,33 @@ function _slApplyBatchFilters(list){
   });
 }
 function slApplyFilters(){ renderSlBatchList(); }
+
+// Merged Glue & Laminating station: 'lam' = laminate a single batch (+ move),
+// 'mix' = the multi-batch glue mixing view. The toggle only shows for that
+// station (set in slhSetScope); other stations stay in 'lam'.
+let _slView = 'lam';
+function slSetView(v){
+  _slView = (v === 'mix') ? 'mix' : 'lam';
+  document.getElementById('sl-view-lam')?.classList.toggle('active', _slView==='lam');
+  document.getElementById('sl-view-mix')?.classList.toggle('active', _slView==='mix');
+  // The plain filter bar picks one batch to laminate; the mix view groups by
+  // recipe itself, so hide the filters there.
+  document.getElementById('sl-batch-filters')?.classList.toggle('d-none', _slView==='mix');
+  renderSlBatchList();
+  if(_slView === 'mix'){
+    if(typeof slRenderGlueMixCard === 'function') slRenderGlueMixCard();
+  } else if(_slActiveBatch){
+    renderStationForms(_slActiveBatch);
+  } else {
+    const area=document.getElementById('sl-station-area');
+    if(area) area.innerHTML='<div class="card p-5 text-center text-muted"><i class="bi bi-arrow-left fs-3 mb-2"></i><div>Select a batch to log station activity</div></div>';
+  }
+}
 function renderSlBatchList(){
   const el=document.getElementById('sl-batch-list');
   const scopeDept=document.getElementById('sl-dept-filter').value;
-  // Glue Mixing: render checkboxes filtered to shared recipes
-  if(scopeDept==='glue_mix') return _renderSlBatchList_glueMix();
+  // Glue & Laminating in "Mix glue" mode: render checkboxes grouped by recipe.
+  if(scopeDept==='laminating' && _slView==='mix') return _renderSlBatchList_glueMix();
   const list=_slApplyBatchFilters(_slBatches);
   if(!list.length){el.innerHTML='<p class="text-muted small text-center pt-3">No batches match the filters.</p>';return;}
   const sorted=[...list].sort((a,b)=>(a.priority||2)-(b.priority||2)||(a.created_at||'').localeCompare(b.created_at||''));
@@ -3682,9 +3715,9 @@ async function slSelectBatch(id){
 function renderStationForms(batch){
   const area=document.getElementById('sl-station-area');
   const dept=batch.current_department||'fc';
-  // Special case: scope is Glue Mixing — render the multi-batch glue mix card
-  // instead of the regular per-batch station form.
-  if((document.getElementById('sl-dept-filter')?.value || '') === 'glue_mix'){
+  // Merged Glue & Laminating station in "Mix glue" mode — render the multi-batch
+  // glue mix card instead of the regular per-batch station form.
+  if((document.getElementById('sl-dept-filter')?.value || '') === 'laminating' && _slView==='mix'){
     return slRenderGlueMixCard();
   }
   const idx=DEPT_ORDER.indexOf(dept);

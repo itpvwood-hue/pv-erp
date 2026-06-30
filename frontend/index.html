@@ -2143,8 +2143,7 @@
         <label class="small text-muted mb-0 me-1">Station</label>
         <select class="form-select form-select-sm" id="sl-dept-scope" style="width:170px" onchange="slhSetScope()">
           <option value="fc">Feed Center</option>
-          <option value="glue_mix">Glue Mixing</option>
-          <option value="laminating" selected>Laminating</option>
+          <option value="laminating" selected>Glue &amp; Laminating</option>
           <option value="cold_press">Cold Press</option>
           <option value="repair">Repair</option>
           <option value="sanding">Sanding</option>
@@ -2296,6 +2295,10 @@
             <!-- Read-only chip showing the active scope (set from the top dropdowns) -->
             <span class="badge bg-light text-dark border" id="sl-scope-chip">—</span>
             <input type="hidden" id="sl-dept-filter" value="laminating">
+          </div>
+          <div class="btn-group btn-group-sm w-100 d-none" id="sl-glue-toggle" role="group" aria-label="Glue & Laminating mode">
+            <button type="button" class="btn btn-outline-primary active" id="sl-view-lam" onclick="slSetView('lam')"><i class="bi bi-layers me-1"></i>Laminate</button>
+            <button type="button" class="btn btn-outline-warning" id="sl-view-mix" onclick="slSetView('mix')"><i class="bi bi-droplet-fill me-1"></i>Mix glue</button>
           </div>
           <div class="px-2 pt-2 pb-1 border-bottom bg-light" id="sl-batch-filters">
             <input type="text" class="form-control form-control-sm mb-1" id="sl-bf-search"
@@ -6000,7 +6003,7 @@ let dashChart=null;
 // not a per-line production stage, so it doesn't get a production-board column.
 // (It stays a valid `departments` row for the FC release gate + FC Hub.)
 const DEPTS=['laminating','cold_press','hot_press','bleach','repair','sanding','grading','packing','fg_warehouse'];
-const DLBL={fc:'FC',laminating:'Laminating',cold_press:'Cold Press',hot_press:'Hot Press',bleach:'Bleach',repair:'Repair',sanding:'Sanding',grading:'Grading',packing:'Packing',fg_warehouse:'FG Warehouse'};
+const DLBL={fc:'FC',laminating:'Glue & Laminating',cold_press:'Cold Press',hot_press:'Hot Press',bleach:'Bleach',repair:'Repair',sanding:'Sanding',grading:'Grading',packing:'Packing',fg_warehouse:'FG Warehouse'};
 const DICO={fc:'bi-box-seam',laminating:'bi-layers',cold_press:'bi-snow',hot_press:'bi-fire',bleach:'bi-droplet',repair:'bi-tools',sanding:'bi-circle-half',grading:'bi-stars',packing:'bi-box',fg_warehouse:'bi-building'};
 
 // Production line section sequences

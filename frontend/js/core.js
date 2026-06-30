@@ -138,7 +138,7 @@ const STATION_COLOR={'GLUE_MIX':'warning','LAMINATING':'primary','COLD_PRESS':'i
   'REPAIR':'secondary','SANDING':'orange','HOT_PRESS':'danger','GRADING':'success','PACKING':'packing','COMPLETE':'dark'};
 // Department-based constants (for batches table / Line Board unified flow)
 const DEPT_ORDER=['fc','laminating','cold_press','repair','sanding','hot_press','grading','packing','fg_receiving','fg_warehouse'];
-const DEPT_LABEL={fc:'Feed Center',laminating:'Laminating',cold_press:'Cold Press',repair:'Repair',
+const DEPT_LABEL={fc:'Feed Center',laminating:'Glue & Laminating',cold_press:'Cold Press',repair:'Repair',
   sanding:'Sanding',hot_press:'Hot Press',grading:'Grading',packing:'Packing',
   fg_receiving:'FG Receiving',fg_warehouse:'Complete'};
 const DEPT_ICON={fc:'bi-droplet-fill',laminating:'bi-table',cold_press:'bi-snow',repair:'bi-tools',
