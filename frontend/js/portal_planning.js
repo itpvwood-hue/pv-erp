@@ -3766,6 +3766,11 @@ function renderStationCard(batch){
   const whBtn = '';
   const dept=batch.current_department;
   const psBar=PRESET_SCHEMA[dept] && !PRESET_SCHEMA[dept].perRow ? presetBar(dept) : '';
+  // Glue applied is a per-batch figure (the glue-up machine feeds the conveyor,
+  // not per table) — pre-fill from the BOM g/face, leader confirms the real value.
+  const _gi = (typeof _gmBatchGlueInfo!=='undefined') ? _gmBatchGlueInfo[batch.id] : null;
+  const _faceDef = (_gi && _gi.usage_g_per_face) ? _gi.usage_g_per_face : '';
+  const _backDef = (_gi && _gi.back_usage_g_per_face) ? _gi.back_usage_g_per_face : '';
   const formMap={
     GLUE_MIX: `
       <h6><i class="bi bi-clipboard-check text-primary me-1"></i>FC Checkpoint</h6>
@@ -3780,6 +3785,16 @@ function renderStationCard(batch){
       </h6>
       <p class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i>Each row has its own preset selector. Or use the dropdown below to load/save the <b>entire current set</b> of tables &amp; operators in one click.</p>
       ${multiRowPresetBar('laminating', bid)}
+      <div class="p-2 mb-2 rounded" style="background:#fef9c3;border:1px solid #fde047">
+        <div class="row g-2 align-items-end">
+          <div class="col-12"><label class="form-label small fw-semibold mb-1"><i class="bi bi-droplet-fill me-1 text-warning"></i>Real glue applied — whole batch (g/face, from the glue-up machine)</label></div>
+          <div class="col-6 col-md-3"><label class="form-label small mb-1">Face g/face</label>
+            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-glue-face" value="${_faceDef}" placeholder="g/face"></div>
+          <div class="col-6 col-md-3"><label class="form-label small mb-1">Back g/face</label>
+            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-glue-back" value="${_backDef}" placeholder="g/face"></div>
+          <div class="col-12 col-md-6"><small class="text-muted">Defaults to the BOM spec — set to the real usage. Logged once for the batch, not per table.</small></div>
+        </div>
+      </div>
       <div id="lam-rows-area"></div>
       <button class="btn btn-outline-primary btn-sm mb-2" onclick="addLamRow('${bid}')"><i class="bi bi-plus-lg me-1"></i>Add table row</button>
       <div class="p-2 mt-2 rounded" style="background:#dcfce7;border:1px solid #86efac">
@@ -4011,10 +4026,6 @@ let _lamRows=[], _repRows=[];
 function addLamRow(bid){
   const id=Date.now();
   _lamRows.push({id});
-  // Pre-fill the real glue g/face from the batch's BOM (leader edits to actual).
-  const _gi = (typeof _gmBatchGlueInfo!=='undefined' && _slActiveBatch) ? _gmBatchGlueInfo[_slActiveBatch.id] : null;
-  const _faceDef = (_gi && _gi.usage_g_per_face) ? _gi.usage_g_per_face : '';
-  const _backDef = (_gi && _gi.back_usage_g_per_face) ? _gi.back_usage_g_per_face : '';
   const area=document.getElementById('lam-rows-area');
   const div=document.createElement('div');
   div.className='border rounded p-2 mb-2 position-relative'; div.id=`lam-row-${id}`;
@@ -4042,10 +4053,6 @@ function addLamRow(bid){
           <span class="input-group-text" style="font-size:.7rem">min</span>
         </div>
       </div>
-      <div class="col-6 col-md-1"><label class="form-label small mb-1" title="Real glue applied per face press (default = BOM)">Glue/face F</label>
-        <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-gf-${id}" value="${_faceDef}" placeholder="g"></div>
-      <div class="col-6 col-md-1"><label class="form-label small mb-1" title="Real glue applied per back press (default = BOM)">Glue/face B</label>
-        <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-gb-${id}" value="${_backDef}" placeholder="g"></div>
       <div class="col-12 col-md-2"><label class="form-label small mb-1">Mix ref</label>
         <input class="form-control form-control-sm" id="lam-mix-${id}" placeholder="MIX-..."></div>
     </div>`;
@@ -4191,6 +4198,11 @@ async function submitGlueMix(bid){
 }
 async function submitAllLam(bid, moveAfter=false){
   if(!_lamRows.length){toast('Add at least one laminating table row','danger');return;}
+  // Glue applied is logged once for the whole batch (the glue-up machine feeds
+  // the conveyor), then attached to each table row so the day's applied-kg sums
+  // correctly as g/face × total pcs.
+  const _faceG=parseFloat(document.getElementById('lam-glue-face')?.value)||null;
+  const _backG=parseFloat(document.getElementById('lam-glue-back')?.value)||null;
   let ok=0, totalPcs=0;
   for(const r of _lamRows){
     const timeVal=parseInt(document.getElementById(`lam-time-${r.id}`)?.value)||0;
@@ -4202,8 +4214,8 @@ async function submitAllLam(bid, moveAfter=false){
       pcs_actual:parseInt(document.getElementById(`lam-act-${r.id}`).value)||0,
       time_minutes:timeVal,
       glue_mix_ref:document.getElementById(`lam-mix-${r.id}`).value||null,
-      face_glue_g_per_face:parseFloat(document.getElementById(`lam-gf-${r.id}`)?.value)||null,
-      back_glue_g_per_face:parseFloat(document.getElementById(`lam-gb-${r.id}`)?.value)||null};
+      face_glue_g_per_face:_faceG,
+      back_glue_g_per_face:_backG};
     if(!body.pcs_target)continue;
     try{await api('/api/production/laminating','POST',body);ok++; totalPcs += body.pcs_actual;}catch(e){toast(e.message,'danger');}
   }
