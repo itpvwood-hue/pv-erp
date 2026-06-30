@@ -152,6 +152,7 @@
   <a class="nav-link" data-page="lots-docs" href="#"><i class="bi bi-file-earmark-pdf"></i><span data-i18n="Lots & Documents">Lots &amp; Documents</span></a>
   <a class="nav-link" data-page="traceability" href="#"><i class="bi bi-diagram-3"></i><span data-i18n="Traceability">Traceability</span></a>
   <a class="nav-link" data-page="wip-import" id="nav-wip-import" href="#"><i class="bi bi-box-arrow-in-down"></i><span data-i18n="Opening WIP Import">Opening WIP Import</span></a>
+  <a class="nav-link" data-page="orders-import" id="nav-orders-import" href="#"><i class="bi bi-file-earmark-spreadsheet"></i><span data-i18n="Bulk Order Import">Bulk Order Import</span></a>
 
   <!-- ── 2. PRODUCTION MODULE ─────────────────────────────── -->
   <div class="nav-sec" data-i18n="Production Module">Production Module</div>
@@ -5145,6 +5146,36 @@
   <div id="wip-results"></div>
 </div>
 
+<!-- ══ BULK ORDER (PO) IMPORT — PLANNING ═══════════════════════ -->
+<div class="page" id="page-orders-import">
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <h4 class="mb-0"><i class="bi bi-file-earmark-spreadsheet me-2 text-primary"></i>Bulk Order Import</h4>
+      <small class="text-muted">Open sales POs from a customers + orders list (Excel or CSV). Validate first, then import.</small>
+    </div>
+    <a class="btn btn-sm btn-outline-secondary" href="/api/upload/template/customer-orders" download>
+      <i class="bi bi-download me-1"></i>Download template
+    </a>
+  </div>
+
+  <div class="alert alert-info py-2 small">
+    Columns: <code>customer, po_number, sku_code</code>, then <code>pallets</code> <em>or</em> <code>pcs</code>
+    (plus optional <code>pcs_per_pallet, unit_price, production_line, order_date, delivery_date, priority, notes</code>).
+    <strong>One row per order line</strong> — rows that share a <code>po_number</code> become one PO with several lines.
+    Give <code>pallets</code> directly, or <code>pcs</code> and it's converted using <code>pcs_per_pallet</code> (or the SKU's default).
+    Unregistered customers are <strong>created automatically</strong>. A <code>po_number</code> that already exists is skipped.
+  </div>
+
+  <div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+    <input type="file" class="form-control form-control-sm" id="ord-file" accept=".csv,.xlsx,.xlsm" style="max-width:360px">
+    <button class="btn btn-sm btn-outline-primary" onclick="ordValidate()"><i class="bi bi-check2-circle me-1"></i>Validate</button>
+    <button class="btn btn-sm btn-success" id="ord-import-btn" onclick="ordCommit()" disabled><i class="bi bi-box-arrow-in-down me-1"></i>Import valid rows</button>
+    <span class="small text-muted" id="ord-summary"></span>
+  </div></div>
+
+  <div id="ord-results"></div>
+</div>
+
 <!-- ══ CUSTOMERS (CRM) — PLANNING ══════════════════════════════ -->
 <div class="page" id="page-customers">
   <div class="d-flex justify-content-between align-items-center mb-3">
@@ -6149,7 +6180,7 @@ let _prodAiMessages=[];
 const ROLE_PAGES = {
   MANAGERIAL: new Set([
     'dashboard','customers','order-intake','line-board','factory-assistant',
-    'bom','materials','fg','vcmx','lots-docs','traceability','wip-import',
+    'bom','materials','fg','vcmx','lots-docs','traceability','wip-import','orders-import',
     'dept-fg_warehouse',
     'prod-logs','reports',
     'station-log','vcmx-lam','glue-mix-station','station-tools','prod-reports','employees',
@@ -6158,7 +6189,7 @@ const ROLE_PAGES = {
   ]),
   PRODUCTION_PLANNING: new Set([
     'dashboard','customers','order-intake','line-board','prod-flow',
-    'bom','materials','fg','vcmx','lots-docs','traceability','wip-import','raw-receiving',
+    'bom','materials','fg','vcmx','lots-docs','traceability','wip-import','orders-import','raw-receiving',
     'dept-fg_warehouse',
     'prod-logs','reports','material-shortfalls',
     'station-log','vcmx-lam','glue-mix-station','station-tools','prod-reports','employees',

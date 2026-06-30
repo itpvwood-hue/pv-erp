@@ -9562,6 +9562,71 @@ async function wipCommit(){
   }catch(e){ toast('Import failed: '+e.message,'danger'); }
 }
 
+// ── Bulk Order (PO) import ───────────────────────────────────
+let _ordLastReport = null;
+function loadOrdersImport(){
+  document.getElementById('ord-results').innerHTML = '';
+  document.getElementById('ord-summary').textContent = '';
+  const btn = document.getElementById('ord-import-btn');
+  if(btn) btn.disabled = true;
+  _ordLastReport = null;
+}
+async function _ordSend(mode){
+  const f = document.getElementById('ord-file').files[0];
+  if(!f){ toast('Choose a CSV or Excel file first','warning'); return null; }
+  const fd = new FormData(); fd.append('file', f);
+  const token = localStorage.getItem('erp_token')||'';
+  const r = await fetch('/api/upload/customer-orders?mode='+mode, {
+    method:'POST', headers:{'X-Auth-Token':token}, body:fd });
+  if(r.status===401){ doLogout(); return null; }
+  if(!r.ok){ const e=await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||r.statusText); }
+  return r.json();
+}
+function _ordRender(res){
+  _ordLastReport = res;
+  const btn = document.getElementById('ord-import-btn');
+  const committed = res.mode === 'commit';
+  document.getElementById('ord-summary').innerHTML =
+    `<b>${res.valid}</b> valid · <b class="${res.invalid?'text-danger':''}">${res.invalid}</b> invalid` +
+    (committed ? ` · <b class="text-success">${res.created_pos} PO(s), ${res.created_lines} line(s), ${res.created_customers} new customer(s)</b>` : '');
+  if(btn) btn.disabled = committed || res.valid === 0;
+  const rowsHtml = res.report.map(r=>{
+    const sug = Object.entries(r.suggestions||{}).map(([k,v])=>
+      `<span class="badge bg-warning-subtle text-dark border me-1">${k} → ${v}</span>`).join('');
+    const errs = (r.errors||[]).map(e=>`<div class="text-danger">${e}</div>`).join('');
+    const status = r.created
+      ? `<span class="badge bg-success">opened ${r.created}</span>`
+      : (r.ok ? '<span class="badge bg-primary">ready</span>'
+              : '<span class="badge bg-danger">fix</span>');
+    return `<tr class="${r.ok?'':'table-danger'}">
+      <td class="small">${r.row}</td>
+      <td class="small">${r.customer||'—'}</td>
+      <td class="small"><b>${r.po_number||'—'}</b></td>
+      <td class="small">${r.sku_code||'—'}</td>
+      <td class="small text-end">${r.pallets||'—'}</td>
+      <td class="small">${r.production_line||'—'}</td>
+      <td>${status}${errs?'<div class="small mt-1">'+errs+'</div>':''}${sug?'<div class="small mt-1">'+sug+'</div>':''}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('ord-results').innerHTML = `
+    <div class="table-responsive"><table class="table table-sm table-hover align-middle">
+      <thead class="table-light"><tr>
+        <th>#</th><th>Customer</th><th>PO #</th><th>SKU</th><th class="text-end">Pallets</th><th>Line</th><th>Status</th>
+      </tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+}
+async function ordValidate(){
+  try{ const res = await _ordSend('validate'); if(res) _ordRender(res); }
+  catch(e){ toast('Validation failed: '+e.message,'danger'); }
+}
+async function ordCommit(){
+  if(!_ordLastReport || _ordLastReport.valid===0){ toast('Validate first','warning'); return; }
+  if(!confirm(`Open POs from ${_ordLastReport.valid} valid line(s)? Invalid rows and existing PO numbers are skipped.`)) return;
+  try{
+    const res = await _ordSend('commit');
+    if(res){ _ordRender(res); toast(`${res.created_pos} PO(s) opened · ${res.created_lines} line(s)`,'success'); }
+  }catch(e){ toast('Import failed: '+e.message,'danger'); }
+}
+
 // ── Customers (rudimentary CRM) ──────────────────────────────
 let _custCache = [];
 async function loadCustomers(){
@@ -9640,6 +9705,7 @@ async function custFillSelect(selectedName){
 Object.assign(PAGE_LOADERS, {
   'customers':           loadCustomers,
   'wip-import':          loadWipImport,
+  'orders-import':       loadOrdersImport,
   'dashboard':           loadDashboard,
   'vcmx':                vcmxLoad,
   'vcmx-lam':            vcmxLamLoad,

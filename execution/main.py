@@ -82,7 +82,7 @@ from database import (
     get_po_lines, create_po_line, update_po_line, delete_po_line, get_po_material_readiness,
     get_all_production_orders, get_production_order, create_production_order, update_production_order, release_production_order, delete_production_order,
     get_all_batches, get_batch, move_batch, split_batch, split_batch_by_pcs,
-    import_wip_batches,
+    import_wip_batches, import_customer_orders,
     merge_batches, find_mergeable_siblings, get_batch_history, delete_batch,
     get_planning_flow, get_po_flow_matrix,
     create_laminating_record, get_laminating_records, get_laminating_stats,
@@ -1407,6 +1407,71 @@ async def upload_wip(file: UploadFile = File(...), mode: str = "validate"):
                  'po_ref', 'pcs', 'location'))]
     return import_wip_batches(rows_csv, commit=(mode == 'commit'),
                               created_by='wip_import')
+
+def _parse_tabular_upload(filename: str, content: bytes) -> list:
+    """Parse an uploaded .csv / .xlsx into a list of dicts with normalised
+    (lower-case, underscore) header keys. Used by the bulk importers so a user
+    can upload their Excel file directly without saving-as-CSV first."""
+    name = (filename or '').lower()
+    if name.endswith(('.xlsx', '.xlsm')):
+        import openpyxl, datetime as _dt
+        def _cell(v):
+            if v is None: return ''
+            if isinstance(v, (_dt.datetime, _dt.date)): return v.strftime('%Y-%m-%d')
+            if isinstance(v, float) and v.is_integer(): return str(int(v))
+            return str(v).strip()
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        it = ws.iter_rows(values_only=True)
+        try:
+            header = next(it)
+        except StopIteration:
+            wb.close(); return []
+        keys = [str(h).strip().lower().replace(' ', '_') if h is not None else '' for h in header]
+        out = []
+        for row in it:
+            d = {k: _cell(v) for k, v in zip(keys, row) if k}
+            out.append(d)
+        wb.close()
+        return out
+    # CSV fallback
+    text = None
+    for enc in ('utf-8-sig', 'cp1252', 'latin-1'):
+        try:
+            text = content.decode(enc); break
+        except UnicodeDecodeError:
+            continue
+    rdr = csv.DictReader(io.StringIO(text or ''))
+    return [{(k or '').strip().lower().replace(' ', '_'): (v.strip() if v else '')
+             for k, v in r.items()} for r in rdr]
+
+@app.get("/api/upload/template/customer-orders")
+def customer_orders_template():
+    """Bulk sales-order (PO) import template — one row per ORDER LINE. Rows that
+    share a po_number become one PO with several lines. Give EITHER `pallets`
+    (whole pallets) OR `pcs` (total pieces, converted via pcs_per_pallet / the
+    SKU default). Unregistered customers are auto-created on import."""
+    rows = [
+        "customer,po_number,sku_code,pallets,pcs,pcs_per_pallet,unit_price,production_line,order_date,delivery_date,priority,notes",
+        "DRAGONPLY,POD250389,3ENR24NF1,2,,240,1850,P01,2026-06-30,2026-07-20,2,First line of this PO",
+        "DRAGONPLY,POD250389,3ENR28NF1,1,,240,1850,P01,2026-06-30,2026-07-20,2,Second line — same PO",
+        "ACME WOOD,POD250390,3ENR30NF1,,2400,240,1900,P02,2026-06-30,,1,Qty given in pieces (2400 pcs -> 10 pallets)",
+    ]
+    return _csv_response(rows, "customer_orders_template.csv")
+
+@app.post("/api/upload/customer-orders")
+async def upload_customer_orders(file: UploadFile = File(...), mode: str = "validate"):
+    """Validate (mode=validate, default) or import (mode=commit) a customers+orders
+    list, opening one PO per po_number (lines grouped). Accepts .csv or .xlsx and
+    returns a per-row report with errors + closest-match suggestions."""
+    content = await file.read()
+    rows = _parse_tabular_upload(file.filename, content)
+    # drop fully-blank rows (Excel trailing artifact)
+    keep = ('customer', 'po_number', 'po_ref', 'po', 'sku_code', 'sku',
+            'pallets', 'quantity', 'qty', 'pcs', 'pieces')
+    rows = [r for r in rows if any(r.get(k) for k in keep)]
+    return import_customer_orders(rows, commit=(mode == 'commit'),
+                                  created_by='orders_import')
 
 @app.post("/api/upload/po-pdf")
 async def upload_po_pdf(file: UploadFile = File(...)):

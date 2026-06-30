@@ -3482,6 +3482,188 @@ def import_wip_batches(rows: list, commit: bool = False, created_by: str = '') -
     }
 
 
+def import_customer_orders(rows: list, commit: bool = False, created_by: str = '') -> dict:
+    """Bulk-open sales POs from a customers+orders list — one row per ORDER LINE;
+    rows sharing a po_number become one PO with several lines.
+
+    Each row: {customer, po_number, sku_code, pallets | pcs, pcs_per_pallet?,
+               unit_price?, production_line?, order_date?, delivery_date?,
+               priority?, notes?}
+
+    Validates against the live catalogue (SKUs, lines) and returns a per-row
+    report with errors + closest-match suggestions. commit=False is a dry run.
+    commit=True auto-creates any unregistered customer (name only) then creates
+    the PO + its lines. A po_number that already exists is skipped (no dupes).
+    quantity stored on po_lines is PALLETS; a `pcs` value is converted via
+    pcs_per_pallet (row override, else the SKU's pallet_qty)."""
+    import difflib, datetime as _dt, math as _math
+    conn = get_db()
+    try:
+        valid_skus = {r[0].upper(): {'id': r[1], 'ppp': int(r[2] or 1)}
+                      for r in conn.execute(
+                          "SELECT code, id, COALESCE(pallet_qty,1) FROM skus WHERE COALESCE(is_active,1)=1").fetchall()}
+        sku_codes  = [r[0] for r in conn.execute("SELECT code FROM skus WHERE COALESCE(is_active,1)=1").fetchall()]
+        valid_lines = [r[0] for r in conn.execute("SELECT line_id FROM manufacturing_line WHERE COALESCE(active,1)=1").fetchall()]
+        existing_customers = {(r[0] or '').strip().lower()
+                              for r in conn.execute("SELECT name FROM customers WHERE COALESCE(is_active,1)=1").fetchall()}
+        existing_pos = {r[0] for r in conn.execute("SELECT po_number FROM purchase_orders").fetchall()}
+    finally:
+        conn.close()
+    line_set = set(valid_lines)
+    today = _dt.date.today().isoformat()
+
+    def _suggest(value, pool):
+        m = difflib.get_close_matches(str(value or ''), pool, n=1, cutoff=0.6)
+        return m[0] if m else None
+
+    report = []
+    for i, raw in enumerate(rows, start=1):
+        customer = (raw.get('customer') or '').strip()
+        po_number = (raw.get('po_number') or raw.get('po_ref') or raw.get('po') or '').strip()
+        sku = (raw.get('sku_code') or raw.get('sku') or '').strip()
+        pallets_raw = (raw.get('pallets') or raw.get('quantity') or raw.get('qty') or '').strip()
+        pcs_raw = (raw.get('pcs') or raw.get('pieces') or '').strip()
+        ppp_raw = (raw.get('pcs_per_pallet') or raw.get('pcs_per_unit') or '').strip()
+        price_raw = (raw.get('unit_price') or raw.get('price') or '').strip()
+        line = ((raw.get('production_line') or raw.get('line') or 'P01').strip().upper()) or 'P01'
+        order_date = (raw.get('order_date') or '').strip() or today
+        delivery_date = (raw.get('delivery_date') or raw.get('due_date') or '').strip()
+        priority_raw = (raw.get('priority') or '').strip()
+        notes = (raw.get('notes') or '').strip()
+
+        errors = []; suggestions = {}
+        if not customer: errors.append("customer is required")
+        if not po_number: errors.append("po_number is required")
+
+        skui = valid_skus.get(sku.upper())
+        if not sku:
+            errors.append("sku_code is required")
+        elif not skui:
+            errors.append(f"SKU '{sku}' not found")
+            s = _suggest(sku, sku_codes)
+            if s: suggestions['sku_code'] = s
+
+        ppp = None
+        if ppp_raw:
+            try: ppp = int(float(ppp_raw))
+            except (TypeError, ValueError): errors.append(f"pcs_per_pallet '{ppp_raw}' is not a number")
+        eff_ppp = ppp or (skui['ppp'] if skui else None)
+
+        pallets = None
+        if pallets_raw:
+            try:
+                pallets = int(float(pallets_raw))
+                if pallets <= 0: errors.append("pallets must be a positive whole number")
+            except (TypeError, ValueError): errors.append(f"pallets '{pallets_raw}' is not a number")
+        elif pcs_raw:
+            try:
+                pcs = float(pcs_raw)
+                if pcs <= 0: errors.append("pcs must be positive")
+                elif not eff_ppp: errors.append("pcs given but no pcs_per_pallet (and SKU has no default) to convert to pallets")
+                else: pallets = int(_math.ceil(pcs / eff_ppp))
+            except (TypeError, ValueError): errors.append(f"pcs '{pcs_raw}' is not a number")
+        else:
+            errors.append("provide pallets or pcs")
+
+        price = 0.0
+        if price_raw:
+            try: price = float(price_raw)
+            except (TypeError, ValueError): errors.append(f"unit_price '{price_raw}' is not a number")
+
+        priority = 2
+        if priority_raw:
+            try:
+                priority = int(float(priority_raw))
+                if priority not in (1, 2, 3): priority = 2
+            except (TypeError, ValueError): priority = 2
+
+        if line not in line_set:
+            errors.append(f"line '{line}' not valid (expected one of {', '.join(valid_lines)})")
+            s = _suggest(line, valid_lines)
+            if s: suggestions['production_line'] = s
+
+        new_customer = bool(customer) and customer.lower() not in existing_customers
+        if po_number and po_number in existing_pos:
+            errors.append(f"PO '{po_number}' already exists — skipped to avoid a duplicate")
+        if new_customer:
+            suggestions['customer'] = "(new — will be created)"
+
+        report.append({
+            "row": i, "customer": customer, "po_number": po_number, "sku_code": sku,
+            "pallets": pallets if pallets is not None else pallets_raw,
+            "pcs_per_pallet": ppp or (skui['ppp'] if skui else ''),
+            "unit_price": price, "production_line": line,
+            "order_date": order_date, "delivery_date": delivery_date,
+            "priority": priority, "notes": notes,
+            "ok": not errors, "errors": errors, "suggestions": suggestions,
+            "_sku_id": skui['id'] if skui else None, "_pallets": pallets,
+            "_ppp": ppp, "_new_customer": new_customer,
+        })
+
+    # Cross-row check: a po_number must carry a single customer.
+    po_customer = {}
+    for r in report:
+        if r['po_number'] and r['customer']:
+            prev = po_customer.get(r['po_number'])
+            if prev and prev.lower() != r['customer'].lower():
+                r['errors'].append(f"PO '{r['po_number']}' has conflicting customers ('{prev}' vs '{r['customer']}')")
+                r['ok'] = False
+            else:
+                po_customer.setdefault(r['po_number'], r['customer'])
+
+    valid_rows = [r for r in report if r['ok']]
+    created_pos = created_lines = created_customers = 0
+    if commit:
+        groups = {}
+        for r in valid_rows:
+            groups.setdefault(r['po_number'], []).append(r)
+        for pon, grp in groups.items():
+            head = grp[0]
+            try:
+                if head['customer'].lower() not in existing_customers:
+                    try:
+                        create_customer({'name': head['customer']})
+                        created_customers += 1
+                    except ValueError:
+                        pass  # created by an earlier group / already exists
+                    existing_customers.add(head['customer'].lower())
+                po = create_purchase_order({
+                    'po_number': pon, 'customer': head['customer'],
+                    'order_date': head['order_date'], 'delivery_date': head['delivery_date'],
+                    'status': 'open', 'priority': head['priority'],
+                    'notes': head['notes'] or 'Bulk order import',
+                })
+                created_pos += 1
+                for r in grp:
+                    create_po_line({
+                        'po_id': po['id'], 'sku_id': r['_sku_id'],
+                        'quantity': r['_pallets'], 'unit_price': r['unit_price'],
+                        'production_line': r['production_line'],
+                        'pcs_per_pallet': r['_ppp'], 'notes': r['notes'],
+                    })
+                    created_lines += 1
+                    r['created'] = pon
+            except Exception as e:
+                for r in grp:
+                    r['ok'] = False
+                    r['errors'].append(f"import failed: {e}")
+
+    for r in report:
+        for k in ('_sku_id', '_pallets', '_ppp', '_new_customer'):
+            r.pop(k, None)
+
+    return {
+        "mode": "commit" if commit else "validate",
+        "total": len(report),
+        "valid": len(valid_rows),
+        "invalid": len(report) - len(valid_rows),
+        "created_pos": created_pos,
+        "created_lines": created_lines,
+        "created_customers": created_customers,
+        "report": report,
+    }
+
+
 def move_batch(batch_id, to_department, quantity, time_minutes=0, notes='', moved_by=''):
     conn = get_db()
     try:
