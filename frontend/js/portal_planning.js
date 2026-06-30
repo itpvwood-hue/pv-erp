@@ -3645,7 +3645,7 @@ async function slgmRequestFromWH(materialId, qty, name){
     await api('/api/consumable-requests','POST',{
       material_id: materialId,
       qty_requested: q,
-      department: 'glue_mix',
+      department: 'laminating',
       line_id: _slgmLine(),
       notes: `From Glue Mixing shortfall — auto suggestion for ${name}`,
     });
@@ -3680,7 +3680,7 @@ async function slgmBulkRequestWH(){
       await api('/api/consumable-requests','POST',{
         material_id: r.material_id,
         qty_requested: qty,
-        department: 'glue_mix',
+        department: 'laminating',
         line_id: _slgmLine(),
         notes: `Glue Mixing ${tag} (${r.component}) ${ctx}` +
                (bufPct>0?` · +${bufPct}% buffer`:''),
@@ -4527,13 +4527,14 @@ const GM_COMPONENTS=[
   {key:'black',  label:'Black Pigment',    field:'black_pigment_kg'},
   {key:'ti',     label:'Titanium dioxide', field:'titanium_kg'},
 ];
-let _gmStation=[]; // glue_mix station stock cache
+let _gmStation=[]; // Glue & Laminating station stock cache (glue components)
 
 async function gmRefreshStation(){
   // Glue mixing is per-line — read the station stock for the current line so it
-  // matches where deposits land and where confirm-mix deducts.
+  // matches where deposits land and where confirm-mix deducts. Glue components
+  // now live under the merged 'laminating' (Glue & Laminating) station bucket.
   const line=_slgmLine();
-  _gmStation=await api(`/api/station-stock?department=glue_mix${line?'&line_id='+encodeURIComponent(line):''}`).catch(()=>[]);
+  _gmStation=await api(`/api/station-stock?department=laminating${line?'&line_id='+encodeURIComponent(line):''}`).catch(()=>[]);
 }
 
 async function gmSelectBatch(id){

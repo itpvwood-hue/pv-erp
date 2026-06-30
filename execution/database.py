@@ -1845,6 +1845,31 @@ def init_db():
     except Exception:
         pass
 
+    # ── Self-heal: move the glue components off the old 'glue_mix' station-stock
+    # bucket onto 'laminating' — the Glue Mixing station is now merged into
+    # 'Glue & Laminating', so its stock + movements live under that department.
+    # Runs after the blank-fold above. Merge-then-delete because station_stock is
+    # UNIQUE(department,line_id,material_id). Idempotent — a no-op once nothing is
+    # tagged glue_mix.
+    try:
+        _mc = get_db()
+        for r in _mc.execute(
+            "SELECT id, line_id, material_id, COALESCE(current_qty,0) AS q "
+            "FROM station_stock WHERE department='glue_mix'").fetchall():
+            tgt = _mc.execute(
+                "SELECT id FROM station_stock WHERE department='laminating' AND line_id=? AND material_id=?",
+                (r['line_id'], r['material_id'])).fetchone()
+            if tgt:
+                _mc.execute("UPDATE station_stock SET current_qty=COALESCE(current_qty,0)+?, "
+                            "last_updated=datetime('now') WHERE id=?", (r['q'], tgt['id']))
+                _mc.execute("DELETE FROM station_stock WHERE id=?", (r['id'],))
+            else:
+                _mc.execute("UPDATE station_stock SET department='laminating' WHERE id=?", (r['id'],))
+        _mc.execute("UPDATE station_stock_movements SET department='laminating' WHERE department='glue_mix'")
+        _mc.commit(); _mc.close()
+    except Exception:
+        pass
+
 
 # ── Real PV Wood glue recipes (from spreadsheet) ─────────────────
 # Format: (recipe_code, name, veneer_thickness, wood_species, core_board,
@@ -7777,8 +7802,9 @@ def get_glue_mix_station_requirements() -> dict:
             mid = recipe_links.get(ing_key)
             if mid: a['explicit_mat_ids'].add(int(mid))
 
-    # Pull glue_mix station stock and match by substring
-    stock_rows = get_station_stock('glue_mix')
+    # Pull glue station stock and match by substring. Glue components now live
+    # under the merged 'laminating' (Glue & Laminating) station bucket.
+    stock_rows = get_station_stock('laminating')
     # Fallback pool: every material in the catalog (so a component the operator
     # has never received into station stock can still be looked up + requested).
     cn = get_db()
@@ -9333,7 +9359,7 @@ def log_glue_mix_with_stock(data: dict) -> dict:
         _lc = get_db()
         for r in _lc.execute(
             "SELECT material_id, line_id FROM station_stock "
-            "WHERE department='glue_mix' AND COALESCE(line_id,'')<>'' "
+            "WHERE department='laminating' AND COALESCE(line_id,'')<>'' "
             "AND COALESCE(current_qty,0)<>0").fetchall():
             stock_line[int(r[0])] = r[1]
         _lc.close()
@@ -9349,7 +9375,7 @@ def log_glue_mix_with_stock(data: dict) -> dict:
         line_id = supplied_line or stock_line.get(int(mat_id)) or 'P01'
         try:
             log_station_stock_movement({
-                "department": "glue_mix", "line_id": line_id,
+                "department": "laminating", "line_id": line_id,
                 "material_id": int(mat_id), "qty_change": qty,
                 "movement_type": "BATCH_USE",
                 "batch_ref": data['batch_id'], "reference": mid,
