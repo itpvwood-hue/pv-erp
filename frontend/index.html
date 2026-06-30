@@ -409,6 +409,13 @@
 
   <!-- Material Prep Tab -->
   <div id="fc-pane-prep">
+    <div class="d-flex flex-wrap gap-1 align-items-center mb-2" id="fc-batch-filters">
+      <input type="text" class="form-control form-control-sm" id="fc-bf-search"
+             placeholder="Search batch / SKU / PO / customer…" style="max-width:240px" oninput="renderFcBatchList()" autocomplete="off">
+      <select class="form-select form-select-sm" id="fc-bf-cust" style="max-width:170px" onchange="renderFcBatchList()"><option value="">All customers</option></select>
+      <select class="form-select form-select-sm" id="fc-bf-prio" style="max-width:120px" onchange="renderFcBatchList()"><option value="">All priority</option><option value="1">1 Urgent</option><option value="2">2 Normal</option><option value="3">3 Low</option></select>
+      <select class="form-select form-select-sm d-none" id="fc-bf-recipe" style="max-width:150px" onchange="renderFcBatchList()"><option value="">All glue codes</option></select>
+    </div>
     <div class="fc-split">
       <div class="fc-batch-list" id="fc-batch-list"><p class="text-muted small p-2">Loading...</p></div>
       <div class="fc-detail" id="fc-detail">
@@ -2290,7 +2297,18 @@
             <span class="badge bg-light text-dark border" id="sl-scope-chip">—</span>
             <input type="hidden" id="sl-dept-filter" value="laminating">
           </div>
-          <div class="card-body p-2 overflow-auto" id="sl-batch-list" style="max-height:calc(100vh - 240px)">
+          <div class="px-2 pt-2 pb-1 border-bottom bg-light" id="sl-batch-filters">
+            <input type="text" class="form-control form-control-sm mb-1" id="sl-bf-search"
+                   placeholder="Search batch / SKU / PO / customer…" oninput="slApplyFilters()" autocomplete="off">
+            <div class="d-flex gap-1">
+              <select class="form-select form-select-sm" id="sl-bf-cust" style="font-size:.72rem" onchange="slApplyFilters()"><option value="">All customers</option></select>
+              <select class="form-select form-select-sm" id="sl-bf-prio" style="font-size:.72rem;max-width:88px" onchange="slApplyFilters()">
+                <option value="">Prio</option><option value="1">1 Urg</option><option value="2">2 Norm</option><option value="3">3 Low</option>
+              </select>
+            </div>
+            <select class="form-select form-select-sm mt-1 d-none" id="sl-bf-recipe" style="font-size:.72rem" onchange="slApplyFilters()"><option value="">All glue codes</option></select>
+          </div>
+          <div class="card-body p-2 overflow-auto" id="sl-batch-list" style="max-height:calc(100vh - 290px)">
             <p class="text-muted small text-center pt-3">Loading...</p>
           </div>
         </div>

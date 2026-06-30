@@ -3278,27 +3278,73 @@ async function slLoadBatches(){
   if(line) batches=batches.filter(b=>b.production_line===line);
   _slBatches=batches.filter(b=>b.status!=='completed');
   // Pre-fetch each batch's glue code so the Glue Mixing queue can colour-code
-  // them and let the leader tick multiple sharing the same recipe.
-  if(dept === 'glue_mix'){
-    _gmBatches = _slBatches;
+  // them, let the leader tick multiple sharing the same recipe, AND power the
+  // glue-recipe filter. Fetch for the stations where glue matters.
+  _slBatchGlue = {};
+  if(dept === 'glue_mix' || dept === 'laminating'){
     _gmBatchGlueInfo = {};
     await Promise.all(_slBatches.map(async b => {
-      try{ _gmBatchGlueInfo[b.id] = await api(`/api/batches/${b.id}/glue-info`); }catch{}
+      try{ const gi = await api(`/api/batches/${b.id}/glue-info`); _gmBatchGlueInfo[b.id]=gi; _slBatchGlue[b.id]=(gi&&gi.glue_code)||''; }catch{}
     }));
     if(!_gmRecipes.length){
       try{ _gmRecipes = await api('/api/glue-recipes?kind=glue') || []; }catch{}
     }
   }
+  if(dept === 'glue_mix') _gmBatches = _slBatches;
+  _slPopulateBatchFilterOptions();
   renderSlBatchList();
 }
 function slFilterBatches(){ slLoadBatches(); }
+
+// ── Station-Hub batch list filters (customer / priority / glue recipe / search) ──
+let _slBatchGlue = {};   // batch_id -> glue_code (for the recipe filter)
+function _slBatchFilterState(){
+  return {
+    q:      (document.getElementById('sl-bf-search')?.value || '').toLowerCase().trim(),
+    cust:    document.getElementById('sl-bf-cust')?.value   || '',
+    prio:    document.getElementById('sl-bf-prio')?.value   || '',
+    recipe:  document.getElementById('sl-bf-recipe')?.value || '',
+  };
+}
+function _slPopulateBatchFilterOptions(){
+  const custSel = document.getElementById('sl-bf-cust');
+  if(custSel){
+    const cur = custSel.value;
+    const custs = [...new Set(_slBatches.map(b=>b.customer).filter(Boolean))].sort();
+    custSel.innerHTML = '<option value="">All customers</option>' +
+      custs.map(c=>`<option${c===cur?' selected':''}>${c}</option>`).join('');
+  }
+  const recSel = document.getElementById('sl-bf-recipe');
+  if(recSel){
+    const recs = [...new Set(Object.values(_slBatchGlue).filter(Boolean))].sort();
+    recSel.classList.toggle('d-none', recs.length===0);
+    const cur = recSel.value;
+    recSel.innerHTML = '<option value="">All glue codes</option>' +
+      recs.map(r=>`<option${r===cur?' selected':''}>${r}</option>`).join('');
+  }
+}
+function _slApplyBatchFilters(list){
+  const f = _slBatchFilterState();
+  return list.filter(b=>{
+    if(f.cust && b.customer!==f.cust) return false;
+    if(f.prio && String(b.priority||2)!==f.prio) return false;
+    if(f.recipe && (_slBatchGlue[b.id]||'')!==f.recipe) return false;
+    if(f.q){
+      const hay=[b.batch_number,b.sku,b.product_name,b.prod_order_number,b.customer].filter(Boolean).join(' ').toLowerCase();
+      if(!hay.includes(f.q)) return false;
+    }
+    return true;
+  });
+}
+function slApplyFilters(){ renderSlBatchList(); }
 function renderSlBatchList(){
   const el=document.getElementById('sl-batch-list');
-  if(!_slBatches.length){el.innerHTML='<p class="text-muted small text-center pt-3">No batches found.</p>';return;}
   const scopeDept=document.getElementById('sl-dept-filter').value;
   // Glue Mixing: render checkboxes filtered to shared recipes
   if(scopeDept==='glue_mix') return _renderSlBatchList_glueMix();
-  const sorted=[..._slBatches].sort((a,b)=>(a.priority||2)-(b.priority||2)||(a.created_at||'').localeCompare(b.created_at||''));
+  const list=_slApplyBatchFilters(_slBatches);
+  if(!list.length){el.innerHTML='<p class="text-muted small text-center pt-3">No batches match the filters.</p>';return;}
+  const sorted=[...list].sort((a,b)=>(a.priority||2)-(b.priority||2)||(a.created_at||'').localeCompare(b.created_at||''));
   el.innerHTML=sorted.map(b=>`
     <div class="border rounded p-2 mb-2 ${_slActiveBatch?.id===b.id?'border-primary bg-light':''}"
          style="cursor:pointer;border-left:4px solid ${b.priority==1?'#ef4444':b.priority==3?'#16a34a':'#eab308'}!important"
@@ -7615,15 +7661,58 @@ function fciSubReload(){
   if(typeof fcLoadStock === 'function') fcLoadStock();
 }
 
+let _fcBatches = [];
+let _fcBatchGlue = {};   // batch_id -> glue_code (for the recipe filter)
 async function loadFcPage(){
-  const batches=await api('/api/fc/batches').catch(()=>[]);
+  _fcBatches = await api('/api/fc/batches').catch(()=>[]);
+  // Glue code per batch so the leader can filter FC prep by recipe.
+  _fcBatchGlue = {};
+  await Promise.all(_fcBatches.map(async b => {
+    try{ const gi = await api(`/api/batches/${b.id}/glue-info`); _fcBatchGlue[b.id]=(gi&&gi.glue_code)||''; }catch{}
+  }));
+  _fcPopulateBatchFilterOptions();
+  renderFcBatchList();
+}
+function _fcPopulateBatchFilterOptions(){
+  const custSel=document.getElementById('fc-bf-cust');
+  if(custSel){
+    const cur=custSel.value;
+    const custs=[...new Set(_fcBatches.map(b=>b.customer).filter(Boolean))].sort();
+    custSel.innerHTML='<option value="">All customers</option>'+custs.map(c=>`<option${c===cur?' selected':''}>${c}</option>`).join('');
+  }
+  const recSel=document.getElementById('fc-bf-recipe');
+  if(recSel){
+    const recs=[...new Set(Object.values(_fcBatchGlue).filter(Boolean))].sort();
+    recSel.classList.toggle('d-none', recs.length===0);
+    const cur=recSel.value;
+    recSel.innerHTML='<option value="">All glue codes</option>'+recs.map(r=>`<option${r===cur?' selected':''}>${r}</option>`).join('');
+  }
+}
+function renderFcBatchList(){
   const el=document.getElementById('fc-batch-list');
-  if(!batches.length){
+  if(!el) return;
+  if(!_fcBatches.length){
     el.innerHTML='<p class="text-muted small p-2">No batches currently at FC.</p>';
-    document.getElementById('fc-detail').innerHTML=`<div class="text-center text-muted py-5"><i class="bi bi-check-circle-fill text-success" style="font-size:2.5rem"></i><p class="mt-3 fw-bold">FC is clear — no batches awaiting prep.</p></div>`;
+    const det=document.getElementById('fc-detail');
+    if(det) det.innerHTML=`<div class="text-center text-muted py-5"><i class="bi bi-check-circle-fill text-success" style="font-size:2.5rem"></i><p class="mt-3 fw-bold">FC is clear — no batches awaiting prep.</p></div>`;
     return;
   }
-  el.innerHTML=batches.map(b=>`
+  const q=(document.getElementById('fc-bf-search')?.value||'').toLowerCase().trim();
+  const cust=document.getElementById('fc-bf-cust')?.value||'';
+  const prio=document.getElementById('fc-bf-prio')?.value||'';
+  const recipe=document.getElementById('fc-bf-recipe')?.value||'';
+  const list=_fcBatches.filter(b=>{
+    if(cust && b.customer!==cust) return false;
+    if(prio && String(b.priority||2)!==prio) return false;
+    if(recipe && (_fcBatchGlue[b.id]||'')!==recipe) return false;
+    if(q){
+      const hay=[b.batch_number,b.product_name,b.product_sku,b.po_number,b.customer].filter(Boolean).join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  if(!list.length){ el.innerHTML='<p class="text-muted small p-2">No batches match the filters.</p>'; return; }
+  el.innerHTML=list.map(b=>`
     <div class="fc-batch-card" onclick="loadFcCheck(${b.prod_order_id},this)">
       <div class="d-flex justify-content-between mb-1">
         <span class="fw-bold small">${b.batch_number||'B#'+b.id}</span>
