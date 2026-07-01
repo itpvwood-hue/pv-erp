@@ -2757,6 +2757,14 @@ async function slhLoadReview(){
       <td><input class="form-control form-control-sm" style="width:130px" id="rvm-batch-${m.id}" value="${_slhEsc(m.batch_ref)}"></td>
       <td><button class="btn btn-sm btn-primary" onclick="slhSaveMovement(${m.id})"><i class="bi bi-check2"></i></button></td>
     </tr>`).join('');
+  // Glue utilization sheet — only for the merged Glue & Laminating station.
+  let glueHtml = '';
+  if(_slhReviewDept === 'laminating'){
+    try{
+      const gu = await api(`/api/glue/utilization?line_id=${encodeURIComponent(_slhReviewLine||'')}&date=${encodeURIComponent(_slhReviewDate)}`);
+      glueHtml = _slhRenderGlueUtil(gu);
+    }catch(e){ glueHtml = `<div class="text-muted small mb-3">Glue utilization unavailable: ${_slhEsc(e.message||e)}</div>`; }
+  }
   const deptLbl = (typeof SLH_DEPT_LABEL!=='undefined' && SLH_DEPT_LABEL[_slhReviewDept]) || _slhReviewDept;
   host.innerHTML = `
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
@@ -2769,6 +2777,7 @@ async function slhLoadReview(){
     ${jobs.length ? `<div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-3">
       <thead class="table-light"><tr><th>Time</th><th>Batch</th><th>Qty</th><th>Operator</th><th>Notes</th><th></th></tr></thead>
       <tbody>${jobRows}</tbody></table></div>` : '<div class="text-muted small mb-3">No completed jobs for this day.</div>'}
+    ${glueHtml}
     <h6 class="mt-2"><i class="bi bi-box-seam me-1"></i>Stock Movements (${mv.length})</h6>
     ${mv.length ? `<div class="table-responsive"><table class="table table-sm table-bordered align-middle">
       <thead class="table-light"><tr><th>Time</th><th>Type</th><th>Material</th><th>Qty</th><th>Batch Ref</th><th></th></tr></thead>
@@ -2790,6 +2799,54 @@ async function slhSaveMovement(id){
     await api(`/api/station/movement/${id}`,'PATCH',{qty_change: isNaN(qty)?null:qty, batch_ref: batch});
     toast('Movement corrected — stock reconciled'); slhLoadReview();
   }catch(e){ toast('Save failed: '+(e.message||e),'danger'); }
+}
+
+// ── Daily Review: Glue Utilization sheet (merged Glue & Laminating) ──
+function _guKey(code){ return String(code||'').replace(/\W+/g,'_'); }
+function _slhRenderGlueUtil(gu){
+  const rows = (gu && gu.rows) || [];
+  const head = `<h6 class="mt-3"><i class="bi bi-droplet-fill me-1 text-warning"></i>Glue Utilization
+      <small class="text-muted ms-1">mixed vs applied → waste; confirm cuts components + tags each batch</small></h6>`;
+  if(!rows.length) return head + '<div class="text-muted small mb-3">No glue used on this day.</div>';
+  const body = rows.map(r=>{
+    const k=_guKey(r.recipe_code), conf=r.confirmed;
+    const wcls = r.waste_pct<0?'text-danger':'text-success';
+    return `<tr>
+      <td><b>${_slhEsc(r.recipe_code)}</b><div class="small text-muted">${r.batch_count} batch(es) · ${_slhEsc(r.total_pcs)} pcs</div></td>
+      <td class="text-end small text-muted">${r.planned_kg}</td>
+      <td class="text-end small">${r.applied_kg}</td>
+      <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-end" style="width:92px" id="gu-mixed-${k}" value="${r.mixed_kg}" ${conf?'disabled':''} oninput="_slhGuRecalc('${_slhEsc(r.recipe_code)}',${r.applied_kg})"></td>
+      <td class="text-end small"><span id="gu-waste-${k}">${r.waste_kg}</span></td>
+      <td class="text-end small fw-semibold ${wcls}" id="gu-wpctcell-${k}"><span id="gu-wpct-${k}">${r.waste_pct}</span>%</td>
+      <td>${conf?'<span class="badge bg-success">confirmed</span>'
+             :`<button class="btn btn-sm btn-warning" onclick="_slhGuConfirm('${_slhEsc(r.recipe_code)}',${r.applied_kg})"><i class="bi bi-check2 me-1"></i>Confirm</button>`}</td>
+    </tr>`;
+  }).join('');
+  return head + `<div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-3">
+    <thead class="table-light"><tr><th>Glue code</th><th class="text-end">Planned kg</th><th class="text-end">Applied kg</th>
+      <th class="text-end">Mixed kg</th><th class="text-end">Waste kg</th><th class="text-end">Waste %</th><th></th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+function _slhGuRecalc(code, applied){
+  const k=_guKey(code);
+  const mixed = parseFloat(document.getElementById('gu-mixed-'+k)?.value)||0;
+  const waste = Math.round((mixed-applied)*10000)/10000;
+  const pct = mixed>0 ? Math.round(waste/mixed*10000)/100 : 0;
+  const wEl=document.getElementById('gu-waste-'+k), pEl=document.getElementById('gu-wpct-'+k), cEl=document.getElementById('gu-wpctcell-'+k);
+  if(wEl) wEl.textContent = waste;
+  if(pEl) pEl.textContent = pct;
+  if(cEl) cEl.className = 'text-end small fw-semibold '+(pct<0?'text-danger':'text-success');
+}
+async function _slhGuConfirm(code, applied){
+  const k=_guKey(code);
+  const mixed = parseFloat(document.getElementById('gu-mixed-'+k)?.value);
+  if(isNaN(mixed) || mixed<0){ toast('Enter the mixed kg first','warning'); return; }
+  if(!confirm(`Confirm ${code}: mixed ${mixed} kg, applied ${applied} kg → waste ${(mixed-applied).toFixed(2)} kg.\n\nThis cuts the glue components from station stock and tags every ${code} batch today. It can't be undone here.`)) return;
+  try{
+    await api('/api/glue/utilization/confirm','POST',{line_id:_slhReviewLine||'', date:_slhReviewDate, rows:[{recipe_code:code, mixed_kg:mixed}]});
+    toast(`Glue ${code} confirmed — components cut, batches tagged`,'success');
+    slhLoadReview();
+  }catch(e){ toast('Confirm failed: '+(e.message||e),'danger'); }
 }
 
 function slhPickScope(dept, line, btn){

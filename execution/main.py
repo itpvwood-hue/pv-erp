@@ -114,6 +114,7 @@ from database import (
     auto_generate_purchase_requests_for_po, get_material_shortfalls,
     link_document_to_prs, get_fc_aggregate_requirements,
     get_glue_mix_station_requirements,
+    get_glue_utilization_day, confirm_glue_utilization_day,
     create_pr_shipment, list_pr_shipments, receive_pr_shipment,
     update_pr_shipment, delete_pr_shipment,
     quick_receive_for_pr, split_pr_shipment,
@@ -3606,6 +3607,22 @@ def glue_mix_material_requirements_ep(user: dict = Depends(require_auth)):
     """Glue Mixing station shortfall: required component kg across all
     laminating batches in the pipeline vs current station stock."""
     return get_glue_mix_station_requirements()
+
+@app.get("/api/glue/utilization")
+def glue_utilization_ep(line_id: Optional[str] = None, date: Optional[str] = None,
+                        user: dict = Depends(require_auth)):
+    """Daily glue utilization for a line: per glue code, planned vs applied kg
+    (from the confirmed g/face logs) → waste kg/%, plus any confirmed row."""
+    return get_glue_utilization_day(line_id=line_id, date=date)
+
+@app.post("/api/glue/utilization/confirm")
+def glue_utilization_confirm_ep(body: dict, user: dict = Depends(require_auth)):
+    """Confirm the day's glue utilization: cut the raw components for the mixed kg
+    from the Glue & Laminating station stock and stamp the waste % onto each
+    batch of that glue code. Body: {line_id, date, rows:[{recipe_code, mixed_kg}]}."""
+    return confirm_glue_utilization_day(body.get('line_id') or '', body.get('date'),
+                                        body.get('rows') or [],
+                                        confirmed_by=user.get('user_id', ''))
 
 
 @app.get("/api/planning/material-shortfalls")

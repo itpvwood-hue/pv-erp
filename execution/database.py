@@ -365,6 +365,30 @@ def init_db():
             FOREIGN KEY (to_material_id)   REFERENCES materials(id)
         )
     """)
+    # ── Glue utilization (daily, per recipe per line) ───────────
+    # One row per glue code per line per day. mixed_kg = what was mixed (defaults
+    # to the day's BOM requirement); applied_kg = actual from the laminating g/face
+    # logs; waste = mixed − applied. On confirm the raw components for mixed_kg are
+    # cut from the Glue & Laminating station stock and waste_pct is written onto
+    # every batch laminated with that glue code that day.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS glue_util_day (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            util_date     TEXT NOT NULL,
+            line_id       TEXT NOT NULL DEFAULT '',
+            recipe_code   TEXT NOT NULL,
+            planned_kg    REAL DEFAULT 0,
+            mixed_kg      REAL DEFAULT 0,
+            applied_kg    REAL DEFAULT 0,
+            waste_kg      REAL DEFAULT 0,
+            waste_pct     REAL DEFAULT 0,
+            batch_count   INTEGER DEFAULT 0,
+            confirmed_by  TEXT DEFAULT '',
+            confirmed_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            notes         TEXT DEFAULT '',
+            UNIQUE(util_date, line_id, recipe_code)
+        )
+    """)
     # ── Production Order Veneer Grade Mix ─────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS prod_order_veneer_alloc (
@@ -1185,6 +1209,10 @@ def init_db():
         # utilization / waste calc.
         "ALTER TABLE laminating_log ADD COLUMN face_glue_g_per_face REAL",
         "ALTER TABLE laminating_log ADD COLUMN back_glue_g_per_face REAL",
+        # Per-batch glue waste tracking: the day's waste % for the batch's glue
+        # code, written when the daily glue utilization is confirmed.
+        "ALTER TABLE batches ADD COLUMN glue_waste_pct REAL",
+        "ALTER TABLE batches ADD COLUMN glue_code TEXT",
         # po_lines gained packing-SKU + pcs/pallet on dev but the columns were
         # never added to fresh DBs — the PO-lines query and PO-line create/update
         # reference them, so both 500'd on a freshly-built database.
@@ -9195,6 +9223,191 @@ def get_po_traceability(po_id: int) -> dict:
         return {"purchase_order": po, "batches": batches}
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════
+# GLUE UTILIZATION (daily) — mixed vs applied → waste, stock cut on confirm
+# ══════════════════════════════════════════════════════════════
+_GLUE_RECIPE_FIELDS = [
+    ('E0 Glue','e0_glue_kg','e0_glue'), ('Latex G312','latex_g312_kg','latex_g312'),
+    ('Flour','flour_kg','flour'), ('Yellow Pigment','yellow_pigment_kg','yellow_pigment'),
+    ('Hardener','hardener_kg','hardener'), ('Red Pigment','red_pigment_kg','red_pigment'),
+    ('Black Pigment','black_pigment_kg','black_pigment'), ('Titanium dioxide','titanium_kg','titanium'),
+]
+
+def _glue_recipe_components(recipe: dict, target_kg: float) -> list:
+    """Raw-component (material_id, kg) breakdown to mix `target_kg` of a recipe."""
+    tot = float(recipe.get('total_kg') or 0)
+    if tot <= 0 or target_kg <= 0:
+        return []
+    factor = float(target_kg) / tot
+    try:
+        links = json.loads(recipe.get('material_links') or '{}')
+    except Exception:
+        links = {}
+    out = []
+    for label, fld, ing in _GLUE_RECIPE_FIELDS:
+        qty = float(recipe.get(fld) or 0) * factor
+        if qty <= 0:
+            continue
+        mid = links.get(ing)
+        out.append({'label': label, 'ingredient': ing,
+                    'material_id': int(mid) if mid else None, 'kg': round(qty, 4)})
+    return out
+
+def _glue_util_rows(conn, line_id, date):
+    """Aggregate the day's laminating logs into per-glue-code utilization for one
+    line. applied uses the confirmed g/face (falling back to the BOM rate when a
+    row wasn't overridden); planned uses the BOM rate. Returns {code: {...}}."""
+    logs = rows_to_list(conn.execute("""
+        SELECT ll.batch_id AS batch_number, ll.pcs_actual,
+               ll.face_glue_g_per_face AS f, ll.back_glue_g_per_face AS bk,
+               b.id AS bid, COALESCE(po.production_line,'') AS line
+        FROM laminating_log ll
+        LEFT JOIN batches b ON b.batch_number = ll.batch_id
+        LEFT JOIN production_orders po ON po.id = b.prod_order_id
+        WHERE DATE(ll.shift_start) = ?
+    """, (date,)).fetchall())
+    if line_id:
+        logs = [l for l in logs if (l['line'] or '') == line_id]
+    gi_cache = {}
+    def _gi(bid):
+        if bid not in gi_cache:
+            try: gi_cache[bid] = get_batch_glue_info(bid)
+            except Exception: gi_cache[bid] = {}
+        return gi_cache[bid]
+    agg = {}
+    for l in logs:
+        if not l.get('bid'):
+            continue
+        gi = _gi(l['bid'])
+        code = gi.get('glue_code')
+        if not code:
+            continue
+        pcs = float(l['pcs_actual'] or 0)
+        bom_f = float(gi.get('usage_g_per_face') or 0)
+        bom_b = float(gi.get('back_usage_g_per_face') or 0)
+        act_f = float(l['f']) if l['f'] is not None else bom_f
+        act_b = float(l['bk']) if l['bk'] is not None else bom_b
+        a = agg.setdefault(code, {'recipe_code': code, 'applied_kg': 0.0,
+                                  'planned_kg': 0.0, 'total_pcs': 0.0, 'batches': set()})
+        a['applied_kg'] += (act_f + act_b) * pcs / 1000.0
+        a['planned_kg'] += (bom_f + bom_b) * pcs / 1000.0
+        a['total_pcs']  += pcs
+        a['batches'].add(l['batch_number'])
+    return agg
+
+def get_glue_utilization_day(line_id=None, date=None):
+    """Per-glue-code utilization for a line + day: planned vs applied, plus any
+    saved (confirmed) mixed/waste. mixed_kg defaults to planned until confirmed."""
+    if not date:
+        date = datemod.today().isoformat()
+    line_id = line_id or ''
+    conn = get_db()
+    try:
+        agg = _glue_util_rows(conn, line_id, date)
+        saved = {r['recipe_code']: dict(r) for r in conn.execute(
+            "SELECT * FROM glue_util_day WHERE util_date=? AND line_id=?",
+            (date, line_id)).fetchall()}
+    finally:
+        conn.close()
+    rows = []
+    for code, a in agg.items():
+        planned = round(a['planned_kg'], 4)
+        applied = round(a['applied_kg'], 4)
+        s = saved.get(code)
+        if s:
+            mixed = round(float(s['mixed_kg'] or 0), 4)
+            rows.append({'recipe_code': code, 'batch_count': len(a['batches']),
+                         'total_pcs': round(a['total_pcs'], 1), 'batches': sorted(a['batches']),
+                         'planned_kg': planned, 'applied_kg': applied, 'mixed_kg': mixed,
+                         'waste_kg': round(float(s['waste_kg'] or 0), 4),
+                         'waste_pct': round(float(s['waste_pct'] or 0), 2), 'confirmed': True})
+        else:
+            mixed = planned
+            waste = round(mixed - applied, 4)
+            rows.append({'recipe_code': code, 'batch_count': len(a['batches']),
+                         'total_pcs': round(a['total_pcs'], 1), 'batches': sorted(a['batches']),
+                         'planned_kg': planned, 'applied_kg': applied, 'mixed_kg': mixed,
+                         'waste_kg': waste,
+                         'waste_pct': round(waste / mixed * 100, 2) if mixed > 0 else 0,
+                         'confirmed': False})
+    rows.sort(key=lambda r: r['recipe_code'])
+    return {'date': date, 'line_id': line_id, 'rows': rows}
+
+def confirm_glue_utilization_day(line_id, date, rows, confirmed_by=''):
+    """Confirm the day's glue utilization for one line. Per recipe row
+    {recipe_code, mixed_kg}: recompute applied from logs, cut the raw components
+    for mixed_kg from the Glue & Laminating station stock, save the glue_util_day
+    row, and write waste % onto every batch laminated with that glue code that day.
+    Already-confirmed recipes for the day are skipped (no double cut)."""
+    line_id = line_id or ''
+    if not date:
+        date = datemod.today().isoformat()
+    conn = get_db()
+    try:
+        agg = _glue_util_rows(conn, line_id, date)
+        already = {r[0] for r in conn.execute(
+            "SELECT recipe_code FROM glue_util_day WHERE util_date=? AND line_id=?",
+            (date, line_id)).fetchall()}
+    finally:
+        conn.close()
+    results = []
+    for row in (rows or []):
+        code = (row.get('recipe_code') or '').strip()
+        if not code or code not in agg:
+            continue
+        if code in already:
+            results.append({'recipe_code': code, 'skipped': 'already confirmed'})
+            continue
+        a = agg[code]
+        applied = round(a['applied_kg'], 4)
+        mixed = row.get('mixed_kg')
+        mixed = float(mixed) if mixed is not None else round(a['planned_kg'], 4)
+        if mixed < 0:
+            mixed = 0.0
+        waste = round(mixed - applied, 4)
+        waste_pct = round(waste / mixed * 100, 2) if mixed > 0 else 0.0
+        rconn = get_db()
+        try:
+            recipe = row_to_dict(rconn.execute(
+                "SELECT * FROM glue_recipes WHERE recipe_code=?", (code,)).fetchone())
+        finally:
+            rconn.close()
+        cut = []
+        if recipe:
+            for comp in _glue_recipe_components(recipe, mixed):
+                if not comp['material_id'] or comp['kg'] <= 0:
+                    continue
+                try:
+                    log_station_stock_movement({
+                        "department": "laminating", "line_id": line_id or 'P01',
+                        "material_id": comp['material_id'], "qty_change": comp['kg'],
+                        "movement_type": "BATCH_USE",
+                        "reference": f"GLUEUTIL {date} {code}",
+                        "notes": f"Glue mix consumption — {code} ({comp['label']}) {date}",
+                        "created_by": confirmed_by or 'glue_util',
+                    })
+                    cut.append(comp['material_id'])
+                except Exception:
+                    pass
+        wconn = get_db()
+        try:
+            wconn.execute("""INSERT OR REPLACE INTO glue_util_day
+                (util_date,line_id,recipe_code,planned_kg,mixed_kg,applied_kg,waste_kg,waste_pct,batch_count,confirmed_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (date, line_id, code, round(a['planned_kg'], 4), round(mixed, 4), applied,
+                 waste, waste_pct, len(a['batches']), confirmed_by or ''))
+            for bn in a['batches']:
+                wconn.execute("UPDATE batches SET glue_waste_pct=?, glue_code=? WHERE batch_number=?",
+                              (waste_pct, code, bn))
+            wconn.commit()
+        finally:
+            wconn.close()
+        results.append({'recipe_code': code, 'mixed_kg': round(mixed, 4), 'applied_kg': applied,
+                        'waste_kg': waste, 'waste_pct': waste_pct,
+                        'batches_stamped': len(a['batches']), 'components_cut': len(cut)})
+    return {'date': date, 'line_id': line_id, 'confirmed': results}
 
 
 def get_batch_glue_info(batch_id: int) -> dict:
