@@ -2670,11 +2670,13 @@ function _slhOpenPrint(bodyHtml, filename){
   w.document.close();
   setTimeout(()=>{ try{ w.focus(); w.print(); }catch{} }, 350);
 }
-async function slhPrintDailyReport(){
+// Report A — station ACTIVITY: completed jobs + material movements (in/out) +
+// consumable requests + WIP currently at this station.
+async function slhPrintActivityReport(){
   let data; try{ data = await _slhFetchDailyReport(); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
-  const jobs = data.jobs||[], bal = data.balances||[], mv = data.movements||[], rq = data.requests||[];
+  let wip=[]; try{ wip = await api(`/api/station/wip?department=${encodeURIComponent(data.department)}${data.line_id?('&line_id='+encodeURIComponent(data.line_id)):''}`) || []; }catch{}
+  const jobs = data.jobs||[], mv = data.movements||[], rq = data.requests||[];
   const anyDefect = jobs.some(j => Number(j.defect)>0);
-  // 1) Production jobs
   let qTot=0, dTot=0;
   const jobRows = jobs.map(j=>{ qTot+=Number(j.qty)||0; dTot+=Number(j.defect)||0; return `<tr>
       <td>${_slhEsc((j.logged_at||'').slice(11,16))}</td>
@@ -2689,17 +2691,6 @@ async function slhPrintDailyReport(){
       `<tbody>${jobRows}</tbody><tfoot><tr><td colspan="2">${_LB('total')}</td><td class="num">${qTot}</td>`+
       `${anyDefect?`<td class="num">${dTot}</td>`:''}<td colspan="2"></td></tr></tfoot></table>`
     : `<div class="empty">${_LB('none')}</div>`;
-  // 2) Stock balances (opening / change / closing)
-  const balTbl = bal.length
-    ? `<table><thead><tr><th>${_LH('material')}</th><th class="num">${_LH('opening')}</th>`+
-      `<th class="num">${_LH('change')}</th><th class="num">${_LH('closing')}</th></tr></thead><tbody>`+
-      bal.map(b=>`<tr><td>${_slhEsc(b.code)} ${_slhEsc(b.name)}</td>`+
-        `<td class="num">${_slhEsc(b.opening)} ${_slhEsc(b.unit||'')}</td>`+
-        `<td class="num">${b.change>0?'+':''}${_slhEsc(b.change)}</td>`+
-        `<td class="num">${_slhEsc(b.closing)} ${_slhEsc(b.unit||'')}</td></tr>`).join('')+
-      `</tbody></table>`
-    : `<div class="empty">${_LB('none')}</div>`;
-  // 3) Movements
   const mvTbl = mv.length
     ? `<table><thead><tr><th>${_LH('time')}</th><th>${_LH('type')}</th><th>${_LH('material')}</th>`+
       `<th class="num">${_LH('qty')}</th><th>${_LH('batch')}</th><th>${_LH('notes')}</th></tr></thead><tbody>`+
@@ -2709,7 +2700,6 @@ async function slhPrintDailyReport(){
         `<td>${_slhEsc(m.batch_ref)}</td><td>${_slhEsc(m.notes)}</td></tr>`).join('')+
       `</tbody></table>`
     : `<div class="empty">${_LB('none')}</div>`;
-  // 4) Consumable requests
   const rqTbl = rq.length
     ? `<table><thead><tr><th>${_LH('time')}</th><th>${_LH('material')}</th><th class="num">${_LH('qty')}</th>`+
       `<th>${_LH('status')}</th></tr></thead><tbody>`+
@@ -2717,15 +2707,44 @@ async function slhPrintDailyReport(){
         `<td class="num">${_slhEsc(r.qty_requested)} ${_slhEsc(r.unit||'')}</td><td>${_slhEsc(r.status)}</td></tr>`).join('')+
       `</tbody></table>`
     : `<div class="empty">${_LB('none')}</div>`;
+  const wipTbl = wip.length
+    ? `<table><thead><tr><th>Batch#</th><th>PO#</th><th>SKU</th><th>Customer</th><th class="num">Qty</th><th>Prio</th></tr></thead><tbody>`+
+      wip.map(b=>`<tr><td>${_slhEsc(b.batch_number)}</td><td>${_slhEsc(b.po_number||b.prod_order_number||'')}</td>`+
+        `<td>${_slhEsc(b.product_sku||b.product_name||'')}</td><td>${_slhEsc(b.customer||'')}</td>`+
+        `<td class="num">${_slhEsc(b.quantity)} plt / ${_slhEsc((Number(b.quantity)||0)*(Number(b.pallet_qty)||1))} pcs</td>`+
+        `<td>${_slhEsc(b.priority||2)}</td></tr>`).join('')+
+      `</tbody></table>`
+    : `<div class="empty">No WIP at this station.</div>`;
   const body = _slhCompanyHeader() +
-    `<h1>${_LT('title')} <small>${_slhEsc(_RPT.title[1])}</small></h1>` +
+    `<h1>${_LT('title')} — Activity <small>รายงานกิจกรรม</small></h1>` +
     `<div class="meta">${_LB('line')}: <b>${_slhEsc(data._lineLabel)}</b> &nbsp; ${_LB('station')}: <b>${_slhEsc(data._deptLabel)}</b> &nbsp; ${_LB('date')}: <b>${_slhEsc(data.date)}</b></div>` +
     `<h2>${_LT('jobs')} <small>${_slhEsc(_RPT.jobs[1])} (${jobs.length})</small></h2>` + jobsTbl +
-    `<h2>${_LT('balances')} <small>${_slhEsc(_RPT.balances[1])}</small></h2>` + balTbl +
     `<h2>${_LT('movements')} <small>${_slhEsc(_RPT.movements[1])} (${mv.length})</small></h2>` + mvTbl +
     `<h2>${_LT('requests')} <small>${_slhEsc(_RPT.requests[1])} (${rq.length})</small></h2>` + rqTbl +
+    `<h2>WIP at this station <small>งานระหว่างทำ (${wip.length})</small></h2>` + wipTbl +
     _slhSignBlock();
-  _slhOpenPrint(body, _slhReportFilename(data,'daily'));
+  _slhOpenPrint(body, _slhReportFilename(data,'activity'));
+}
+
+// Report B — station INVENTORY: stock balances (opening / change / closing).
+async function slhPrintInventoryReport(){
+  let data; try{ data = await _slhFetchDailyReport(); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
+  const bal = data.balances||[];
+  const balTbl = bal.length
+    ? `<table><thead><tr><th>${_LH('material')}</th><th class="num">${_LH('opening')}</th>`+
+      `<th class="num">${_LH('change')}</th><th class="num">${_LH('closing')}</th></tr></thead><tbody>`+
+      bal.map(b=>`<tr><td>${_slhEsc(b.code)} ${_slhEsc(b.name)}</td>`+
+        `<td class="num">${_slhEsc(b.opening)} ${_slhEsc(b.unit||'')}</td>`+
+        `<td class="num">${b.change>0?'+':''}${_slhEsc(b.change)}</td>`+
+        `<td class="num">${_slhEsc(b.closing)} ${_slhEsc(b.unit||'')}</td></tr>`).join('')+
+      `</tbody></table>`
+    : `<div class="empty">${_LB('none')}</div>`;
+  const body = _slhCompanyHeader() +
+    `<h1>${_LT('title')} — Inventory <small>สต๊อกสถานี</small></h1>` +
+    `<div class="meta">${_LB('line')}: <b>${_slhEsc(data._lineLabel)}</b> &nbsp; ${_LB('station')}: <b>${_slhEsc(data._deptLabel)}</b> &nbsp; ${_LB('date')}: <b>${_slhEsc(data.date)}</b></div>` +
+    `<h2>${_LT('balances')} <small>${_slhEsc(_RPT.balances[1])}</small></h2>` + balTbl +
+    _slhSignBlock();
+  _slhOpenPrint(body, _slhReportFilename(data,'inventory'));
 }
 
 // ── Daily Review tab — edit-in-place corrections (audited; stock reconciles) ──

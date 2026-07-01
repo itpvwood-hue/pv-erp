@@ -2295,6 +2295,14 @@ def station_daily_report(department: str, line_id: Optional[str] = None,
     return {"date": day, "department": department, "line_id": line_id or '',
             "jobs": jobs, "movements": movements, "balances": balances, "requests": reqs}
 
+@app.get("/api/station/wip")
+def station_wip(department: str, line_id: Optional[str] = None,
+                user: dict = Depends(require_auth)):
+    """Active batches currently at a station (its WIP) — for the station's daily
+    Activity report. Reuses the line-board (batches grouped by current_department)."""
+    board = get_line_board(production_line=line_id or None)
+    return board.get(department, [])
+
 @app.patch("/api/station/job/{dept}/{log_id}")
 def correct_job_route(dept: str, log_id: str, body: dict, user: dict = Depends(require_auth)):
     """Daily-review correction of a completed-job log: {qty?, batch_id?}."""
