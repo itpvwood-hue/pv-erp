@@ -3844,9 +3844,9 @@ function renderStationCard(batch){
       ${multiRowPresetBar('laminating', bid)}
       <div class="p-2 mb-2 rounded" style="background:#fef9c3;border:1px solid #fde047">
         <div class="row g-2 align-items-end">
-          <div class="col-12"><label class="form-label small fw-semibold mb-1"><i class="bi bi-droplet-fill me-1 text-warning"></i>Real glue applied — whole batch (g/face, from the glue-up machine)</label></div>
-          <div class="col-6 col-md-3"><label class="form-label small mb-1">Face g/face</label>
-            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-glue-face" value="${_faceDef}" placeholder="g/face"></div>
+          <div class="col-12"><label class="form-label small fw-semibold mb-1"><i class="bi bi-droplet-fill me-1 text-warning"></i>Real glue applied — whole batch (g/face, from the glue-up machine) <span class="text-danger">*</span> <span class="text-muted fw-normal">required to move on</span></label></div>
+          <div class="col-6 col-md-3"><label class="form-label small mb-1">Face g/face <span class="text-danger">*</span></label>
+            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-glue-face" value="${_faceDef}" placeholder="g/face" oninput="this.classList.remove('is-invalid')"></div>
           <div class="col-6 col-md-3"><label class="form-label small mb-1">Back g/face</label>
             <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="lam-glue-back" value="${_backDef}" placeholder="g/face"></div>
           <div class="col-12 col-md-6"><small class="text-muted">Defaults to the BOM spec — set to the real usage. Logged once for the batch, not per table.</small></div>
@@ -4260,6 +4260,14 @@ async function submitAllLam(bid, moveAfter=false){
   // correctly as g/face × total pcs.
   const _faceG=parseFloat(document.getElementById('lam-glue-face')?.value)||null;
   const _backG=parseFloat(document.getElementById('lam-glue-back')?.value)||null;
+  // Real glue applied (g/face) is required before the batch can move onward — it
+  // drives the daily glue-utilization / waste calc. Logging without moving is
+  // allowed (the leader can fill it in before the "Log & Move").
+  if(moveAfter && !_faceG){
+    toast('Enter the real glue applied (Face g/face) before moving the batch','warning');
+    const gf=document.getElementById('lam-glue-face'); if(gf){ gf.classList.add('is-invalid'); gf.focus(); }
+    return;
+  }
   let ok=0, totalPcs=0;
   for(const r of _lamRows){
     const timeVal=parseInt(document.getElementById(`lam-time-${r.id}`)?.value)||0;
