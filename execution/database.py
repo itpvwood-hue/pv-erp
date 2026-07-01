@@ -2317,6 +2317,91 @@ def delete_fg_bom(sku_code: str) -> dict:
     finally:
         conn.close()
 
+def wipe_boms_not_in(keep_skus, dry_run=False) -> dict:
+    """Mirror-wipe for the BOM Replace mode: delete every active FG SKU (and its
+    bom_lines) whose code is NOT in keep_skus — but keep any SKU tied to live
+    sales-PO lines or production orders (same guard as delete_fg_bom) so active
+    work is never orphaned. Kept SKUs are reported with the reason.
+
+    dry_run=True returns the identical deleted / kept_in_use lists without
+    changing anything, so the upload-preview can show the real delete count."""
+    keep = {(c or '').strip().upper() for c in (keep_skus or []) if (c or '').strip()}
+    conn = get_db()
+    try:
+        skus = rows_to_list(conn.execute(
+            "SELECT id, code, name FROM skus WHERE is_active=1 ORDER BY code").fetchall())
+        deleted, kept = [], []
+        for s in skus:
+            code = (s.get('code') or '').strip()
+            info = {'code': code, 'name': s.get('name')}
+            if not code or code.upper() in keep:
+                continue
+            n_po = conn.execute(
+                "SELECT COUNT(*) FROM po_lines WHERE sku_id=?", (s['id'],)).fetchone()[0]
+            n_prod = conn.execute(
+                "SELECT COUNT(*) FROM production_orders WHERE sku_id=?", (s['id'],)).fetchone()[0]
+            reasons = []
+            if n_po:   reasons.append(f"{n_po} sales-PO line(s)")
+            if n_prod: reasons.append(f"{n_prod} production order(s)")
+            if reasons:
+                kept.append({**info, 'reason': ', '.join(reasons)}); continue
+            if dry_run:
+                deleted.append(info); continue
+            try:
+                conn.execute("DELETE FROM bom_lines WHERE sku_id=?", (s['id'],))
+                conn.execute("DELETE FROM skus WHERE id=?", (s['id'],))
+                deleted.append(info)
+            except sqlite3.IntegrityError:
+                kept.append({**info, 'reason': 'referenced'})
+        if not dry_run:
+            conn.commit()
+        return {"deleted": deleted, "kept_in_use": kept}
+    finally:
+        conn.close()
+
+# Category-label → internal materials.type code. CSV imports accept either the
+# user-facing label ("Glue and additives") or the internal code ("glue_formula");
+# both bulk_upsert_material and the upload-preview delete-scope calc normalise here.
+MATERIAL_TYPE_ALIAS = {
+    'veneer':            'veneer_sheet',
+    'veneers':           'veneer_sheet',
+    'veneer_sheet':      'veneer_sheet',
+    'veneer sheet':      'veneer_sheet',
+    'board':             'core_board',
+    'boards':            'core_board',
+    'core_board':        'core_board',
+    'core board':        'core_board',
+    # Anything in the "Consumables bucket"
+    'consumable':        'adhesive',
+    'consumables':       'adhesive',
+    'adhesive':          'adhesive',
+    'chemical':          'adhesive',
+    'edge_banding':      'adhesive',
+    'glue':              'glue_formula',
+    'glues':             'glue_formula',
+    'glue and additives':'glue_formula',
+    'glue and additive': 'glue_formula',
+    'glue_formula':      'glue_formula',
+    'glue formula':      'glue_formula',
+    'additive':          'glue_formula',
+    'additives':         'glue_formula',
+    'packing':           'packing',
+    'packaging':         'packing',
+    'pack':              'packing',
+    'other':             'other',
+    'others':            'other',
+    'misc':              'other',
+    'miscellaneous':     'other',
+}
+
+def normalize_material_type(t):
+    """Map a user-facing category label to the internal materials.type code.
+    Unknown values pass through lower-cased (matches the prior inline behaviour)."""
+    if t is None:
+        return ''
+    raw = str(t).strip().lower()
+    return MATERIAL_TYPE_ALIAS.get(raw, raw)
+
 def bulk_upsert_material(data):
     """
     Upsert a material. Looks up existing row by code first, then by name.
@@ -2351,40 +2436,8 @@ def bulk_upsert_material(data):
 
     # Normalise category labels to internal type codes so CSV imports work
     # regardless of whether the user-facing label or the internal code is used.
-    _TYPE_ALIAS = {
-        'veneer':            'veneer_sheet',
-        'veneers':           'veneer_sheet',
-        'veneer_sheet':      'veneer_sheet',
-        'veneer sheet':      'veneer_sheet',
-        'board':             'core_board',
-        'boards':            'core_board',
-        'core_board':        'core_board',
-        'core board':        'core_board',
-        # Anything in the "Consumables bucket"
-        'consumable':        'adhesive',
-        'consumables':       'adhesive',
-        'adhesive':          'adhesive',
-        'chemical':          'adhesive',
-        'edge_banding':      'adhesive',
-        'glue':              'glue_formula',
-        'glues':             'glue_formula',
-        'glue and additives':'glue_formula',
-        'glue and additive': 'glue_formula',
-        'glue_formula':      'glue_formula',
-        'glue formula':      'glue_formula',
-        'additive':          'glue_formula',
-        'additives':         'glue_formula',
-        'packing':           'packing',
-        'packaging':         'packing',
-        'pack':              'packing',
-        'other':             'other',
-        'others':            'other',
-        'misc':              'other',
-        'miscellaneous':     'other',
-    }
     if data.get('type'):
-        raw_t = str(data['type']).strip().lower()
-        data['type'] = _TYPE_ALIAS.get(raw_t, raw_t)
+        data['type'] = normalize_material_type(data['type'])
 
     # Existing row column set (so we don't crash if a column is absent in older DBs)
     existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(materials)").fetchall()}
@@ -2434,11 +2487,15 @@ def bulk_upsert_material(data):
     return {'id': mid, 'name': name, 'code': fields['code'],
             'type': fields['type'], 'action': action}
 
-def purge_unused_materials(scope_types, keep_codes) -> dict:
+def purge_unused_materials(scope_types, keep_codes, dry_run=False) -> dict:
     """Mirror-delete: remove materials whose type is in scope_types and whose
     code is NOT in keep_codes — but ONLY when truly unused (no BOM line, no
     received lot, no glue-recipe link, and zero stock in every bucket).
-    Materials still in use are kept and reported with the reason."""
+    Materials still in use are kept and reported with the reason.
+
+    dry_run=True computes exactly the same deleted / kept_in_use lists but makes
+    NO changes — used by the upload-preview to show the operator the real delete
+    count before they confirm a Replace."""
     scope = [t for t in (scope_types or []) if t]
     if not scope:
         return {"deleted": [], "kept_in_use": []}
@@ -2470,12 +2527,15 @@ def purge_unused_materials(scope_types, keep_codes) -> dict:
                 reasons.append('glue link')
             if reasons:
                 kept.append({**info, 'reason': ', '.join(reasons)}); continue
+            if dry_run:
+                deleted.append(info); continue
             try:
                 conn.execute("DELETE FROM materials WHERE id=?", (m['id'],))
                 deleted.append(info)
             except sqlite3.IntegrityError:
                 kept.append({**info, 'reason': 'referenced'})
-        conn.commit()
+        if not dry_run:
+            conn.commit()
         return {"deleted": deleted, "kept_in_use": kept}
     finally:
         conn.close()
@@ -4616,6 +4676,78 @@ def get_fc_movements(limit=50, mat_type=None):
     rows.sort(key=lambda r: (r.get('ts') or ''), reverse=True)
     conn.close()
     return rows[:limit]
+
+
+def get_fc_activity_report(date=None):
+    """FC daily ACTIVITY data for one day: per-material movements IN and OUT.
+    IN  = WH→FC transfers. OUT = releases FC→laminating (each released batch
+    expanded to its board + veneers at their CURRENT code) and returns FC→WH.
+    Intra-FC regrades/resizes are excluded — a grade change is reported only when
+    the veneer leaves FC, via the out-movement's current (final-grade) code."""
+    if not date:
+        date = datemod.today().isoformat()
+    out = []
+    # IN (transfers) + OUT (returns) come straight from the per-material FC log.
+    for mv in get_fc_movements(limit=1000):
+        if (mv.get('ts') or '')[:10] != date:
+            continue
+        kind = mv.get('kind')
+        if kind == 'TRANSFER_IN':
+            direction, typ = 'IN', 'In ← WH'
+        elif kind == 'RETURN_TO_WH':
+            direction, typ = 'OUT', 'Out → WH (return)'
+        else:
+            continue  # RELEASE_TO_LAM expanded below; REGRADE/RESIZE excluded
+        out.append({'ts': mv.get('ts'), 'direction': direction, 'type': typ,
+                    'po': '', 'batch': mv.get('ref') or '', 'line': '',
+                    'material_code': mv.get('material_code') or '',
+                    'material_name': mv.get('material_name') or '',
+                    'material_type': mv.get('material_type') or '',
+                    'qty': mv.get('qty') or 0, 'unit': mv.get('unit') or ''})
+    # OUT — releases FC→laminating, expanded into board + veneer rows.
+    conn = get_db()
+    try:
+        rels = rows_to_list(conn.execute("""
+            SELECT bm.moved_at, COALESCE(bm.quantity, b.quantity) AS pallets,
+                   b.batch_number, po.id AS prod_order_id, po.production_line,
+                   s.code AS sku_code, pur.po_number
+            FROM batch_movements bm
+            JOIN batches b ON b.id = bm.batch_id
+            JOIN production_orders po ON po.id = b.prod_order_id
+            LEFT JOIN skus s ON s.id = po.sku_id
+            LEFT JOIN purchase_orders pur ON pur.id = po.po_id
+            WHERE bm.from_department='fc' AND bm.to_department='laminating'
+              AND DATE(bm.moved_at)=?
+            ORDER BY bm.moved_at
+        """, (date,)).fetchall())
+    finally:
+        conn.close()
+    for r in rels:
+        pallets = float(r.get('pallets') or 0)
+        common = {'ts': r.get('moved_at'), 'direction': 'OUT', 'type': 'Out → Laminating',
+                  'po': r.get('po_number') or '', 'batch': r.get('batch_number') or '',
+                  'line': r.get('production_line') or ''}
+        bom = get_structured_bom(r.get('sku_code')) if r.get('sku_code') else None
+        if isinstance(bom, dict) and bom.get('base_board'):
+            bb = bom['base_board']
+            out.append({**common, 'material_code': bb.get('code') or '', 'material_name': bb.get('name') or '',
+                        'material_type': 'core_board', 'qty': round(pallets * float(bb.get('qty') or 0), 2),
+                        'unit': bb.get('unit') or 'pcs'})
+        alloc = get_veneer_alloc(r.get('prod_order_id')) if r.get('prod_order_id') else []
+        if alloc:
+            for a in alloc:
+                out.append({**common, 'material_code': a.get('material_code') or '', 'material_name': a.get('material_name') or '',
+                            'material_type': 'veneer_sheet', 'qty': round(float(a.get('qty_allocated') or 0), 2),
+                            'unit': a.get('unit') or 'pcs'})
+        elif isinstance(bom, dict):
+            for key in ('face_veneer', 'back_veneer'):
+                v = bom.get(key)
+                if v and v.get('code'):
+                    out.append({**common, 'material_code': v.get('code'), 'material_name': v.get('name') or '',
+                                'material_type': 'veneer_sheet', 'qty': round(pallets * float(v.get('qty') or 0), 2),
+                                'unit': v.get('unit') or 'pcs'})
+    out.sort(key=lambda x: (x.get('ts') or ''))
+    return {'date': date, 'movements': out}
 
 
 def get_all_fc_batches():

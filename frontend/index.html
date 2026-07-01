@@ -106,6 +106,23 @@
   </div>
 </div>
 
+<!-- Bulk-upload confirmation (populated by dtConfirm() before every CSV import) -->
+<div class="modal fade" id="dtConfirmModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h5 class="modal-title" id="dtConfirm-title"><i class="bi bi-upload me-2"></i>Confirm bulk upload</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="dtConfirm-body"></div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm" id="dtConfirm-ok"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════ SIDEBAR ═══════════ -->
 <nav id="sidebar">
   <button id="sidebar-pin" type="button" title="Pin / unpin the sidebar" onclick="toggleSidebarPin(event)">
@@ -441,9 +458,13 @@
         <div class="fw-semibold">FC Station Raw Material Stock</div>
         <small class="text-muted">Veneers &amp; core boards at FC station. Request WH transfers or re-grade veneers between grades.</small>
       </div>
-      <div class="d-flex gap-2 flex-wrap">
-        <button class="btn btn-outline-dark btn-sm" onclick="fcPrintDailyReport()" title="Print/PDF the FC daily stock + activity report">
-          <i class="bi bi-printer me-1"></i>Daily Report
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <input type="date" class="form-control form-control-sm" id="fc-report-date" style="width:150px" title="Report date">
+        <button class="btn btn-outline-dark btn-sm" onclick="fcPrintActivityReport()" title="Print/PDF the FC daily material movements (in & out)">
+          <i class="bi bi-printer me-1"></i>Activity Report
+        </button>
+        <button class="btn btn-outline-dark btn-sm" onclick="fcPrintInventoryReport()" title="Print/PDF the FC stock on hand">
+          <i class="bi bi-printer me-1"></i>Inventory Report
         </button>
         <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#fc-dt-collapse">
           <i class="bi bi-tools me-1"></i>Data Tools
@@ -6153,14 +6174,95 @@ function dtUploadDrop(type, event, defaultType=''){
 async function _dtDoUpload(type, file, mode, defaultType=''){
   const rid = `dt-result-${type}`;
   const el = document.getElementById(rid);
-  const endpoint = type === 'inventory' ? '/api/upload/inventory' : '/api/upload/bom';
-  // Replace = mirror: deletes same-category materials missing from the file
-  // (only the truly unused). Confirm before this destructive step.
-  if(type==='inventory' && mode==='replace'){
-    if(!confirm('REPLACE (mirror) mode:\n\nThis imports the file AND deletes materials of the same category that are NOT in the file and are unused (no BOM, no stock, no received lots).\n\nMaterials still in use are kept. This cannot be undone. Continue?')){
-      el.innerHTML=''; return;
-    }
+  const noun = type === 'bom' ? 'FG BOM' : 'raw material';
+
+  // 1) Validate the CSV server-side (writes NOTHING) so we can show real row
+  //    counts and catch a bad/empty file BEFORE anything is committed.
+  el.innerHTML = '<div class="d-flex align-items-center gap-2 text-muted small"><div class="spinner-border spinner-border-sm"></div>Validating '+file.name+'…</div>';
+  let pv;
+  try{
+    const fd = new FormData(); fd.append('file', file);
+    const dt = (type==='inventory' && defaultType) ? `&default_type=${encodeURIComponent(defaultType)}` : '';
+    const r = await fetch(`/api/upload/preview?type=${type}&mode=${mode}${dt}`, {method:'POST', body:fd});
+    pv = await r.json();
+    if(!r.ok) throw new Error(pv.detail || 'Validation failed');
+  }catch(e){
+    el.innerHTML = `<div class="alert alert-danger py-2 small"><i class="bi bi-exclamation-triangle me-1"></i>Could not read the file: ${e.message}</div>`;
+    return;
   }
+
+  // 2) Nothing importable → stop; don't open the confirm dialog.
+  if(!pv.valid_rows){
+    let h = `<div class="alert alert-danger py-2 small"><i class="bi bi-exclamation-triangle me-1"></i>No valid rows found in <strong>${file.name}</strong> — nothing to import.</div>`;
+    if(pv.errors?.length) h += _dtIssueBox('warning', `${pv.errors.length} row(s) with problems`, pv.errors);
+    el.innerHTML = h;
+    return;
+  }
+
+  // 3) Build + show the confirmation popup with the real counts.
+  const n = pv.valid_rows;
+  let body = '';
+  if(mode === 'replace'){
+    const del = pv.delete_count || 0;
+    body += `<p class="mb-2">This will <strong>edit / add ${noun}</strong> for <strong>${n}</strong> row${n===1?'':'s'} from <code>${file.name}</code>.</p>`;
+    body += `<div class="alert alert-danger py-2 small mb-2"><i class="bi bi-trash me-1"></i>This will <strong>delete ${del}</strong> existing ${noun} row${del===1?'':'s'} not in the file.${pv.delete_sample?.length?'<br><span class="text-muted">'+pv.delete_sample.slice(0,12).join(', ')+(del>12?` …+${del-12}`:'')+'</span>':''}</div>`;
+    if(pv.kept_count) body += `<p class="small text-muted mb-2"><i class="bi bi-shield-check me-1 text-success"></i>${pv.kept_count} not in the file kept (still in use — not deleted).</p>`;
+    body += `<p class="small text-danger mb-0"><strong>This cannot be undone.</strong></p>`;
+  } else {
+    body += `<p class="mb-2">This will <strong>edit and add ${noun}</strong> for <strong>${n}</strong> row${n===1?'':'s'} from <code>${file.name}</code>.</p>`;
+    body += `<p class="small text-muted mb-0">Existing rows are updated; new rows are inserted. Nothing is deleted.</p>`;
+  }
+  if(pv.invalid_rows) body += _dtIssueBox('warning', `${pv.invalid_rows} row(s) will be skipped`, pv.errors);
+  if(pv.warnings?.length) body += _dtIssueBox('info', `${pv.warnings.length} warning(s)`, pv.warnings);
+
+  const ok = await dtConfirm({
+    title:   mode==='replace' ? '<i class="bi bi-exclamation-triangle me-2 text-danger"></i>Confirm Replace (wipe & re-import)'
+                              : '<i class="bi bi-upload me-2"></i>Confirm Add / Update',
+    bodyHtml: body,
+    okLabel:  mode==='replace' ? '<i class="bi bi-trash me-1"></i>Accept &amp; Replace'
+                              : '<i class="bi bi-check-lg me-1"></i>Proceed',
+    okClass:  mode==='replace' ? 'btn-danger' : 'btn-primary',
+  });
+  if(!ok){ el.innerHTML=''; return; }
+
+  // 4) Commit for real.
+  await _dtCommit(type, file, mode, defaultType, el);
+}
+
+// Small alert box for a list of validation errors/warnings (first 6 shown).
+function _dtIssueBox(kind, heading, items){
+  items = items || [];
+  return `<div class="alert alert-${kind} py-2 small"><strong>${heading}:</strong><br>${items.slice(0,6).map(e=>'• '+e).join('<br>')}${items.length>6?`<br>…and ${items.length-6} more`:''}</div>`;
+}
+
+// Promise-based confirm dialog backed by #dtConfirmModal. Resolves true on
+// accept, false on cancel/dismiss. Listeners are torn down on hide so repeated
+// uploads never stack handlers.
+function dtConfirm({title, bodyHtml, okLabel, okClass}){
+  return new Promise(resolve=>{
+    const modalEl = document.getElementById('dtConfirmModal');
+    document.getElementById('dtConfirm-title').innerHTML = title;
+    document.getElementById('dtConfirm-body').innerHTML  = bodyHtml;
+    const okBtn = document.getElementById('dtConfirm-ok');
+    okBtn.className   = 'btn btn-sm ' + (okClass || 'btn-primary');
+    okBtn.innerHTML   = okLabel || 'Proceed';
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    let accepted = false;
+    const onOk   = ()=>{ accepted = true; modal.hide(); };
+    const onHide = ()=>{
+      okBtn.removeEventListener('click', onOk);
+      modalEl.removeEventListener('hidden.bs.modal', onHide);
+      resolve(accepted);
+    };
+    okBtn.addEventListener('click', onOk);
+    modalEl.addEventListener('hidden.bs.modal', onHide);
+    modal.show();
+  });
+}
+
+async function _dtCommit(type, file, mode, defaultType, el){
+  const endpoint = type === 'inventory' ? '/api/upload/inventory' : '/api/upload/bom';
+  const noun = type === 'bom' ? 'BOM' : 'material';
   el.innerHTML = '<div class="d-flex align-items-center gap-2 text-muted small"><div class="spinner-border spinner-border-sm"></div>Uploading '+file.name+'…</div>';
   try{
     const fd = new FormData(); fd.append('file', file);
@@ -6170,15 +6272,18 @@ async function _dtDoUpload(type, file, mode, defaultType=''){
     if(!r.ok) throw new Error(data.detail || 'Upload failed');
     const modeLabel = mode === 'replace' ? 'replaced' : 'imported';
     let h = `<div class="alert alert-success py-2 small"><i class="bi bi-check-circle me-1"></i><strong>${data.processed}</strong> rows ${modeLabel} successfully (mode: ${mode})</div>`;
-    if(data.errors?.length) h += `<div class="alert alert-warning py-2 small"><strong>${data.errors.length} row(s) skipped:</strong><br>${data.errors.slice(0,6).map(e=>'• '+e).join('<br>')}${data.errors.length>6?`<br>…and ${data.errors.length-6} more`:''}</div>`;
-    if(data.warnings?.length) h += `<div class="alert alert-info py-2 small"><strong>${data.warnings.length} warning(s):</strong><br>${data.warnings.slice(0,6).map(e=>'• '+e).join('<br>')}${data.warnings.length>6?`<br>…and ${data.warnings.length-6} more`:''}</div>`;
+    if(data.errors?.length) h += _dtIssueBox('warning', `${data.errors.length} row(s) skipped`, data.errors);
+    if(data.warnings?.length) h += _dtIssueBox('info', `${data.warnings.length} warning(s)`, data.warnings);
     if(typeof data.purged_count === 'number'){
-      h += `<div class="alert alert-${data.purged_count?'info':'light border'} py-2 small"><i class="bi bi-trash me-1"></i><strong>${data.purged_count}</strong> unused material(s) not in the file were deleted${data.purged_count?': '+data.purged.slice(0,12).map(p=>p.code).join(', ')+(data.purged.length>12?` …+${data.purged.length-12}`:''):''}</div>`;
+      h += `<div class="alert alert-${data.purged_count?'info':'light border'} py-2 small"><i class="bi bi-trash me-1"></i><strong>${data.purged_count}</strong> ${noun}(s) not in the file were deleted${data.purged_count?': '+data.purged.slice(0,12).map(p=>p.code).join(', ')+(data.purged.length>12?` …+${data.purged.length-12}`:''):''}</div>`;
       if(data.kept_in_use?.length) h += `<div class="alert alert-light border py-2 small"><i class="bi bi-shield-check me-1 text-success"></i><strong>${data.kept_in_use.length}</strong> not in the file but kept (still in use): ${data.kept_in_use.slice(0,12).map(k=>k.code+' ('+k.reason+')').join(', ')}${data.kept_in_use.length>12?` …+${data.kept_in_use.length-12}`:''}</div>`;
     }
     el.innerHTML = h;
-    if(type==='inventory') loadMaterials();
-    else if(type==='bom') loadBom();
+    // Refresh the list, but never let a refresh error mask a successful import.
+    try{
+      if(type==='inventory') loadMaterials();
+      else if(type==='bom') loadBom();
+    }catch(_){ /* list refresh is best-effort */ }
   }catch(e){
     el.innerHTML = `<div class="alert alert-danger py-2 small"><i class="bi bi-exclamation-triangle me-1"></i>${e.message}</div>`;
   }

@@ -7952,6 +7952,7 @@ function fcRenderGrid(){
 }
 
 async function fcLoadStock(){
+  const _rd=document.getElementById('fc-report-date'); if(_rd && !_rd.value) _rd.value=new Date().toISOString().slice(0,10);
   const [mats, transfers] = await Promise.all([
     api('/api/fc/stock').catch(()=>[]),
     api('/api/fc/transfer-requests').catch(()=>[]),
@@ -8414,97 +8415,66 @@ async function fcLoadResizeLog(){
 // Reuses the shared SLH report helpers (_slhOpenPrint / _slhCompanyHeader /
 // _SLH_REPORT_CSS / _slhEsc). Shows current FC department stock (veneers +
 // boards, incl. any regraded/resized stock) plus today's FC activity.
-async function fcPrintDailyReport(){
-  let mats, mv;
-  try{
-    [mats, mv] = await Promise.all([
-      api('/api/fc/stock').catch(()=>[]),
-      api('/api/fc/movements?limit=200').catch(()=>[]),
-    ]);
-  }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
+function _fcRptDate(){ return document.getElementById('fc-report-date')?.value || new Date().toISOString().slice(0,10); }
+const _FC_SIGN = `<div class="sign">
+      <div class="box"><div class="line">FC — ลงชื่อ / วันที่</div></div>
+      <div class="box"><div class="line">ผู้ควบคุม — ลงชื่อ / วันที่</div></div>
+    </div>`;
 
-  const esc = _slhEsc;
-  const today = new Date().toISOString().slice(0,10);
+// Report B — FC INVENTORY (current stock on hand, veneers + boards).
+async function fcPrintInventoryReport(date){
+  date = date || _fcRptDate();
+  let mats;
+  try{ mats = await api('/api/fc/stock'); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
+  const esc=_slhEsc;
   const num = n => (Number(n)||0).toLocaleString(undefined,{maximumFractionDigits:2});
   const money = n => '฿'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const dims = m => [m.width_mm,m.length_mm].filter(Boolean).join('×');
-
-  const inFc = (mats||[]).filter(m=>(m.fc_stock||0)>0);
-  const veneers = inFc.filter(m=>m.type==='veneer_sheet');
-  const boards  = inFc.filter(m=>m.type==='core_board');
-
-  // FC stock is valued at its FC cost basis (fc_unit_cost) — for veneers this is
-  // the running average of all regrades; for anything without an FC basis it
-  // falls back to the warehouse unit_cost.
   const fcCost = m => (m.fc_unit_cost!=null ? Number(m.fc_unit_cost) : (Number(m.unit_cost)||0));
-
-  // ── Section 1: Veneers on hand ──
-  let vTot=0, vVal=0;
-  const vRows = veneers.map(m=>{
-    const uc=fcCost(m); const val=(Number(m.fc_stock)||0)*uc; vTot+=Number(m.fc_stock)||0; vVal+=val;
-    return `<tr>
-      <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
-      <td>${esc(m.species||'')}</td><td>${esc(m.grade||'')}</td>
-      <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
-      <td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;
-  }).join('');
-  const vTbl = veneers.length
-    ? `<table><thead><tr><th>Code</th><th>Name</th><th>Species</th><th>Grade</th>`+
-      `<th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead>`+
-      `<tbody>${vRows}</tbody><tfoot><tr><td colspan="4">Total — ${veneers.length} veneer code(s)</td>`+
-      `<td class="num">${num(vTot)}</td><td></td><td></td><td class="num">${money(vVal)}</td></tr></tfoot></table>`
-    : `<div class="empty">No veneers currently at FC.</div>`;
-
-  // ── Section 2: Boards on hand ──
-  let bTot=0, bVal=0;
-  const bRows = boards.map(m=>{
-    const uc=fcCost(m); const val=(Number(m.fc_stock)||0)*uc; bTot+=Number(m.fc_stock)||0; bVal+=val;
-    return `<tr>
-      <td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td>
-      <td>${esc(dims(m))}</td>
-      <td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td>
-      <td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;
-  }).join('');
-  const bTbl = boards.length
-    ? `<table><thead><tr><th>Code</th><th>Name</th><th>Dims (mm)</th>`+
-      `<th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead>`+
-      `<tbody>${bRows}</tbody><tfoot><tr><td colspan="3">Total — ${boards.length} board code(s)</td>`+
-      `<td class="num">${num(bTot)}</td><td></td><td></td><td class="num">${money(bVal)}</td></tr></tfoot></table>`
-    : `<div class="empty">No boards currently at FC.</div>`;
-
-  // ── Section 3: Today's FC activity ──
-  // Internal re-grading is intentionally EXCLUDED — the report only needs what
-  // enters/leaves FC and the final grade coming out, not the regrade churn.
-  const kindLabel={TRANSFER_IN:'Transfer In (WH→FC)',RETURN_TO_WH:'Return to WH',
-    RESIZE:'Resize',RELEASE_TO_LAM:'Released to Lam'};
-  const todayMv = (mv||[]).filter(r=>(r.ts||'').slice(0,10)===today && r.kind!=='REGRADE');
-  const aRows = todayMv.map(r=>`<tr>
-      <td>${esc((r.ts||'').replace('T',' ').slice(11,16))}</td>
-      <td>${esc(kindLabel[r.kind]||r.kind)}</td>
-      <td>${esc(r.material_name||'')}${r.material_code?' <small>('+esc(r.material_code)+')</small>':''}</td>
-      <td>${esc(r.from_loc||'')} → ${esc(r.to_loc||'')}</td>
-      <td class="num">${num(r.qty)} ${esc(r.unit||'')}</td>
-      <td>${esc(r.actor||r.requested_by||'')}</td>
-      <td>${esc(r.notes||'')}</td></tr>`).join('');
-  const aTbl = todayMv.length
-    ? `<table><thead><tr><th>Time</th><th>Activity</th><th>Item</th><th>From → To</th>`+
-      `<th class="num">Qty</th><th>By</th><th>Notes</th></tr></thead><tbody>${aRows}</tbody></table>`
-    : `<div class="empty">No FC activity recorded today.</div>`;
-
-  const body = `
-    ${_slhCompanyHeader()}
-    <h1>FC (Feed Center) Daily Report <small>รายงานประจำวัน — Feed Center</small></h1>
-    <div class="meta"><b>Date:</b> ${esc(today)} &nbsp;·&nbsp; <b>Total FC value:</b> ${money(vVal+bVal)}</div>
+  const inFc=(mats||[]).filter(m=>(m.fc_stock||0)>0);
+  const veneers=inFc.filter(m=>m.type==='veneer_sheet'), boards=inFc.filter(m=>m.type==='core_board');
+  let vTot=0,vVal=0; const vRows=veneers.map(m=>{ const uc=fcCost(m),val=(Number(m.fc_stock)||0)*uc; vTot+=Number(m.fc_stock)||0; vVal+=val;
+    return `<tr><td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td><td>${esc(m.species||'')}</td><td>${esc(m.grade||'')}</td><td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td><td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;}).join('');
+  const vTbl=veneers.length?`<table><thead><tr><th>Code</th><th>Name</th><th>Species</th><th>Grade</th><th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead><tbody>${vRows}</tbody><tfoot><tr><td colspan="4">Total — ${veneers.length} veneer code(s)</td><td class="num">${num(vTot)}</td><td></td><td></td><td class="num">${money(vVal)}</td></tr></tfoot></table>`:`<div class="empty">No veneers currently at FC.</div>`;
+  let bTot=0,bVal=0; const bRows=boards.map(m=>{ const uc=fcCost(m),val=(Number(m.fc_stock)||0)*uc; bTot+=Number(m.fc_stock)||0; bVal+=val;
+    return `<tr><td>${esc(m.code||'—')}</td><td>${esc(m.name||'')}</td><td>${esc(dims(m))}</td><td class="num">${num(m.fc_stock)}</td><td>${esc(m.unit||'')}</td><td class="num">${money(uc)}</td><td class="num">${money(val)}</td></tr>`;}).join('');
+  const bTbl=boards.length?`<table><thead><tr><th>Code</th><th>Name</th><th>Dims (mm)</th><th class="num">FC Qty</th><th>Unit</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead><tbody>${bRows}</tbody><tfoot><tr><td colspan="3">Total — ${boards.length} board code(s)</td><td class="num">${num(bTot)}</td><td></td><td></td><td class="num">${money(bVal)}</td></tr></tfoot></table>`:`<div class="empty">No boards currently at FC.</div>`;
+  const body=`${_slhCompanyHeader()}
+    <h1>FC (Feed Center) — Inventory Report <small>สต๊อกคงเหลือ — Feed Center</small></h1>
+    <div class="meta"><b>As of:</b> ${esc(date)} &nbsp;·&nbsp; <b>Total FC value:</b> ${money(vVal+bVal)} <span style="color:#777">(current stock on hand)</span></div>
     <h2>Veneers on hand <small>at FC station</small></h2>${vTbl}
     <h2>Core Boards on hand <small>at FC station</small></h2>${bTbl}
-    <h2>Today's FC Activity <small>transfers in · resizes · releases / returns out</small></h2>${aTbl}
-    <div class="sign">
-      <div class="box"><div class="line">FC — ลงชื่อ / วันที่</div></div>
-      <div class="box"><div class="line">ผู้ควบคุม — ลงชื่อ / วันที่</div></div>
-    </div>
+    ${_FC_SIGN}
     <div class="foot">Generated by PVWood ERP — ${esc(new Date().toLocaleString())}</div>`;
+  _slhOpenPrint(body, `${date}_FC_inventory`);
+}
 
-  _slhOpenPrint(body, `${today}_FC_daily_stock`);
+// Report A — FC ACTIVITY (per-material movements in + out for the day).
+async function fcPrintActivityReport(date){
+  date = date || _fcRptDate();
+  let rep;
+  try{ rep = await api(`/api/fc/activity-report?date=${encodeURIComponent(date)}`); }catch(e){ toast('Report failed: '+(e.message||e),'danger'); return; }
+  const esc=_slhEsc;
+  const num = n => (Number(n)||0).toLocaleString(undefined,{maximumFractionDigits:2});
+  const mv=(rep&&rep.movements)||[];
+  const rows=mv.map(m=>`<tr>
+      <td>${esc((m.ts||'').replace('T',' ').slice(11,16))}</td>
+      <td>${m.direction==='IN'?'⬇ IN':'⬆ OUT'}</td>
+      <td>${esc(m.type||'')}</td>
+      <td>${esc(m.po||'')}</td>
+      <td>${esc(m.batch||'')}</td>
+      <td>${esc(m.line||'')}</td>
+      <td>${esc(m.material_code||'')}${m.material_name?' <small>'+esc(m.material_name)+'</small>':''}</td>
+      <td>${m.material_type==='veneer_sheet'?'veneer':m.material_type==='core_board'?'board':esc(m.material_type||'')}</td>
+      <td class="num">${num(m.qty)} ${esc(m.unit||'')}</td></tr>`).join('');
+  const tbl=mv.length?`<table><thead><tr><th>Time</th><th>Dir</th><th>Type</th><th>PO#</th><th>Batch#</th><th>Line</th><th>Material</th><th>Kind</th><th class="num">Qty</th></tr></thead><tbody>${rows}</tbody></table>`:`<div class="empty">No FC material movements on this day.</div>`;
+  const body=`${_slhCompanyHeader()}
+    <h1>FC (Feed Center) — Activity Report <small>การเคลื่อนไหววัสดุ — Feed Center</small></h1>
+    <div class="meta"><b>Date:</b> ${esc(date)} &nbsp;·&nbsp; <b>${mv.length}</b> material movement(s) in / out</div>
+    <h2>Raw material movements <small>in (WH→FC) · out (releases to laminating &amp; returns to WH) — regrades excluded</small></h2>${tbl}
+    ${_FC_SIGN}
+    <div class="foot">Generated by PVWood ERP — ${esc(new Date().toLocaleString())}</div>`;
+  _slhOpenPrint(body, `${date}_FC_activity`);
 }
 
 async function fcLoadMovements(){

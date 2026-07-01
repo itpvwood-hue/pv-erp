@@ -102,7 +102,7 @@ from database import (
     cancel_consumable_request, get_dept_cost_summary, get_dept_cost_detail,
     get_consumable_materials,
     # FC Station stock / transfer requests
-    get_fc_stock_materials, get_fc_transfer_requests, get_fc_movements,
+    get_fc_stock_materials, get_fc_transfer_requests, get_fc_movements, get_fc_activity_report,
     get_fg_warehouse_dashboard, receive_batch_to_warehouse,
     get_accounting_stock_movements, get_accounting_production_output, get_accounting_summary,
     # Purchasing
@@ -148,6 +148,7 @@ from database import (
     add_packing_line, delete_packing_line,
     update_material_price, get_material_usage,
     get_structured_bom, save_bom_for_sku,
+    purge_unused_materials, wipe_boms_not_in, normalize_material_type,
 )
 from claude_ai import query_bom, generate_production_report, check_capacity, extract_po_from_pdf
 try:
@@ -1153,7 +1154,114 @@ async def upload_bom(file: UploadFile = File(...), mode: str = "add"):
             results.append(sku)
         except Exception as e:
             errors.append(f"Row {i} ({sku}): {e}")
-    return {"processed": len(results), "errors": errors, "warnings": warnings, "mode": mode}
+
+    # Replace = wipe & re-import: after upserting the file's SKUs, mirror-delete
+    # every OTHER active FG SKU (and its BOM) that isn't tied to live orders /
+    # production. SKUs still in use are kept and reported.
+    out = {"processed": len(results), "errors": errors, "warnings": warnings, "mode": mode}
+    if mode == "replace" and results:
+        wipe = wipe_boms_not_in(keep_skus={s.upper() for s in results})
+        out["purged"]       = wipe["deleted"]
+        out["purged_count"] = len(wipe["deleted"])
+        out["kept_in_use"]  = wipe["kept_in_use"]
+    return out
+
+@app.post("/api/upload/preview")
+async def upload_preview(file: UploadFile = File(...), type: str = "inventory",
+                         mode: str = "add", default_type: str = ""):
+    """Dry-run a bulk upload so the UI can confirm before committing.
+
+    Parses + validates the CSV exactly like /api/upload/{inventory,bom} but
+    writes NOTHING. Returns row counts, per-row validation errors/warnings, and
+    — for Replace mode — the real number of existing rows that would be
+    mirror-deleted (materials or FG SKUs not present in the file), so the
+    confirmation popup can show 'will add/update N' and 'will delete M'.
+    """
+    content = await file.read()
+    kind = (type or "inventory").strip().lower()
+
+    # ── BOM preview ──
+    if kind == "bom":
+        try:
+            text = content.decode("utf-8-sig")
+        except Exception:
+            text = content.decode("latin-1")
+        rows = list(csv.DictReader(io.StringIO(text)))
+        conn = get_db()
+        known_mat = {r[0].upper() for r in conn.execute(
+            "SELECT code FROM materials WHERE COALESCE(code,'')!=''").fetchall()}
+        known_glue = {r[0].upper() for r in conn.execute(
+            "SELECT recipe_code FROM glue_recipes WHERE COALESCE(recipe_code,'')!=''").fetchall()}
+        conn.close()
+        errors, warnings, skus = [], [], []
+        for i, raw in enumerate(rows, 1):
+            row = {(k or '').strip().lower().replace(' ', '_'): (v or '').strip()
+                   for k, v in raw.items()}
+            sku = row.get('product_sku') or row.get('sku_code') or ''
+            if not sku:
+                errors.append(f"Row {i}: missing product_sku"); continue
+            skus.append(sku)
+            for key in ('base_board_code', 'face_veneer_code', 'back_veneer_code'):
+                c = (row.get(key) or '').upper()
+                if c and c not in known_mat:
+                    warnings.append(f"Row {i} ({sku}): material '{row.get(key)}' not found — that line will be skipped.")
+            for key in ('face_glue_code', 'back_glue_code'):
+                c = (row.get(key) or '').upper()
+                if c and c not in known_glue and c not in known_mat:
+                    warnings.append(f"Row {i} ({sku}): glue '{row.get(key)}' not found — that line will be skipped.")
+        out = {"type": "bom", "mode": mode, "total_rows": len(rows),
+               "valid_rows": len(skus), "invalid_rows": len(errors),
+               "errors": errors, "warnings": warnings}
+        if mode == "replace" and skus:
+            wipe = wipe_boms_not_in(keep_skus={s.upper() for s in skus}, dry_run=True)
+            out["delete_count"]  = len(wipe["deleted"])
+            out["delete_sample"] = [d["code"] for d in wipe["deleted"][:20]]
+            out["kept_count"]    = len(wipe["kept_in_use"])
+        return out
+
+    # ── inventory (raw materials) preview ──
+    for enc in ('utf-8-sig', 'cp1252', 'latin-1'):
+        try:
+            text = content.decode(enc); break
+        except UnicodeDecodeError:
+            continue
+    rows_csv = list(csv.DictReader(io.StringIO(text)))
+    rows_csv = [{k.strip().lower().replace(' ', '_'): (v.strip() if v else '')
+                 for k, v in r.items()} for r in rows_csv]
+
+    def _has_data(row):
+        return any(row.get(k) for k in ('code', 'name', 'acc_code'))
+    real_rows = [(i+1, r) for i, r in enumerate(rows_csv) if _has_data(r)]
+
+    errors, seen_codes = [], {}
+    valid, scope_types = 0, set()
+    keep_codes = {(r.get('code') or '').strip()
+                  for _, r in real_rows if (r.get('code') or '').strip()}
+    for src_lineno, row in real_rows:
+        if not row.get('name'):
+            errors.append(f"Row {src_lineno}: missing 'name' (had code={row.get('code') or '?'})")
+            continue
+        _code = (row.get('code') or '').strip()
+        if _code:
+            _ck = _code.lower()
+            if _ck in seen_codes:
+                errors.append(f"Row {src_lineno}: duplicate code '{_code}' (already on row {seen_codes[_ck]}) — codes must be unique")
+                continue
+            seen_codes[_ck] = src_lineno
+        t = (row.get('type') or '').strip() or (default_type or '')
+        if t:
+            scope_types.add(normalize_material_type(t))
+        valid += 1
+
+    out = {"type": "inventory", "mode": mode, "total_rows": len(real_rows),
+           "valid_rows": valid, "invalid_rows": len(errors),
+           "errors": errors, "warnings": []}
+    if mode == "replace" and valid:
+        purge = purge_unused_materials({t for t in scope_types if t}, keep_codes, dry_run=True)
+        out["delete_count"]  = len(purge["deleted"])
+        out["delete_sample"] = [d["code"] for d in purge["deleted"][:20]]
+        out["kept_count"]    = len(purge["kept_in_use"])
+    return out
 
 def _esc_csv(v):
     if v is None: return ''
@@ -2554,6 +2662,13 @@ def list_fc_movements(limit: int = 50, material_type: Optional[str] = None,
                       user: dict = Depends(require_auth)):
     """Unified FC movement log — boards, veneers, regrades, releases to laminating."""
     return get_fc_movements(limit=limit, mat_type=material_type)
+
+@app.get("/api/fc/activity-report")
+def fc_activity_report(date: Optional[str] = None, user: dict = Depends(require_auth)):
+    """FC daily ACTIVITY: per-material movements IN (WH→FC) and OUT (releases to
+    laminating expanded to board + veneers, and returns to WH) for one day.
+    Excludes intra-FC regrades/resizes (grade shown only on the out-movement)."""
+    return get_fc_activity_report(date=date)
 
 # ── FG WAREHOUSE ──────────────────────────────────────────────
 @app.get("/api/fg-warehouse/dashboard")
