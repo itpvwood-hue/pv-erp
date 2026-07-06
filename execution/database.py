@@ -1130,9 +1130,10 @@ def init_db():
         # WLWH — a second physical storage location (boards + veneers), alongside
         # current_stock (WH) and fc_stock (FC). WH staff move stock between them.
         "ALTER TABLE materials ADD COLUMN wlwh_stock REAL DEFAULT 0",
-        # SPL — raw-material stock staged at the Veneer Slicing line (PVS / "SPL"
-        # station hub). A 4th material-level bucket parallel to current_stock (WH),
-        # wlwh_stock (WLWH) and fc_stock (FC); populated via raw-material bulk upload.
+        # SPL — raw-material stock staged at the Veneer Splicing line (catalog line
+        # PSP, the "SPL" station hub). A 4th material-level bucket parallel to
+        # current_stock (WH), wlwh_stock (WLWH) and fc_stock (FC); populated via
+        # raw-material bulk upload.
         "ALTER TABLE materials ADD COLUMN spl_stock REAL DEFAULT 0",
         # FC cost basis: a weighted-average cost for the veneer's FC stock, kept
         # SEPARATE from the warehouse unit_cost. Regrades within FC blend this (so
@@ -6114,6 +6115,96 @@ def _save_glue_recipe_impl(conn, data):
     # whenever the cost is read, so there is nothing to re-sync after a write.
     row = row_to_dict(conn.execute("SELECT * FROM glue_recipes WHERE id=?", (rid,)).fetchone())
     conn.close(); return row
+
+
+# ── Glue BOM (recipes): export / bulk import ─────────────────────────────────
+_GLUE_BOM_COLS = ("recipe_code,name,kind,veneer_thickness,wood_species,core_board,"
+                  "total_kg,e0_glue_kg,latex_g312_kg,flour_kg,yellow_pigment_kg,"
+                  "hardener_kg,red_pigment_kg,black_pigment_kg,titanium_kg,"
+                  "mix_time_min,notes")
+
+def get_glue_recipes_export() -> list:
+    """Active glue/bleach recipes as flat rows (the kg formula) — the Export CSV
+    shape, round-trippable via import_glue_recipe_row. Per-ingredient material
+    linking is NOT exported (it's DB-local ids); cost resolves via the standard
+    ingredient catalog codes on import."""
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT recipe_code, COALESCE(name,'') AS name, COALESCE(kind,'glue') AS kind,
+                   COALESCE(veneer_thickness,'') AS veneer_thickness,
+                   COALESCE(wood_species,'') AS wood_species,
+                   COALESCE(core_board,'') AS core_board,
+                   COALESCE(total_kg,0) AS total_kg,
+                   COALESCE(e0_glue_kg,0) AS e0_glue_kg,
+                   COALESCE(latex_g312_kg,0) AS latex_g312_kg,
+                   COALESCE(flour_kg,0) AS flour_kg,
+                   COALESCE(yellow_pigment_kg,0) AS yellow_pigment_kg,
+                   COALESCE(hardener_kg,0) AS hardener_kg,
+                   COALESCE(red_pigment_kg,0) AS red_pigment_kg,
+                   COALESCE(black_pigment_kg,0) AS black_pigment_kg,
+                   COALESCE(titanium_kg,0) AS titanium_kg,
+                   COALESCE(mix_time_min,20) AS mix_time_min,
+                   COALESCE(notes,'') AS notes
+            FROM glue_recipes WHERE COALESCE(is_active,1)=1
+            ORDER BY recipe_code
+        """).fetchall()
+        return rows_to_list(rows)
+    finally:
+        conn.close()
+
+def import_glue_recipe_row(row: dict) -> dict:
+    """Upsert one glue/bleach recipe from a CSV row keyed by recipe_code. A new
+    recipe also needs a name. total_kg auto-computes from the components when the
+    row leaves it blank. Delegates the write to save_glue_recipe."""
+    code = (row.get('recipe_code') or '').strip()
+    if not code:
+        raise ValueError("missing recipe_code")
+    conn = get_db()
+    try:
+        ex = conn.execute("SELECT id FROM glue_recipes WHERE recipe_code=?", (code,)).fetchone()
+        existing_id = ex['id'] if ex else None
+    finally:
+        conn.close()
+
+    def _num(key, default=0):
+        v = (row.get(key) or '').strip()
+        if v == '':
+            return default
+        try:
+            return float(v)
+        except ValueError:
+            raise ValueError(f"{key} must be a number (got '{v}')")
+
+    data = {
+        'recipe_code':       code,
+        'name':              (row.get('name') or '').strip(),
+        'kind':              (row.get('kind') or 'glue').strip() or 'glue',
+        'veneer_thickness':  (row.get('veneer_thickness') or '').strip(),
+        'wood_species':      (row.get('wood_species') or '').strip(),
+        'core_board':        (row.get('core_board') or '').strip(),
+        'e0_glue_kg':        _num('e0_glue_kg'),
+        'latex_g312_kg':     _num('latex_g312_kg'),
+        'flour_kg':          _num('flour_kg'),
+        'yellow_pigment_kg': _num('yellow_pigment_kg'),
+        'hardener_kg':       _num('hardener_kg'),
+        'red_pigment_kg':    _num('red_pigment_kg'),
+        'black_pigment_kg':  _num('black_pigment_kg'),
+        'titanium_kg':       _num('titanium_kg'),
+        'mix_time_min':      int(_num('mix_time_min', 20)),
+        'notes':             (row.get('notes') or '').strip(),
+    }
+    if (row.get('total_kg') or '').strip():
+        data['total_kg'] = _num('total_kg')
+
+    if existing_id:
+        data['id'] = existing_id
+        save_glue_recipe(data)
+        return {'recipe_code': code, 'action': 'updated'}
+    if not data['name']:
+        raise ValueError("new glue recipe needs a name")
+    save_glue_recipe(data)
+    return {'recipe_code': code, 'action': 'created'}
 
 # ═══════════════════════════════════════════════════════════════
 # ACCOUNTING — read-only aggregations for the Accounting department

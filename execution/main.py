@@ -51,6 +51,7 @@ from database import (
     get_manufacturing_lines, get_prod_machines,
     get_departments, get_line_flow, get_all_line_flows, get_stations,
     get_glue_recipes, save_glue_recipe, get_batch_glue_info, log_glue_mix_with_stock,
+    get_glue_recipes_export, import_glue_recipe_row,
     get_attendance, save_attendance, delete_attendance, get_attendance_summary,
     get_station_stock, get_station_stock_movements, log_station_stock_movement,
     get_station_day_jobs, get_station_day_balances,
@@ -1812,6 +1813,52 @@ async def upload_vcmx_bom(file: UploadFile = File(...), x_auth_token: str = Head
             processed.append(import_vcmx_bom_row(row, created_by=created_by))
         except Exception as e:
             errors.append(f"Row {i} ({row.get('sku_code','?')}): {e}")
+    return {"processed": len(processed), "errors": errors, "results": processed}
+
+# ── Glue BOM (recipes): export / template / bulk upload ──────────
+from database import _GLUE_BOM_COLS
+
+@app.get("/api/export/glue-bom")
+def export_glue_bom():
+    """Export all active glue/bleach recipes as flat CSV — matches the template."""
+    keys = _GLUE_BOM_COLS.split(",")
+    rows = [_GLUE_BOM_COLS]
+    for g in get_glue_recipes_export():
+        rows.append(",".join(_esc_csv(g.get(k, "")) for k in keys))
+    return _csv_response(rows, "glue_bom_export.csv")
+
+@app.get("/api/upload/template/glue-bom")
+def glue_bom_template():
+    # One row per glue/bleach recipe. Column layout is IDENTICAL to the Export CSV.
+    #   - recipe_code is the key; kind = glue | bleach
+    #   - the *_kg columns are the mix formula; total_kg auto-computes if blank
+    #   - ingredient→material linking uses the standard catalog codes (not in CSV)
+    rows = [
+        _GLUE_BOM_COLS,
+        "Glue 1,Standard E0 glue,glue,0.6,W.OAK,MDF,105,100,0,3,0,2,0,0,0,20,Everyday face glue",
+        "Glue 2,White-line glue,glue,0.3,W.BIRCH,MDF,102,100,0,0,0,2,0,0,0,20,",
+        "Bleach 1,Standard bleach,bleach,,,,50,0,0,0,0,0,0,0,0,15,Bleaching solution",
+    ]
+    return _csv_response(rows, "glue_bom_template.csv")
+
+@app.post("/api/upload/glue-bom")
+async def upload_glue_bom(file: UploadFile = File(...)):
+    """Bulk glue/bleach-recipe upload — one row per recipe, upsert by recipe_code."""
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except Exception:
+        text = content.decode("latin-1")
+    processed, errors = [], []
+    for i, raw in enumerate(csv.DictReader(io.StringIO(text)), 1):
+        row = {(k or "").strip().lower().replace(" ", "_"): (v or "").strip()
+               for k, v in raw.items()}
+        if not any(row.get(k) for k in ("recipe_code", "name")):
+            continue
+        try:
+            processed.append(import_glue_recipe_row(row))
+        except Exception as e:
+            errors.append(f"Row {i} ({row.get('recipe_code','?')}): {e}")
     return {"processed": len(processed), "errors": errors, "results": processed}
 
 # ══════════════════════════════════════════════════════════════

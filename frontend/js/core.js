@@ -42,7 +42,7 @@ async function authedDownload(url, filename){
 // into #resultElId, then calls the named reload fn. Simpler than the
 // inventory/BOM dtUpload (no dry-run preview / destructive replace) — these
 // pipelines are upsert-only (add / update by code).
-async function dtSimpleUpload(kind, inputEl, resultElId, reloadFnName){
+async function dtSimpleUpload(kind, inputEl, resultElId, reloadFn){
   const file = inputEl && inputEl.files && inputEl.files[0];
   if(!file) return;
   const el = document.getElementById(resultElId);
@@ -60,7 +60,12 @@ async function dtSimpleUpload(kind, inputEl, resultElId, reloadFnName){
          + data.errors.slice(0,15).map(e=>`<li>${esc(e)}</li>`).join('')
          + (data.errors.length>15?`<li>…+${data.errors.length-15} more</li>`:'') + `</ul></div>`;
     if(el) el.innerHTML = h;
-    if(reloadFnName && typeof window[reloadFnName]==='function'){ try{ window[reloadFnName](); }catch(_){ } }
+    // reloadFn may be a function OR the (string) name of a global no-arg reload fn.
+    if(reloadFn){
+      const fn = (typeof reloadFn==='function') ? reloadFn
+               : (typeof window[reloadFn]==='function' ? window[reloadFn] : null);
+      if(fn){ try{ fn(); }catch(_){ } }
+    }
   }catch(e){
     if(el) el.innerHTML = `<div class="alert alert-danger py-2 small mb-0"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message||e)}</div>`;
   }finally{

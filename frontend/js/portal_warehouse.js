@@ -2376,7 +2376,7 @@ function _locStockCells(m){
 }
 const _fscBadge = f=>f&&f!=='-'?`<span class="badge bg-success-subtle text-success border border-success" style="font-size:.65rem">${f}</span>`:'<span class="text-muted">—</span>';
 
-// FC (Feed Center) + SPL (Veneer Slicing line) stock columns — hidden by default,
+// FC (Feed Center) + SPL (Veneer Splicing line, PSP) stock columns — hidden by default,
 // revealed by the "FC / SPL stock" toggle on the Raw Materials toolbar. Boards &
 // veneers only (the only types with these buckets). Returns '' when the toggle is
 // off so the row column count matches the (un-augmented) header.
