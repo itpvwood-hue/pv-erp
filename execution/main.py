@@ -148,6 +148,7 @@ from database import (
     get_glue_recipes_with_ingredients,
     get_packing_skus_with_lines, save_packing_sku, delete_packing_sku,
     add_packing_line, delete_packing_line,
+    get_packing_skus_export, import_packing_sku,
     update_material_price, get_material_usage,
     get_structured_bom, save_bom_for_sku,
     purge_unused_materials, wipe_boms_not_in, normalize_material_type,
@@ -1859,6 +1860,81 @@ async def upload_glue_bom(file: UploadFile = File(...)):
             processed.append(import_glue_recipe_row(row))
         except Exception as e:
             errors.append(f"Row {i} ({row.get('recipe_code','?')}): {e}")
+    return {"processed": len(processed), "errors": errors, "results": processed}
+
+# ── Packing BOM: export / template / bulk upload ─────────────────
+from database import _PACKING_BOM_COLS
+
+@app.get("/api/export/packing-bom")
+def export_packing_bom():
+    """Export all active packing SKUs as flat CSV (one row per line) — matches the template."""
+    keys = _PACKING_BOM_COLS.split(",")
+    rows = [_PACKING_BOM_COLS]
+    for r in get_packing_skus_export():
+        rows.append(",".join(_esc_csv(r.get(k, "")) for k in keys))
+    return _csv_response(rows, "packing_bom_export.csv")
+
+@app.get("/api/upload/template/packing-bom")
+def packing_bom_template():
+    # One row per packing LINE; rows sharing packing_code become one packing SKU
+    # (header taken from the first row). Column layout is IDENTICAL to the export.
+    #   - material_code must be an existing (packing/consumable) material code
+    #   - qty_unit defaults to 'pallet' if blank; seq orders the lines
+    rows = [
+        _PACKING_BOM_COLS,
+        "PACK-STD,Standard Export Pack,ACME Furniture,1-pallet export pack,1,PKG-SW,2,roll,stretch wrap",
+        "PACK-STD,Standard Export Pack,ACME Furniture,1-pallet export pack,2,PKG-CG,8,pcs,corner guards",
+        "PACK-STD,Standard Export Pack,ACME Furniture,1-pallet export pack,3,PKG-TP,1,roll,sealing tape",
+        "PACK-MIN,Minimal Pack,,single wrap,1,PKG-SW,1,roll,",
+    ]
+    return _csv_response(rows, "packing_bom_template.csv")
+
+@app.post("/api/upload/packing-bom")
+async def upload_packing_bom(file: UploadFile = File(...)):
+    """Bulk packing-BOM upload — rows sharing packing_code form one packing SKU
+    (header from the first row); the SKU's lines are REPLACED with the file's."""
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except Exception:
+        text = content.decode("latin-1")
+
+    def _num(v):
+        v = (v or "").strip()
+        try:
+            return float(v) if v != "" else None
+        except ValueError:
+            return None
+
+    # Group rows by packing_code, preserving first-seen order.
+    groups, order = {}, []
+    for raw in csv.DictReader(io.StringIO(text)):
+        row = {(k or "").strip().lower().replace(" ", "_"): (v or "").strip()
+               for k, v in raw.items()}
+        code = row.get("packing_code", "")
+        if not code:
+            continue  # blank / trailing row
+        if code not in groups:
+            groups[code] = {"name": row.get("packing_name", ""),
+                            "customer": row.get("customer", ""),
+                            "notes": row.get("packing_notes", ""), "lines": []}
+            order.append(code)
+        if row.get("material_code"):
+            groups[code]["lines"].append({
+                "material_code": row.get("material_code", ""),
+                "qty":       _num(row.get("qty")),
+                "qty_unit":  row.get("qty_unit", ""),
+                "seq":       int(_num(row.get("seq")) or 0),
+                "notes":     row.get("line_notes", ""),
+            })
+
+    processed, errors = [], []
+    for code in order:
+        g = groups[code]
+        try:
+            processed.append(import_packing_sku(code, g["name"], g["customer"], g["notes"], g["lines"]))
+        except Exception as e:
+            errors.append(f"Packing '{code}': {e}")
     return {"processed": len(processed), "errors": errors, "results": processed}
 
 # ══════════════════════════════════════════════════════════════

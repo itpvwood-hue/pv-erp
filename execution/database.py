@@ -5030,6 +5030,65 @@ def delete_packing_line(lid):
     conn.execute("DELETE FROM packing_lines WHERE id=?", (lid,))
     conn.commit(); conn.close()
 
+
+# ── Packing BOM: export / bulk import ────────────────────────────────────────
+_PACKING_BOM_COLS = ("packing_code,packing_name,customer,packing_notes,"
+                     "seq,material_code,qty,qty_unit,line_notes")
+
+def get_packing_skus_export() -> list:
+    """Flatten active packing SKUs + their lines to ONE ROW PER LINE (a SKU with
+    no lines yields a single header-only row). Round-trippable via
+    import_packing_sku (rows sharing packing_code = one SKU)."""
+    out = []
+    for ps in get_packing_skus_with_lines():
+        base = {'packing_code': ps.get('code', ''), 'packing_name': ps.get('name', ''),
+                'customer': ps.get('customer', ''), 'packing_notes': ps.get('notes', '')}
+        lines = ps.get('lines') or []
+        if not lines:
+            out.append({**base, 'seq': '', 'material_code': '', 'qty': '',
+                        'qty_unit': '', 'line_notes': ''})
+        else:
+            for ln in lines:
+                out.append({**base,
+                            'seq': ln.get('seq', ''), 'material_code': ln.get('material_code', ''),
+                            'qty': ln.get('qty', ''), 'qty_unit': ln.get('qty_unit', ''),
+                            'line_notes': ln.get('notes', '')})
+    return out
+
+def import_packing_sku(code, name, customer, notes, lines) -> dict:
+    """Upsert a packing SKU by code and REPLACE its lines. `lines` = list of
+    {material_code, qty, qty_unit, seq, notes}. All line materials are validated
+    BEFORE any write, so a bad code never wipes the existing spec. Raises
+    ValueError with a friendly reason."""
+    code = (code or '').strip()
+    if not code:
+        raise ValueError("missing packing_code")
+    # Validate every line's material up front (no partial writes on failure).
+    conn = get_db()
+    try:
+        existing = bool(conn.execute("SELECT id FROM packing_skus WHERE code=?", (code,)).fetchone())
+        for ln in lines:
+            mc = (ln.get('material_code') or '').strip()
+            if not mc:
+                raise ValueError("a line is missing material_code")
+            if not conn.execute("SELECT 1 FROM materials WHERE code=? COLLATE NOCASE", (mc,)).fetchone():
+                raise ValueError(f"material '{mc}' not found")
+    finally:
+        conn.close()
+
+    res = save_packing_sku({'code': code, 'name': name or '', 'customer': customer or '',
+                            'notes': notes or ''})
+    pid = res['id']
+    conn = get_db()
+    conn.execute("DELETE FROM packing_lines WHERE packing_sku_id=?", (pid,))
+    conn.commit(); conn.close()
+    for ln in lines:
+        add_packing_line(pid, (ln.get('material_code') or '').strip(),
+                         float(ln.get('qty') or 0), (ln.get('qty_unit') or 'pallet').strip() or 'pallet',
+                         int(ln.get('seq') or 0), (ln.get('notes') or '').strip())
+    return {'packing_code': code, 'lines': len(lines),
+            'action': 'updated' if existing else 'created'}
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _glue_recipe_cost_per_kg(conn, recipe_id: int) -> float | None:
