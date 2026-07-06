@@ -109,6 +109,7 @@ from database import (
     create_purchase_request, create_purchase_requests_bulk,
     list_purchase_requests, update_purchase_request_status,
     create_vcmx_bom, update_vcmx_bom, list_vcmx_boms,
+    get_vcmx_boms_export, import_vcmx_bom_row,
     vcmx_check_inputs, create_vcmx_production_order,
     complete_vcmx_batch, list_vcmx_batches, list_vcmx_batch_events,
     auto_generate_purchase_requests_for_po, get_material_shortfalls,
@@ -1763,6 +1764,55 @@ def bom_template():
     content = "\n".join(rows) + "\n"
     return Response(content=content.encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=bom_template.csv"})
+
+# ── VCMX BOM: export / template / bulk upload ────────────────────
+_VCMX_BOM_COLS = ("sku_code,sku_name,core_material_code,face_material_code,"
+                  "back_material_code,thickness_mm,width_mm,length_mm,pcs_per_pallet,"
+                  "glue_material_code,glue_qty_per_panel,labour_cost_per_panel,notes")
+
+@app.get("/api/export/vcmx-bom")
+def export_vcmx_bom():
+    """Export all VCMX BOMs as flat CSV (one row per VCMX SKU) — matches the template."""
+    keys = _VCMX_BOM_COLS.split(",")
+    rows = [_VCMX_BOM_COLS]
+    for b in get_vcmx_boms_export():
+        rows.append(",".join(_esc_csv(b.get(k, "")) for k in keys))
+    return _csv_response(rows, "vcmx_bom_export.csv")
+
+@app.get("/api/upload/template/vcmx-bom")
+def vcmx_bom_template():
+    # One row per VCMX substrate SKU. Column layout is IDENTICAL to the Export CSV.
+    #   - core/face/back_material_code must be existing material codes (boards)
+    #   - glue_material_code is optional (blank if none)
+    #   - a NEW sku also needs sku_name + thickness/width/length + pcs_per_pallet
+    rows = [
+        _VCMX_BOM_COLS,
+        "VCMX-18-001,VCMX Substrate 18mm,BVCN1801,BMCN2511,BMCN2511,18,1232,2452,40,,0,12.50,Plywood core + MDF face/back",
+        "VCMX-15-001,VCMX Substrate 15mm,BVCN1801,BMCN2511,BMCN2511,15,1232,2452,48,,0,11.00,",
+    ]
+    return _csv_response(rows, "vcmx_bom_template.csv")
+
+@app.post("/api/upload/vcmx-bom")
+async def upload_vcmx_bom(file: UploadFile = File(...), x_auth_token: str = Header(None)):
+    """Bulk VCMX-BOM upload — one row per VCMX SKU, upsert by sku_code (add/update)."""
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except Exception:
+        text = content.decode("latin-1")
+    u = get_session_user(x_auth_token) if x_auth_token else None
+    created_by = (u or {}).get("username", "") if u else ""
+    processed, errors = [], []
+    for i, raw in enumerate(csv.DictReader(io.StringIO(text)), 1):
+        row = {(k or "").strip().lower().replace(" ", "_"): (v or "").strip()
+               for k, v in raw.items()}
+        if not any(row.get(k) for k in ("sku_code", "sku_name")):
+            continue  # blank trailing row
+        try:
+            processed.append(import_vcmx_bom_row(row, created_by=created_by))
+        except Exception as e:
+            errors.append(f"Row {i} ({row.get('sku_code','?')}): {e}")
+    return {"processed": len(processed), "errors": errors, "results": processed}
 
 # ══════════════════════════════════════════════════════════════
 # PROPER BOM MODULE — /api/skus  /api/bom-materials  /api/glue  /api/packing

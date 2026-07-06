@@ -37,6 +37,36 @@ async function authedDownload(url, filename){
     setTimeout(()=>URL.revokeObjectURL(obj),1000);
   }catch(e){ toast('Download failed: '+(e.message||e),'danger'); }
 }
+// Generic bulk-CSV uploader for the entity Data Tools panels (VCMX / Glue /
+// Packing BOM). POSTs the file to /api/upload/<kind>, renders processed/errors
+// into #resultElId, then calls the named reload fn. Simpler than the
+// inventory/BOM dtUpload (no dry-run preview / destructive replace) — these
+// pipelines are upsert-only (add / update by code).
+async function dtSimpleUpload(kind, inputEl, resultElId, reloadFnName){
+  const file = inputEl && inputEl.files && inputEl.files[0];
+  if(!file) return;
+  const el = document.getElementById(resultElId);
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  if(el) el.innerHTML = '<div class="text-muted small py-1"><span class="spinner-border spinner-border-sm me-1"></span>Uploading '+esc(file.name)+'…</div>';
+  try{
+    const fd = new FormData(); fd.append('file', file);
+    const token = localStorage.getItem('erp_token')||'';
+    const r = await fetch('/api/upload/'+kind, {method:'POST', headers:{'X-Auth-Token':token}, body:fd});
+    const data = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(data.detail || ('Upload failed ('+r.status+')'));
+    let h = `<div class="alert alert-success py-2 small mb-1"><i class="bi bi-check-circle me-1"></i><strong>${data.processed||0}</strong> row(s) imported</div>`;
+    if(data.errors && data.errors.length)
+      h += `<div class="alert alert-warning py-2 small mb-0"><strong>${data.errors.length} row(s) skipped:</strong><ul class="mb-0 ps-3">`
+         + data.errors.slice(0,15).map(e=>`<li>${esc(e)}</li>`).join('')
+         + (data.errors.length>15?`<li>…+${data.errors.length-15} more</li>`:'') + `</ul></div>`;
+    if(el) el.innerHTML = h;
+    if(reloadFnName && typeof window[reloadFnName]==='function'){ try{ window[reloadFnName](); }catch(_){ } }
+  }catch(e){
+    if(el) el.innerHTML = `<div class="alert alert-danger py-2 small mb-0"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message||e)}</div>`;
+  }finally{
+    inputEl.value = '';  // allow re-selecting the same file
+  }
+}
 function toast(msg,type='success'){
   const el=document.getElementById('toast');
   el.className=`toast align-items-center text-bg-${type} border-0`;

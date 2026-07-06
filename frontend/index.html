@@ -1516,8 +1516,38 @@
       <div class="d-flex gap-2 align-items-center mb-3">
         <input class="form-control form-control-sm" id="vcmx-bom-search" placeholder="Search VCMX SKU..." oninput="vcmxBomTabFilter(this.value)" style="width:220px">
         <span class="text-muted small" id="vcmx-bom-count"></span>
-        <div class="ms-auto">
+        <div class="ms-auto d-flex gap-2">
+          <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#dt-collapse-vcmxbom"><i class="bi bi-tools me-1"></i>Data Tools</button>
           <button class="btn btn-primary btn-sm" onclick="vcmxBomTabToggleBuilder()" id="vcmx-bom-new-btn"><i class="bi bi-plus-lg me-1"></i>New / Edit VCMX BOM</button>
+        </div>
+      </div>
+
+      <!-- Data Tools panel: VCMX BOM import/export -->
+      <div class="collapse mb-3" id="dt-collapse-vcmxbom">
+        <div class="card p-3">
+          <div class="row g-2 align-items-start">
+            <div class="col-auto">
+              <p class="text-muted small mb-2 fw-semibold">Export</p>
+              <a href="/api/export/vcmx-bom" download class="btn btn-sm btn-outline-secondary"><i class="bi bi-download me-1"></i>Export CSV</a>
+            </div>
+            <div class="col-auto">
+              <p class="text-muted small mb-2 fw-semibold">Template</p>
+              <a href="/api/upload/template/vcmx-bom" download class="btn btn-sm btn-outline-secondary"><i class="bi bi-file-earmark-text me-1"></i>Download Template</a>
+            </div>
+            <div class="col">
+              <p class="text-muted small mb-2 fw-semibold">Bulk Upload <span class="text-muted fw-normal">(add / update by SKU code)</span></p>
+              <div class="upload-zone" style="padding:12px 16px"
+                onclick="document.getElementById('dt-file-vcmxbom').click()"
+                ondragover="event.preventDefault();this.classList.add('drag-over')"
+                ondragleave="this.classList.remove('drag-over')"
+                ondrop="event.preventDefault();this.classList.remove('drag-over');var f=document.getElementById('dt-file-vcmxbom');f.files=event.dataTransfer.files;dtSimpleUpload('vcmx-bom',f,'dt-result-vcmxbom','vcmxBomTabLoad')">
+                <i class="bi bi-cloud-upload me-2 text-muted"></i>
+                <span class="text-muted small">Click or drag .csv here</span>
+              </div>
+              <input type="file" id="dt-file-vcmxbom" accept=".csv" class="d-none" onchange="dtSimpleUpload('vcmx-bom',this,'dt-result-vcmxbom','vcmxBomTabLoad')">
+              <div id="dt-result-vcmxbom" class="mt-2"></div>
+            </div>
+          </div>
         </div>
       </div>
 

@@ -8400,6 +8400,101 @@ def list_vcmx_boms(active_only: bool = False) -> list:
         conn.close()
 
 
+def get_vcmx_boms_export() -> list:
+    """VCMX BOMs as flat rows with material CODES (not ids) resolved — the shape
+    used by the Export CSV + round-trippable via import_vcmx_bom_row."""
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT b.sku_code, b.sku_name,
+                   mc.code AS core_material_code,
+                   mf.code AS face_material_code,
+                   mb.code AS back_material_code,
+                   b.thickness_mm, b.width_mm, b.length_mm, b.pcs_per_pallet,
+                   COALESCE(mg.code,'') AS glue_material_code,
+                   b.glue_qty_per_panel, b.labour_cost_per_panel,
+                   COALESCE(b.notes,'') AS notes
+            FROM vcmx_boms b
+            JOIN materials mc ON mc.id = b.core_material_id
+            JOIN materials mf ON mf.id = b.face_material_id
+            JOIN materials mb ON mb.id = b.back_material_id
+            LEFT JOIN materials mg ON mg.id = b.glue_material_id
+            ORDER BY b.sku_code
+        """).fetchall()
+        return rows_to_list(rows)
+    finally:
+        conn.close()
+
+
+def import_vcmx_bom_row(row: dict, created_by: str = '') -> dict:
+    """Upsert one VCMX BOM from a CSV row keyed by sku_code. core/face/back
+    material codes are required (resolved to ids); glue code is optional. A new
+    SKU also needs sku_name + dims + pcs_per_pallet; an existing SKU updates only
+    the columns the row supplies. Raises ValueError with a friendly reason."""
+    # Reads first (own connection), then delegate the write to create/update_vcmx_bom.
+    conn = get_db()
+    try:
+        sku = (row.get('sku_code') or '').strip()
+        if not sku:
+            raise ValueError("missing sku_code")
+        name = (row.get('sku_name') or '').strip()
+        def _id(key, required):
+            code = (row.get(key) or '').strip()
+            if not code:
+                if required:
+                    raise ValueError(f"missing {key}")
+                return None
+            m = _mat_by_code(conn, code)
+            if not m:
+                raise ValueError(f"{key} '{code}' not found")
+            return m['id']
+        core_id = _id('core_material_code', True)
+        face_id = _id('face_material_code', True)
+        back_id = _id('back_material_code', True)
+        glue_id = _id('glue_material_code', False)
+        ex = conn.execute("SELECT id FROM vcmx_boms WHERE sku_code=?", (sku,)).fetchone()
+        existing_id = ex['id'] if ex else None
+    finally:
+        conn.close()
+
+    def _num(k):
+        v = (row.get(k) or '').strip()
+        try:
+            return float(v) if v not in ('', None) else None
+        except ValueError:
+            raise ValueError(f"{k} must be a number (got '{v}')")
+    thick, width, length = _num('thickness_mm'), _num('width_mm'), _num('length_mm')
+    pcs = _num('pcs_per_pallet')
+    glue_qty = _num('glue_qty_per_panel') or 0
+    labour   = _num('labour_cost_per_panel') or 0
+    notes = (row.get('notes') or '').strip()
+
+    if existing_id:
+        data = {'core_material_id': core_id, 'face_material_id': face_id,
+                'back_material_id': back_id, 'glue_material_id': glue_id,
+                'glue_qty_per_panel': glue_qty, 'labour_cost_per_panel': labour,
+                'notes': notes}
+        if name: data['sku_name'] = name
+        if thick  is not None: data['thickness_mm'] = thick
+        if width  is not None: data['width_mm'] = width
+        if length is not None: data['length_mm'] = length
+        if pcs    is not None: data['pcs_per_pallet'] = int(pcs)
+        update_vcmx_bom(existing_id, data)
+        return {'sku_code': sku, 'action': 'updated'}
+
+    if not name:
+        raise ValueError("new VCMX BOM needs sku_name")
+    if not (thick and width and length and pcs):
+        raise ValueError("new VCMX BOM needs thickness_mm, width_mm, length_mm and pcs_per_pallet")
+    create_vcmx_bom(sku_code=sku, sku_name=name, core_material_id=core_id,
+                    face_material_id=face_id, back_material_id=back_id,
+                    thickness_mm=thick, width_mm=width, length_mm=length,
+                    pcs_per_pallet=int(pcs), glue_material_id=glue_id,
+                    glue_qty_per_panel=glue_qty, labour_cost_per_panel=labour,
+                    notes=notes, created_by=created_by)
+    return {'sku_code': sku, 'action': 'created'}
+
+
 def vcmx_check_inputs(bom_id: int, qty_panels: int) -> dict:
     """Peek at FC lot availability for a planned VCMX production qty.
     Returns {ok, shortages: [{material_id, name, required, available, shortfall, uom}]}.
