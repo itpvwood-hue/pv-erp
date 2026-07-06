@@ -1213,6 +1213,10 @@
     <input class="form-control form-control-sm ms-2" id="mat-search" placeholder="Search code or name…"
       oninput="filterMaterials(_matFilter, this.value)" style="max-width:240px">
     <span class="text-muted small ms-1" id="mat-shown-count"></span>
+    <div class="form-check form-check-inline mb-0 ms-2" title="Also show Feed Center (FC) and Veneer Slicing (SPL) stock — boards & veneers only">
+      <input class="form-check-input" type="checkbox" id="mat-show-fcspl" onchange="matToggleFcSpl(this)">
+      <label class="form-check-label small text-muted" for="mat-show-fcspl">FC / SPL stock</label>
+    </div>
     <div class="ms-auto d-flex align-items-center gap-1">
       <span class="text-muted small">Per page:</span>
       <select class="form-select form-select-sm" style="width:75px" onchange="matSetPageSize(+this.value)">

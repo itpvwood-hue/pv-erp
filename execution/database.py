@@ -1130,6 +1130,10 @@ def init_db():
         # WLWH — a second physical storage location (boards + veneers), alongside
         # current_stock (WH) and fc_stock (FC). WH staff move stock between them.
         "ALTER TABLE materials ADD COLUMN wlwh_stock REAL DEFAULT 0",
+        # SPL — raw-material stock staged at the Veneer Slicing line (PVS / "SPL"
+        # station hub). A 4th material-level bucket parallel to current_stock (WH),
+        # wlwh_stock (WLWH) and fc_stock (FC); populated via raw-material bulk upload.
+        "ALTER TABLE materials ADD COLUMN spl_stock REAL DEFAULT 0",
         # FC cost basis: a weighted-average cost for the veneer's FC stock, kept
         # SEPARATE from the warehouse unit_cost. Regrades within FC blend this (so
         # repeated regrading never moves the global cost); it is realised into
@@ -2462,8 +2466,10 @@ def bulk_upsert_material(data):
                      'species','cut_type','grade','matching','face_back','fsc',
                      'board_type','glue_type',
                      # 2.6.1: surfaced in exports → also accept on import
-                     'acc_code','name_th','name_zh','auto_glue_code','fc_stock','wlwh_stock']
-    _numeric_extended = {'thickness_mm','width_mm','length_mm','fc_stock','wlwh_stock'}
+                     'acc_code','name_th','name_zh','auto_glue_code','fc_stock','wlwh_stock',
+                     # SPL — veneer-slicing-line stock bucket (bulk upload target)
+                     'spl_stock']
+    _numeric_extended = {'thickness_mm','width_mm','length_mm','fc_stock','wlwh_stock','spl_stock'}
     for k in extended_keys:
         if k not in existing_cols: continue
         if k in data and data.get(k) not in (None, ''):
@@ -2505,7 +2511,7 @@ def purge_unused_materials(scope_types, keep_codes, dry_run=False) -> dict:
         ph = ','.join('?' for _ in scope)
         cands = rows_to_list(conn.execute(
             f"""SELECT id, code, name, type,
-                       COALESCE(current_stock,0)+COALESCE(fc_stock,0)+COALESCE(wlwh_stock,0) AS stock
+                       COALESCE(current_stock,0)+COALESCE(fc_stock,0)+COALESCE(wlwh_stock,0)+COALESCE(spl_stock,0) AS stock
                 FROM materials WHERE type IN ({ph})""", scope).fetchall())
         deleted, kept = [], []
         for m in cands:

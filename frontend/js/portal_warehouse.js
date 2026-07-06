@@ -2376,6 +2376,20 @@ function _locStockCells(m){
 }
 const _fscBadge = f=>f&&f!=='-'?`<span class="badge bg-success-subtle text-success border border-success" style="font-size:.65rem">${f}</span>`:'<span class="text-muted">—</span>';
 
+// FC (Feed Center) + SPL (Veneer Slicing line) stock columns — hidden by default,
+// revealed by the "FC / SPL stock" toggle on the Raw Materials toolbar. Boards &
+// veneers only (the only types with these buckets). Returns '' when the toggle is
+// off so the row column count matches the (un-augmented) header.
+let _showFcSpl = false;
+const _fcSplCells = m => _showFcSpl
+  ? `<td class="text-end small text-info">${fmt(m.fc_stock)}</td>`
+    + `<td class="text-end small text-warning-emphasis">${fmt(m.spl_stock)}</td>`
+  : '';
+function matToggleFcSpl(cb){
+  _showFcSpl = !!(cb && cb.checked);
+  renderMaterials(_matFilteredRows || [], false);
+}
+
 // ── Board row ──────────────────────────────────────────────────
 function boardRow(m){
   const dims = (m.width_mm&&m.length_mm)?`${m.width_mm}×${m.length_mm}`:'—';
@@ -2387,7 +2401,7 @@ function boardRow(m){
     <td class="text-center">${dims}</td>
     <td>${_fscBadge(m.fsc)}</td>
     <td>${m.unit||''}</td>
-    ${_locStockCells(m)}
+    ${_locStockCells(m)}${_fcSplCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
     <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id)+_ncgBtn(m.id):''}${_editBtn(m.id)}${_delBtn(m.id)}</td>
@@ -2397,22 +2411,22 @@ function boardRow(m){
 // ── Veneer row ─────────────────────────────────────────────────
 function veneerRow(m){
   // M2 veneers are priced/counted by area: each piece's width varies but the
-  // length is standard, so width_mm is blank. Show just the standard length
-  // (width is known to vary) instead of a bare "—".
-  const dims = (m.width_mm && m.length_mm) ? `${m.width_mm}×${m.length_mm}`
-             : m.length_mm ? `${m.length_mm}`
-             : '—';
+  // length is standard, so width_mm is blank — Width shows "—" while Length
+  // still carries the standard value.
+  const wCell = m.width_mm  ? `${m.width_mm}`  : '—';
+  const lCell = m.length_mm ? `${m.length_mm}` : '—';
   const gradeMatch=[m.grade, m.matching].filter(Boolean).join(' / ')||'—';
   return `<tr>
     <td><code class="text-primary fw-semibold">${m.code||''}</code></td>
     <td>${m.species||'—'}</td>
     <td>${m.cut_type||'—'}</td>
     <td class="text-center">${m.thickness_mm||'—'}</td>
-    <td class="text-center">${dims}</td>
+    <td class="text-center">${wCell}</td>
+    <td class="text-center">${lCell}</td>
     <td>${gradeMatch}</td>
     <td>${_fscBadge(m.fsc)}</td>
     <td>${m.unit||''}</td>
-    ${_locStockCells(m)}
+    ${_locStockCells(m)}${_fcSplCells(m)}
     <td>${fmt(m.reorder_point)}</td>
     <td class="fw-bold">${fmtB(m.price||m.unit_cost)}</td>
     <td class="text-nowrap">${(m.type==='core_board'||m.type==='veneer_sheet')?_moveBtn(m.id)+_ncgBtn(m.id):''}${_editBtn(m.id)}${_delBtn(m.id)}</td>
@@ -2451,7 +2465,7 @@ function matDisplayName(m){
 
 const MAT_HEADS = {
   core_board: `<tr><th>Code</th><th>Board Type</th><th>Glue</th><th class="text-center">Thick(mm)</th><th class="text-center">W×L (mm)</th><th>FSC</th><th>Unit</th><th>Location</th><th class="text-end">Qty</th><th>Location</th><th class="text-end">Qty</th><th>Min</th><th>Price</th><th></th></tr>`,
-  veneer_sheet: `<tr><th>Code</th><th>Species</th><th>Cut</th><th class="text-center">V-Thick</th><th class="text-center">W×L (mm)</th><th>Grade / Match</th><th>FSC</th><th>Unit</th><th>Location</th><th class="text-end">Qty</th><th>Location</th><th class="text-end">Qty</th><th>Min</th><th>Price</th><th></th></tr>`,
+  veneer_sheet: `<tr><th>Code</th><th>Species</th><th>Cut</th><th class="text-center">V-Thick</th><th class="text-center">Width (mm)</th><th class="text-center">Length (mm)</th><th>Grade / Match</th><th>FSC</th><th>Unit</th><th>Location</th><th class="text-end">Qty</th><th>Location</th><th class="text-end">Qty</th><th>Min</th><th>Price</th><th></th></tr>`,
   _generic: `<tr><th>Code</th><th>Description</th><th>Type</th><th>Unit</th><th>Stock</th><th>Min</th><th>Price</th><th></th></tr>`,
 };
 
@@ -2468,7 +2482,14 @@ function renderMaterials(rows, resetPage=true){
   const pageRows = pageSize > 0 ? rows.slice(start, start + pageSize) : rows;
 
   const thead = document.getElementById('mat-thead');
-  if(thead) thead.innerHTML = MAT_HEADS[_matFilter] || MAT_HEADS._generic;
+  if(thead){
+    let head = MAT_HEADS[_matFilter] || MAT_HEADS._generic;
+    // Insert FC + SPL columns (before Min) when the toggle is on — boards/veneers only.
+    if(_showFcSpl && (_matFilter==='core_board' || _matFilter==='veneer_sheet'))
+      head = head.replace('<th>Min</th>',
+        '<th class="text-center">FC</th><th class="text-center">SPL</th><th>Min</th>');
+    thead.innerHTML = head;
+  }
 
   const html = total === 0
     ? `<tr><td colspan="12" class="text-center text-muted py-4">No materials found</td></tr>`

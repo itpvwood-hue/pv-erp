@@ -1286,6 +1286,7 @@ def export_veneers():
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
                COALESCE(wlwh_stock,0)    AS wlwh_stock,
+               COALESCE(spl_stock,0)     AS spl_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1294,7 +1295,7 @@ def export_veneers():
     conn.close()
     header = ("code,acc_code,name,name_th,species,cut_type,grade,matching,face_back,"
               "thickness_mm,width_mm,length_mm,fsc,auto_glue_code,unit,"
-              "current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
+              "current_stock,fc_stock,wlwh_stock,spl_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=veneers_export.csv"})
@@ -1313,6 +1314,7 @@ def export_boards():
                COALESCE(current_stock,0) AS current_stock,
                COALESCE(fc_stock,0)      AS fc_stock,
                COALESCE(wlwh_stock,0)    AS wlwh_stock,
+               COALESCE(spl_stock,0)     AS spl_stock,
                COALESCE(reorder_point,0) AS min_stock,
                COALESCE(unit_cost, COALESCE(price,0)) AS unit_cost,
                COALESCE(supplier,'') AS supplier
@@ -1320,7 +1322,7 @@ def export_boards():
     """).fetchall()
     conn.close()
     header = ("code,acc_code,name,name_th,board_type,glue_type,thickness_mm,width_mm,length_mm,fsc,"
-              "unit,current_stock,fc_stock,wlwh_stock,min_stock,unit_cost,supplier")
+              "unit,current_stock,fc_stock,wlwh_stock,spl_stock,min_stock,unit_cost,supplier")
     lines = [header] + [",".join(_esc_csv(c) for c in r) for r in rows]
     return Response(content=("\n".join(lines)+"\n").encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=boards_export.csv"})
@@ -1431,12 +1433,12 @@ def veneers_template():
     """Veneer template — adds acc_code, name_th, fc_stock, auto_glue_code.
     `min_stock` is the trigger level for low-stock alerts (formerly reorder_point)."""
     rows = [
-        "code,acc_code,name,name_th,species,cut_type,grade,matching,face_back,thickness_mm,width_mm,length_mm,fsc,auto_glue_code,unit,current_stock,fc_stock,min_stock,unit_cost,supplier",
-        "VNR-OAK-A-30,VN-001,W.OAK 0.3mm 1232x2452 (Grade A) Book,วีเนียร์โอ๊คขาว 0.3mm,W.OAK,QC,A,Book,Face,0.3,1232,2452,FSC,Glue 1,Pcs,200,0,50,520.00,Euro Veneer Ltd.",
-        "VNR-OAK-B-30,VN-002,W.OAK 0.3mm 1232x2452 (Grade B) Slip,วีเนียร์โอ๊คขาว 0.3mm B,W.OAK,QC,B,Slip,Back,0.3,1232,2452,,Glue 2,Pcs,150,0,40,420.00,Euro Veneer Ltd.",
-        "VNR-TEAK-30,VN-003,TEAK DS 0.3mm 1232x2452 (Sound),วีเนียร์สัก 0.3mm,TEAK,DS,Sound,Random,Face,0.3,1232,2452,FSC,Glue 6,Pcs,100,0,30,680.00,Asia Veneer Co.",
-        "VNR-WBIRCH-25,VN-004,W.BIRCH 0.25mm 660x2200 #4 Sound,วีเนียร์เบิร์ชขาว 0.25mm,W.BIRCH,DS,#4,Random,Both,0.25,660,2200,,Glue 9,Pcs,80,0,25,250.00,Euro Veneer Ltd.",
-        "VNR-MAPLE-A-30,VN-005,W.MAPLE 0.3mm 1232x2452 (Grade A) Book,วีเนียร์เมเปิ้ลขาว 0.3mm,W.MAPLE,QC,A,Book,Face,0.3,1232,2452,FSC,Glue 1,Pcs,60,0,20,610.00,Euro Veneer Ltd.",
+        "code,acc_code,name,name_th,species,cut_type,grade,matching,face_back,thickness_mm,width_mm,length_mm,fsc,auto_glue_code,unit,current_stock,fc_stock,wlwh_stock,spl_stock,min_stock,unit_cost,supplier",
+        "VNR-OAK-A-30,VN-001,W.OAK 0.3mm 1232x2452 (Grade A) Book,วีเนียร์โอ๊คขาว 0.3mm,W.OAK,QC,A,Book,Face,0.3,1232,2452,FSC,Glue 1,Pcs,200,0,0,0,50,520.00,Euro Veneer Ltd.",
+        "VNR-OAK-B-30,VN-002,W.OAK 0.3mm 1232x2452 (Grade B) Slip,วีเนียร์โอ๊คขาว 0.3mm B,W.OAK,QC,B,Slip,Back,0.3,1232,2452,,Glue 2,Pcs,150,0,0,0,40,420.00,Euro Veneer Ltd.",
+        "VNR-TEAK-30,VN-003,TEAK DS 0.3mm 1232x2452 (Sound),วีเนียร์สัก 0.3mm,TEAK,DS,Sound,Random,Face,0.3,1232,2452,FSC,Glue 6,Pcs,100,0,0,0,30,680.00,Asia Veneer Co.",
+        "VNR-WBIRCH-25,VN-004,W.BIRCH 0.25mm 660x2200 #4 Sound,วีเนียร์เบิร์ชขาว 0.25mm,W.BIRCH,DS,#4,Random,Both,0.25,660,2200,,Glue 9,Pcs,80,0,0,0,25,250.00,Euro Veneer Ltd.",
+        "VNR-MAPLE-A-30,VN-005,W.MAPLE 0.3mm 1232x2452 (Grade A) Book,วีเนียร์เมเปิ้ลขาว 0.3mm,W.MAPLE,QC,A,Book,Face,0.3,1232,2452,FSC,Glue 1,Pcs,60,0,0,0,20,610.00,Euro Veneer Ltd.",
     ]
     return _csv_response(rows, "veneers_template.csv")
 
@@ -1445,12 +1447,12 @@ def boards_template():
     """Board template — adds acc_code, name_th, fc_stock columns.
     `min_stock` triggers low-stock alerts (formerly reorder_point)."""
     rows = [
-        "code,acc_code,name,name_th,board_type,glue_type,thickness_mm,width_mm,length_mm,fsc,unit,current_stock,fc_stock,min_stock,unit_cost,supplier",
-        "BMCN2511,BD-001,MDF CARB P2 2.5mm 1232x2452,MDF 2.5mm,MDF,CARB P2,2.5,1232,2452,,sheet,500,0,100,285.00,Thai MDF Co.",
-        "BMCN1801,BD-002,MDF CARB P2 18mm 1245x2465,MDF 18mm,MDF,CARB P2,18,1245,2465,FSC,Pcs,250,0,80,580.00,Thai MDF Co.",
-        "BVCN1801,BD-003,VC PLYWOOD CARB P2 18mm 1232x2452,ไม้อัด VC 18mm,VC PLY,CARB P2,18,1232,2452,FSC,Pcs,180,0,60,720.00,Local Plywood",
-        "BPCN1801,BD-004,PB CARB P2 18mm 1220x2440,ปาร์ติเคิลบอร์ด 18mm,PB,CARB P2,18,1220,2440,,sheet,300,0,80,220.00,Thai MDF Co.",
-        "BVCN0420,BD-005,VC PLYWOOD MR 4.2mm 1232x2452,ไม้อัด VC 4.2mm,VC PLY,MR,4.2,1232,2452,,Pcs,180,0,60,425.00,Local Plywood",
+        "code,acc_code,name,name_th,board_type,glue_type,thickness_mm,width_mm,length_mm,fsc,unit,current_stock,fc_stock,wlwh_stock,spl_stock,min_stock,unit_cost,supplier",
+        "BMCN2511,BD-001,MDF CARB P2 2.5mm 1232x2452,MDF 2.5mm,MDF,CARB P2,2.5,1232,2452,,sheet,500,0,0,0,100,285.00,Thai MDF Co.",
+        "BMCN1801,BD-002,MDF CARB P2 18mm 1245x2465,MDF 18mm,MDF,CARB P2,18,1245,2465,FSC,Pcs,250,0,0,0,80,580.00,Thai MDF Co.",
+        "BVCN1801,BD-003,VC PLYWOOD CARB P2 18mm 1232x2452,ไม้อัด VC 18mm,VC PLY,CARB P2,18,1232,2452,FSC,Pcs,180,0,0,0,60,720.00,Local Plywood",
+        "BPCN1801,BD-004,PB CARB P2 18mm 1220x2440,ปาร์ติเคิลบอร์ด 18mm,PB,CARB P2,18,1220,2440,,sheet,300,0,0,0,80,220.00,Thai MDF Co.",
+        "BVCN0420,BD-005,VC PLYWOOD MR 4.2mm 1232x2452,ไม้อัด VC 4.2mm,VC PLY,MR,4.2,1232,2452,,Pcs,180,0,0,0,60,425.00,Local Plywood",
     ]
     return _csv_response(rows, "boards_template.csv")
 
@@ -1735,22 +1737,28 @@ def line_board(production_line: Optional[str] = None):
 
 @app.get("/api/upload/template/bom")
 def bom_template():
-    # Flat BOM format: one row per finished SKU
-    # material codes must match codes in inventory
-    # face_veneer_qty / back_veneer_qty = sheets of veneer per pallet (defaults to pieces_per_unit if blank)
-    # back_veneer_code and back_glue_code are optional — leave blank if TBD (FC confirms per order)
+    # Flat BOM format: one row per finished SKU. Column layout is IDENTICAL to the
+    # Export CSV (/api/export/bom) so a round-trip (export → edit → re-upload) is
+    # lossless. The upload parser reads all of these columns.
+    #   - material codes must match codes in inventory; glue codes = recipe codes
+    #   - thickness/width/length = finished-panel dims (mm)
+    #   - face_veneer_qty / back_veneer_qty = sheets of veneer per pallet
+    #   - face_glue_qty / back_glue_qty = glue usage grams per face
+    #   - back_veneer_code / back_glue_code are optional — blank if TBD (FC confirms per order)
+    #   - packing_sku_code links the FG packing spec (optional)
     rows = [
-        "product_sku,pieces_per_unit,base_board_code,base_board_qty,face_veneer_code,face_veneer_qty,face_glue_code,face_glue_qty,back_veneer_code,back_veneer_qty,back_glue_code,back_glue_qty,notes",
+        "product_sku,sku_name,pieces_per_unit,thickness_mm,width_mm,length_mm,"
+        "base_board_code,base_board_qty,face_veneer_code,face_veneer_qty,"
+        "face_glue_code,face_glue_qty,back_veneer_code,back_veneer_qty,"
+        "back_glue_code,back_glue_qty,packing_sku_code",
         # Oak 18mm — different face/back veneer grade (veneer qty includes 5% waste)
-        "VNR-OAK-18,240,MDF-18,240,VNR-OAK-A,252,ADH-HP-25,10,VNR-OAK-B,252,,10,Grade A face / Grade B back",
-        # Oak 12mm
-        "VNR-OAK-12,240,MDF-12,240,VNR-OAK-A,252,ADH-HP-25,10,VNR-OAK-B,252,,10,",
+        "VNR-OAK-18,Oak Veneered MDF 18mm,240,18,1220,2440,MDF-18,240,VNR-OAK-A,252,Glue 1,45,VNR-OAK-B,252,Glue 2,45,PACK-STD",
         # Teak 18mm — same veneer both sides
-        "VNR-TEAK-18,240,MDF-18,240,VNR-TEAK,254,ADH-HP-25,10,VNR-TEAK,254,,10,Same species face and back",
+        "VNR-TEAK-18,Teak Veneered MDF 18mm,240,18,1220,2440,MDF-18,240,VNR-TEAK,254,Glue 1,45,VNR-TEAK,254,Glue 1,45,PACK-STD",
         # Walnut 18mm — premium face with oak back
-        "VNR-WAL-18,240,MDF-18,240,VNR-WAL,262,ADH-HP-25,10,VNR-OAK-B,252,,10,Walnut face / Oak B back",
-        # Engineered oak — back veneer TBD (FC confirms per order)
-        "VNR-OAK-ENG-18,240,MDF-18,240,VNR-OAK-ENG,252,ADH-HP-25,10,,,,, Back veneer TBD per order",
+        "VNR-WAL-18,Walnut Veneered MDF 18mm,240,18,1220,2440,MDF-18,240,VNR-WAL,262,Glue 1,45,VNR-OAK-B,252,Glue 2,45,PACK-STD",
+        # Engineered oak — back veneer + glue TBD (FC confirms per order)
+        "VNR-OAK-ENG-18,Engineered Oak MDF 18mm,240,18,1220,2440,MDF-18,240,VNR-OAK-ENG,252,Glue 1,45,,,,,PACK-STD",
     ]
     content = "\n".join(rows) + "\n"
     return Response(content=content.encode("utf-8"), media_type="text/csv",
