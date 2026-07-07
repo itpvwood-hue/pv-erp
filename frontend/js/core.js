@@ -10,6 +10,7 @@
        _whFmtQty                           - warehouse alias
        timeAgo(ts)                         - relative-time helper
 */
+const api = "http://192.168.1.23:8001";
 async function api(path,method='GET',body=null){
   const token=localStorage.getItem('erp_token')||'';
   const opts={method,headers:{'Content-Type':'application/json','X-Auth-Token':token}};
