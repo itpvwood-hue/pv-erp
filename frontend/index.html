@@ -6037,10 +6037,14 @@
 <!-- Extracted shared scripts. Order matters: i18n + core declare globals
      (_LANG, I18N, t, api, toast, formatters, …) used by the main inline
      script and by future portal modules. -->
-<script src="js/i18n"></script>
-<script src="js/core.js"></script>
-<script src="js/nav.js"></script>
-<script src="js/auth.js"></script>
+<script>
+  window.api = "http://192.168.1.23:8001"; 
+</script>
+
+<script src="http://192.168.1.23:8001/static/js/i18n"></script>
+<script src="http://192.168.1.23:8001/static/js/core.js"></script>
+<script src="http://192.168.1.23:8001/static/js/nav.js"></script>
+<script src="http://192.168.1.23:8001/frontend/js/auth.js"></script>
 <script>
 /* DEBUG ERROR CATCHER — runs before main script so it catches syntax errors too */
 window.onerror = function(msg, src, line, col, err){
