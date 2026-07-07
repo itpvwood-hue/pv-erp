@@ -168,7 +168,7 @@ app = FastAPI(title="PVWood ERP", version=_APP_VERSION)
 # Set CORS_ORIGINS="*" to allow any origin (dev only).
 _cors_origins = _cfg.CORS_ORIGINS if _cfg.CORS_ORIGINS != ['*'] else ['*']
 app.add_middleware(CORSMiddleware,
-                   allow_origins=_cors_origins,
+                   allow_origins=["*"],
                    allow_methods=["*"],
                    allow_headers=["*"],
                    allow_credentials=False)
