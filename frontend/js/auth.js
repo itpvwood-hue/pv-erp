@@ -12,6 +12,8 @@
    Load order: this script must come AFTER the main inline script so the
    constants it reads (ROLE_PAGES, NAV_SEC_ROLES, _PORTAL_MODE) exist.
 */
+if (typeof api === 'undefined') { var api = "http://192.168.1.23:8001"; }
+if (typeof API_URL === 'undefined') { var API_URL = api; }
 function getCurrentUser(){
   try{ return JSON.parse(localStorage.getItem('erp_user')||'null'); }catch{return null;}
 }
