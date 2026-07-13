@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ERP Admin Portal — PVWood</title>
+<link rel="icon" type="image/svg+xml" href="/static/assets/pvwood-icon.svg">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+:root{--bg:#143013;--sidebar:#3d2317;--accent:#1f4a1f;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#1e293b;}
+
+/* ── Login overlay ── */
+#login-overlay{position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,var(--bg) 0%,#1e3a5f 100%);
+  display:flex;align-items:center;justify-content:center;}
+.login-card{width:100%;max-width:380px;padding:20px;}
+
+/* ── Shell ── */
+#shell{display:flex;height:100vh;overflow:hidden;}
+/* Sidebar: collapsed 56px → expands to 230px on hover (same UX as main app) */
+#sidebar{width:56px;background:var(--sidebar);color:#e2e8f0;display:flex;flex-direction:column;flex-shrink:0;
+  overflow-x:hidden;overflow-y:auto;transition:width .18s ease;}
+#sidebar:hover{width:230px;box-shadow:4px 0 12px rgba(0,0,0,.25);}
+.sb-brand{padding:20px 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;overflow:hidden;}
+.sb-brand h5{margin:0;font-weight:700;color:#fff;font-size:1rem;}
+.sb-brand small{color:#94a3b8;font-size:.72rem;}
+.sb-nav{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 0;}
+.sb-link{display:flex;align-items:center;gap:10px;padding:9px 16px;color:#94a3b8;text-decoration:none;
+  white-space:nowrap;overflow:hidden;
+  font-size:.83rem;cursor:pointer;border-left:3px solid transparent;transition:all .15s;}
+.sb-link:hover,.sb-link.active{color:#fff;background:rgba(255,255,255,.07);border-left-color:var(--accent);}
+.sb-link i{font-size:1rem;width:18px;text-align:center;}
+.sb-user{padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px;}
+.sb-user-info{flex:1;min-width:0;}
+.sb-user-info .name{font-size:.8rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-user-info .role{font-size:.65rem;color:#94a3b8;}
+
+/* ── Collapsed sidebar: icons only, centred ──────────────────────── */
+#sidebar:not(:hover) .sb-brand h5 span,
+#sidebar:not(:hover) .sb-brand small,
+#sidebar:not(:hover) .sb-link span,
+#sidebar:not(:hover) .sb-user-info,
+#sidebar:not(:hover) .admlang-btn{display:none!important;}
+#sidebar:not(:hover) .sb-brand{padding:14px 0;text-align:center;}
+#sidebar:not(:hover) .sb-brand h5{display:flex;justify-content:center;}
+#sidebar:not(:hover) .sb-link{padding:9px 0;justify-content:center;gap:0;}
+#sidebar:not(:hover) .sb-link i{margin:0!important;}
+#sidebar:not(:hover) .sb-user{justify-content:center;padding:8px 0;}
+#sidebar:not(:hover) .sb-user button{display:none!important;}
+/* Hide the language-picker container row when collapsed */
+#sidebar:not(:hover) > div[style*="border-top"]{display:none!important;}
+
+#main{flex:1;overflow-y:auto;background:#f1f5f9;}
+.page-header{background:#fff;border-bottom:1px solid #e2e8f0;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;}
+.page-header h4{margin:0;font-size:1rem;font-weight:700;}
+.content{padding:20px 24px;}
+
+/* ── Stat cards ── */
+.stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
+  display:flex;justify-content:space-between;align-items:start;}
+.stat-card .val{font-size:1.7rem;font-weight:700;line-height:1;}
+.stat-card .lbl{font-size:.72rem;color:#64748b;margin-top:2px;}
+
+/* ── Tables ── */
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;}
+.card-hd{padding:10px 16px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:8px;font-weight:600;font-size:.85rem;}
+.table{margin:0;font-size:.82rem;}
+.table th{background:#f8fafc;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#475569;}
+.table td,.table th{padding:.45rem .75rem;vertical-align:middle;}
+.badge-xs{font-size:.65rem;padding:2px 6px;}
+.btn-xs{padding:1px 7px;font-size:.72rem;}
+
+/* ── Role colors ── */
+.role-MANAGERIAL{background:#fee2e2;color:#991b1b;}
+.role-PRODUCTION_PLANNING{background:#dbeafe;color:#1e40af;}
+.role-DEPARTMENT_LEADER{background:#fef9c3;color:#713f12;}
+.role-WAREHOUSE{background:#cffafe;color:#155e75;}
+
+/* ── Log status dot ── */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;}
+.dot-ok{background:#22c55e;}.dot-inactive{background:#94a3b8;}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ LOGIN OVERLAY ═══════════ -->
+<div id="login-overlay">
+  <div class="login-card">
+    <div class="card shadow-lg border-0">
+      <div class="card-body p-4">
+        <div class="text-center mb-4">
+          <div style="width:52px;height:52px;background:linear-gradient(135deg,#dc2626,#991b1b);border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px">
+            <i class="bi bi-shield-lock-fill text-white" style="font-size:1.4rem"></i>
+          </div>
+          <h5 class="fw-bold mb-0">ERP Admin Portal</h5>
+          <small class="text-muted">Managerial access only</small>
+        </div>
+        <div id="adm-error" class="alert alert-danger d-none py-2 small" role="alert">
+          <i class="bi bi-exclamation-triangle-fill me-1"></i><span id="adm-error-msg"></span>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Username</label>
+          <input class="form-control" id="adm-username" autocomplete="username" placeholder="Admin username"
+                 onkeydown="if(event.key==='Enter')document.getElementById('adm-password').focus()">
+        </div>
+        <div class="mb-4">
+          <label class="form-label small fw-semibold">Password</label>
+          <input type="password" class="form-control" id="adm-password" autocomplete="current-password"
+                 onkeydown="if(event.key==='Enter')admLogin()">
+        </div>
+        <button class="btn btn-danger w-100 fw-semibold" onclick="admLogin()" id="adm-login-btn">
+          <i class="bi bi-shield-check me-2"></i>Sign In to Admin
+        </button>
+        <div class="text-center mt-3">
+          <a href="/" class="small text-muted"><i class="bi bi-arrow-left me-1"></i>Back to ERP</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ SHELL ═══════════ -->
+<div id="shell" style="display:none">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="sb-brand">
+      <h5><i class="bi bi-shield-lock me-2 text-danger"></i><span data-i18n="Admin Portal">Admin Portal</span></h5>
+      <small data-i18n="PVWood ERP">PVWood ERP</small>
+    </div>
+    <nav class="sb-nav">
+      <a class="sb-link active" onclick="admNav('users')">
+        <i class="bi bi-people"></i> <span data-i18n="User Management">User Management</span>
+      </a>
+      <a class="sb-link" onclick="admNav('login-log')">
+        <i class="bi bi-journal-text"></i> <span data-i18n="Login Audit Log">Login Audit Log</span>
+      </a>
+      <a class="sb-link" onclick="admNav('server-log')">
+        <i class="bi bi-terminal"></i> <span data-i18n="Server Logs">Server Logs</span>
+      </a>
+      <a class="sb-link" onclick="admNav('about')">
+        <i class="bi bi-info-circle"></i> <span data-i18n="About / Version">About / Version</span>
+      </a>
+    </nav>
+    <!-- Language picker (EN / TH / ZH) -->
+    <div style="display:flex;gap:4px;padding:8px 12px 4px;border-top:1px solid rgba(255,255,255,.1)">
+      <button class="btn btn-sm flex-fill admlang-btn" data-lang-pick="en" onclick="admSetLang('en')" style="font-size:.65rem;padding:3px 4px">EN</button>
+      <button class="btn btn-sm flex-fill admlang-btn" data-lang-pick="th" onclick="admSetLang('th')" style="font-size:.65rem;padding:3px 4px">ไทย</button>
+      <button class="btn btn-sm flex-fill admlang-btn" data-lang-pick="zh" onclick="admSetLang('zh')" style="font-size:.65rem;padding:3px 4px">中文</button>
+    </div>
+    <div class="sb-user">
+      <i class="bi bi-person-circle text-white-50" style="font-size:1.3rem"></i>
+      <div class="sb-user-info">
+        <div class="name" id="adm-user-name">—</div>
+        <div class="role" id="adm-user-role">Managerial</div>
+      </div>
+      <button class="btn btn-sm py-0 px-1" style="background:rgba(239,68,68,.3);color:#fca5a5;border:none"
+              title="Sign out" onclick="admLogout()"><i class="bi bi-box-arrow-right"></i></button>
+    </div>
+  </div>
+
+  <!-- Main area -->
+  <div id="main">
+
+    <!-- ── USER MANAGEMENT ── -->
+    <div id="view-users">
+      <div class="page-header">
+        <div>
+          <h4><i class="bi bi-people me-2 text-primary"></i>User Management</h4>
+          <small class="text-muted">Create accounts, assign roles and department access</small>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="umOpenNew()">
+          <i class="bi bi-person-plus me-1"></i>Add User
+        </button>
+      </div>
+      <div class="content">
+        <div class="row g-3 mb-3" id="um-stats"></div>
+        <div class="card">
+          <div class="card-hd">
+            <i class="bi bi-people text-primary"></i> All Accounts
+            <input class="form-control form-control-sm ms-auto" style="max-width:200px"
+                   placeholder="Search…" oninput="umFilter(this.value)">
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover">
+              <thead><tr>
+                <th>Username</th><th>Display Name</th><th>Role</th>
+                <th>Dept / Lines</th><th>Status</th><th>Created</th><th class="text-end">Actions</th>
+              </tr></thead>
+              <tbody id="um-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── LOGIN AUDIT LOG ── -->
+    <div id="view-login-log" style="display:none">
+      <div class="page-header">
+        <div>
+          <h4><i class="bi bi-journal-text me-2 text-success"></i>Login Audit Log</h4>
+          <small class="text-muted">All successful ERP sign-ins</small>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="logLoad()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+        </button>
+      </div>
+      <div class="content">
+        <div class="row g-3 mb-3" id="log-stats"></div>
+        <div class="card">
+          <div class="card-hd">
+            <i class="bi bi-clock-history text-success"></i> Recent logins
+            <span class="text-muted small ms-2" id="log-count"></span>
+            <input class="form-control form-control-sm ms-auto" style="max-width:200px"
+                   placeholder="Filter username…" id="log-filter" oninput="logFilter(this.value)">
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover">
+              <thead><tr>
+                <th>When</th><th>Username</th><th>Display Name</th>
+                <th>Role</th><th>IP Address</th><th>Account</th>
+              </tr></thead>
+              <tbody id="log-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SERVER LOGS ── -->
+    <div id="view-server-log" style="display:none">
+      <div class="page-header">
+        <div>
+          <h4><i class="bi bi-terminal me-2 text-danger"></i>Server Logs</h4>
+          <small class="text-muted">Live tail of uvicorn + ERP application output — copy errors here to report</small>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <label class="small text-muted mb-0">Lines:</label>
+          <select class="form-select form-select-sm" id="slog-n" style="width:90px" onchange="slogLoad()">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="2000">2000</option>
+            <option value="5000">5000</option>
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" onclick="slogLoad()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+          <button class="btn btn-sm btn-outline-primary" onclick="slogCopy()"><i class="bi bi-clipboard me-1"></i>Copy All</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="slogDownload()"><i class="bi bi-download me-1"></i>Download .log</button>
+          <label class="small text-muted mb-0 ms-2"><input type="checkbox" id="slog-auto" onchange="slogToggleAuto()"> auto-refresh 10 s</label>
+        </div>
+      </div>
+      <div class="content">
+        <div class="alert alert-light border py-2 small mb-2">
+          <i class="bi bi-info-circle me-1 text-primary"></i>
+          File path on server: <code id="slog-path">—</code><br>
+          When sending error reports, click <b>Copy All</b> and paste the output into chat.
+        </div>
+        <div class="card">
+          <pre id="slog-body" style="font-family:'Consolas','Courier New',monospace;font-size:.78rem;line-height:1.4;max-height:65vh;overflow:auto;background:#0f172a;color:#cbd5e1;padding:14px;margin:0;white-space:pre-wrap;word-break:break-word">Loading…</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ABOUT / VERSION ── -->
+    <div id="view-about" style="display:none">
+      <div class="page-header">
+        <div>
+          <h4><i class="bi bi-info-circle me-2 text-info"></i>About PVWood ERP</h4>
+          <small class="text-muted">Application version and release history</small>
+        </div>
+      </div>
+      <div class="content">
+        <div class="card mb-3">
+          <div class="card-body" id="about-summary">Loading…</div>
+        </div>
+        <div class="card">
+          <div class="card-hd"><i class="bi bi-journal-text"></i> Release History</div>
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead><tr><th style="width:110px">Version</th><th style="width:130px">Date</th><th>Change</th></tr></thead>
+              <tbody id="about-changelog"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<!-- ── User Modal ── -->
+<div class="modal fade" id="umModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="um-modal-title"><i class="bi bi-person-plus me-2"></i>Add User</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="um-edit-id">
+        <div class="row g-2 mb-2">
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Username <span class="text-danger">*</span></label>
+            <input class="form-control form-control-sm" id="um-username" placeholder="e.g. john.doe">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Display Name <span class="text-danger">*</span></label>
+            <input class="form-control form-control-sm" id="um-display-name" placeholder="Full name">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Role <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="um-role" onchange="umToggleDepts([])">
+              <option value="MANAGERIAL">Managerial</option>
+              <option value="PRODUCTION_PLANNING">Production Planning</option>
+              <option value="DEPARTMENT_LEADER">Department Leader</option>
+              <option value="WAREHOUSE">Warehouse</option>
+              <option value="FINANCE">Finance (Accounting + Purchasing portal)</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Password <span id="um-pw-hint" class="text-muted">(required)</span></label>
+            <input type="password" class="form-control form-control-sm" id="um-password" placeholder="Set password">
+          </div>
+        </div>
+        <div id="um-dept-section" class="d-none mt-2">
+          <label class="form-label small fw-semibold">Department &amp; Line Assignments</label>
+          <p class="text-muted small mb-2">Select every station and line this leader is responsible for.</p>
+          <div class="row g-2" id="um-dept-grid"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary btn-sm" onclick="umSave()"><i class="bi bi-floppy me-1"></i>Save</button>
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════
+// I18N (Admin Portal subset — uses same erp_lang key as main app)
+// ═══════════════════════════════════════════════════════
+const ADM_I18N = {
+  'Admin Portal':       {th:'พอร์ทัลแอดมิน',           zh:'管理员门户'},
+  'PVWood ERP':         {th:'PVWood ERP',              zh:'PVWood ERP'},
+  'User Management':    {th:'การจัดการผู้ใช้',          zh:'用户管理'},
+  'Login Audit Log':    {th:'บันทึกการเข้าสู่ระบบ',     zh:'登录审计日志'},
+  'Server Logs':        {th:'บันทึกเซิร์ฟเวอร์',        zh:'服务器日志'},
+  'About / Version':    {th:'เกี่ยวกับ / เวอร์ชัน',     zh:'关于 / 版本'},
+  'Add User':           {th:'เพิ่มผู้ใช้',              zh:'添加用户'},
+  'Refresh':            {th:'รีเฟรช',                  zh:'刷新'},
+  'Username':           {th:'ชื่อผู้ใช้',                zh:'用户名'},
+  'Display Name':       {th:'ชื่อที่แสดง',              zh:'显示名称'},
+  'Role':               {th:'บทบาท',                  zh:'角色'},
+  'Status':             {th:'สถานะ',                  zh:'状态'},
+  'Sign out':           {th:'ออกจากระบบ',              zh:'退出'},
+  'Sign In':            {th:'เข้าสู่ระบบ',              zh:'登录'},
+  'Password':           {th:'รหัสผ่าน',                zh:'密码'},
+};
+let _ADM_LANG = (function(){
+  const v = localStorage.getItem('erp_lang') || 'en';
+  return (v==='th'||v==='zh') ? v : 'en';
+})();
+function admT(key){
+  if(!key || _ADM_LANG==='en') return key;
+  const e = ADM_I18N[key]; return e ? (e[_ADM_LANG]||key) : key;
+}
+function admApplyI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(el =>
+    el.textContent = admT(el.getAttribute('data-i18n')));
+  document.querySelectorAll('[data-i18n-ph]').forEach(el =>
+    el.setAttribute('placeholder', admT(el.getAttribute('data-i18n-ph'))));
+  document.querySelectorAll('.admlang-btn').forEach(el => {
+    const pick = el.getAttribute('data-lang-pick');
+    el.classList.toggle('btn-primary', pick === _ADM_LANG);
+    el.classList.toggle('btn-outline-secondary', pick !== _ADM_LANG);
+  });
+}
+function admSetLang(lang){
+  if(!['en','th','zh'].includes(lang)) lang='en';
+  _ADM_LANG = lang;
+  localStorage.setItem('erp_lang', lang);
+  document.documentElement.setAttribute('lang', lang==='zh'?'zh-Hans':lang);
+  admApplyI18n();
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.setAttribute('lang', _ADM_LANG==='zh'?'zh-Hans':_ADM_LANG);
+  admApplyI18n();
+});
+
+// ═══════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════
+const ROLE_LABEL={MANAGERIAL:'Managerial',PRODUCTION_PLANNING:'Production Planning',
+  DEPARTMENT_LEADER:'Dept Leader',WAREHOUSE:'Warehouse',FINANCE:'Finance'};
+
+async function apiAdm(path,method='GET',body=null){
+  const token=localStorage.getItem('adm_token')||'';
+  const opts={method,headers:{'Content-Type':'application/json','X-Auth-Token':token}};
+  if(body) opts.body=JSON.stringify(body);
+  const r=await fetch(path,opts);
+  if(r.status===401){admLogout();return null;}
+  if(!r.ok){const e=await r.json().catch(()=>({detail:r.statusText}));throw new Error(e.detail||r.statusText);}
+  return r.json();
+}
+
+function admShowError(msg){
+  document.getElementById('adm-error-msg').textContent=msg;
+  document.getElementById('adm-error').classList.remove('d-none');
+}
+
+async function admLogin(){
+  const btn=document.getElementById('adm-login-btn');
+  const u=document.getElementById('adm-username').value.trim();
+  const p=document.getElementById('adm-password').value;
+  if(!u){admShowError('Username is required.');document.getElementById('adm-username').focus();return;}
+  if(!p){admShowError('Password is required.');document.getElementById('adm-password').focus();return;}
+  btn.disabled=true;
+  btn.innerHTML='<span class="spinner-border spinner-border-sm me-2"></span>Signing in…';
+  document.getElementById('adm-error').classList.add('d-none');
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    if(r.status===401){const e=await r.json().catch(()=>({detail:'Invalid credentials'}));
+      admShowError(e.detail||'Incorrect username or password.');
+      document.getElementById('adm-password').value='';return;}
+    if(!r.ok){admShowError('Login failed — unexpected server error.');return;}
+    const data=await r.json();
+    if(data.user.role!=='MANAGERIAL'){
+      admShowError('Access denied. This portal requires Managerial role. Your role: '+
+        (ROLE_LABEL[data.user.role]||data.user.role));
+      // Immediately revoke the session we just created
+      fetch('/api/auth/logout',{method:'POST',headers:{'X-Auth-Token':data.token}}).catch(()=>{});
+      return;
+    }
+    localStorage.setItem('adm_token',data.token);
+    localStorage.setItem('adm_user',JSON.stringify(data.user));
+    document.getElementById('login-overlay').style.display='none';
+    document.getElementById('shell').style.display='flex';
+    document.getElementById('adm-user-name').textContent=data.user.display_name;
+    document.getElementById('adm-user-role').textContent=ROLE_LABEL[data.user.role];
+    admNav('users');
+  }catch(e){
+    admShowError(e instanceof TypeError?'Cannot reach the server — is it running?':'Error: '+e.message);
+  }finally{
+    btn.disabled=false;btn.innerHTML='<i class="bi bi-shield-check me-2"></i>Sign In to Admin';
+  }
+}
+
+function admLogout(){
+  const token=localStorage.getItem('adm_token');
+  if(token) fetch('/api/auth/logout',{method:'POST',headers:{'X-Auth-Token':token}}).catch(()=>{});
+  localStorage.removeItem('adm_token');localStorage.removeItem('adm_user');
+  document.getElementById('shell').style.display='none';
+  document.getElementById('login-overlay').style.display='flex';
+  document.getElementById('adm-password').value='';
+  document.getElementById('adm-error').classList.add('d-none');
+}
+
+function admNav(view){
+  document.querySelectorAll('.sb-link').forEach(l=>l.classList.remove('active'));
+  event.currentTarget?.classList.add('active');
+  const views = ['users','login-log','server-log','about'];
+  views.forEach(v => {
+    const el = document.getElementById('view-'+v);
+    if(el) el.style.display = (v === view) ? '' : 'none';
+  });
+  if(view==='users') umLoad();
+  if(view==='login-log') logLoad();
+  if(view==='server-log') slogLoad();
+  if(view==='about') aboutLoad();
+}
+
+// ── Server Logs ───────────────────────────────────────────────
+let _slogAutoTimer = null;
+async function slogLoad(){
+  const n = parseInt(document.getElementById('slog-n').value)||200;
+  const token = localStorage.getItem('adm_token');
+  const body  = document.getElementById('slog-body');
+  body.textContent = 'Loading…';
+  try{
+    const r = await fetch('/api/admin/logs/tail?n='+n, {headers:{'X-Auth-Token':token||''}});
+    const data = await r.json();
+    document.getElementById('slog-path').textContent = data.path || '—';
+    if(data.error){ body.textContent = 'ERROR: '+data.error; return; }
+    body.textContent = (data.lines||[]).join('\n') || '(empty)';
+    // Auto-scroll to bottom (latest log lines)
+    body.scrollTop = body.scrollHeight;
+  }catch(e){ body.textContent = 'Failed to load: '+(e.message||e); }
+}
+async function slogCopy(){
+  const txt = document.getElementById('slog-body').textContent;
+  try{ await navigator.clipboard.writeText(txt); alert('Copied '+txt.length+' chars to clipboard.'); }
+  catch{ alert('Clipboard blocked — manually select & copy from the log view.'); }
+}
+function slogDownload(){
+  const txt = document.getElementById('slog-body').textContent;
+  const blob = new Blob([txt],{type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'pvwood-server-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.log';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function slogToggleAuto(){
+  if(_slogAutoTimer){ clearInterval(_slogAutoTimer); _slogAutoTimer = null; }
+  if(document.getElementById('slog-auto').checked){
+    _slogAutoTimer = setInterval(slogLoad, 10000);
+  }
+}
+
+// ── About / Version ───────────────────────────────────────────
+async function aboutLoad(){
+  try{
+    const r = await fetch('/api/version');
+    const v = await r.json();
+    document.getElementById('about-summary').innerHTML =
+      `<div class="d-flex align-items-center gap-3">
+         <img src="/static/assets/pvwood-icon.svg" alt="" style="height:60px">
+         <div>
+           <h4 class="mb-1">${v.name}</h4>
+           <div><b class="text-primary">v${v.version}</b> · built ${v.build_date} · patch ${v.patch}</div>
+           <div class="small text-muted mt-1">Today: ${v.today}</div>
+         </div>
+       </div>`;
+    document.getElementById('about-changelog').innerHTML =
+      (v.changelog||[]).map(c =>
+        `<tr><td><code>${c.version}</code></td><td class="small text-muted">${c.date}</td><td>${c.note}</td></tr>`
+      ).join('');
+  }catch(e){
+    document.getElementById('about-summary').innerHTML =
+      `<div class="text-danger">Failed to load version: ${e.message||e}</div>`;
+  }
+}
+
+// ── Check existing session on load ──
+(async function(){
+  const token=localStorage.getItem('adm_token');
+  const user=localStorage.getItem('adm_user');
+  if(!token||!user){return;}
+  try{
+    const r=await fetch('/api/auth/me',{headers:{'X-Auth-Token':token}});
+    if(!r.ok){localStorage.removeItem('adm_token');localStorage.removeItem('adm_user');return;}
+    const data=await r.json();
+    if(data.role!=='MANAGERIAL'){admLogout();return;}
+    document.getElementById('login-overlay').style.display='none';
+    document.getElementById('shell').style.display='flex';
+    document.getElementById('adm-user-name').textContent=data.display_name;
+    document.getElementById('adm-user-role').textContent=ROLE_LABEL[data.role];
+    admNav('users');
+  }catch{}
+})();
+
+// ═══════════════════════════════════════════════════════
+// USER MANAGEMENT
+// ═══════════════════════════════════════════════════════
+const DEPT_OPTIONS=[
+  {label:'Glue Mix',    value:'GLUE_MIX'},
+  {label:'Laminating',  value:'LAMINATING'},
+  {label:'Cold Press',  value:'COLD_PRESS'},
+  {label:'Repair',      value:'REPAIR'},
+  {label:'Sanding',     value:'SANDING'},
+  {label:'Hot Press',   value:'HOT_PRESS'},
+  {label:'Grading',     value:'GRADING'},
+  {label:'FC / Cutting',value:'FC'},
+  {label:'Packing',     value:'PACKING'},
+];
+const LINE_OPTIONS=['P01','P02','P37','PUV','PVS','PSP'];
+const UM_ROLE_BADGE={MANAGERIAL:'danger',PRODUCTION_PLANNING:'primary',DEPARTMENT_LEADER:'warning text-dark',WAREHOUSE:'info text-dark',FINANCE:'success'};
+
+let _umAll=[];
+
+function _deptBadges(depts){
+  if(!depts||!depts.length) return '<span class="text-muted small">—</span>';
+  return depts.map(d=>`<span class="badge bg-light text-dark border me-1" style="font-size:.65rem">${d.department}${d.line_id?' · '+d.line_id:' · All'}</span>`).join('');
+}
+
+async function umLoad(){
+  const users=await apiAdm('/api/users').catch(()=>[]);
+  if(!users) return;
+  const leaders=users.filter(u=>u.role==='DEPARTMENT_LEADER');
+  const deptMap={};
+  await Promise.all(leaders.map(async u=>{
+    deptMap[u.user_id]=await apiAdm(`/api/users/${u.user_id}/departments`).catch(()=>[]);
+  }));
+  _umAll=users.map(u=>({...u,_depts:deptMap[u.user_id]||[]}));
+
+  // Stats
+  const cnt={MANAGERIAL:0,PRODUCTION_PLANNING:0,DEPARTMENT_LEADER:0,WAREHOUSE:0};
+  users.forEach(u=>{if(u.active&&cnt[u.role]!==undefined)cnt[u.role]++;});
+  document.getElementById('um-stats').innerHTML=[
+    {r:'MANAGERIAL',        l:'Managerial',          i:'bi-shield-check',   c:'danger'},
+    {r:'PRODUCTION_PLANNING',l:'Prod Planning',       i:'bi-clipboard-data', c:'primary'},
+    {r:'DEPARTMENT_LEADER', l:'Dept Leaders',         i:'bi-person-badge',   c:'warning'},
+    {r:'WAREHOUSE',         l:'Warehouse',            i:'bi-boxes',          c:'info'},
+  ].map(s=>`<div class="col-6 col-md-3"><div class="stat-card">
+    <div><div class="val text-${s.c}">${cnt[s.r]}</div><div class="lbl">${s.l} (active)</div></div>
+    <i class="bi ${s.i} text-${s.c}" style="font-size:2rem;opacity:.15"></i>
+  </div></div>`).join('');
+
+  umRender(_umAll);
+}
+
+function umRender(users){
+  document.getElementById('um-tbody').innerHTML= users.length ? users.map(u=>`<tr>
+    <td><code class="small">${u.username}</code></td>
+    <td>${u.display_name}</td>
+    <td><span class="badge badge-xs role-${u.role}">${ROLE_LABEL[u.role]||u.role}</span></td>
+    <td class="small">${_deptBadges(u._depts)}</td>
+    <td>${u.active
+      ?'<span class="badge bg-success-subtle text-success border border-success-subtle badge-xs">Active</span>'
+      :'<span class="badge bg-secondary badge-xs">Inactive</span>'}</td>
+    <td class="small text-muted">${(u.created_at||'').slice(0,10)}</td>
+    <td class="text-end text-nowrap">
+      <button class="btn btn-xs btn-outline-primary me-1" onclick="umOpenEdit('${u.user_id}')"><i class="bi bi-pencil"></i></button>
+      ${u.active
+        ?`<button class="btn btn-xs btn-outline-secondary" title="Deactivate" onclick="umToggleActive('${u.user_id}',false)"><i class="bi bi-pause-circle"></i></button>`
+        :`<button class="btn btn-xs btn-outline-success" title="Activate" onclick="umToggleActive('${u.user_id}',true)"><i class="bi bi-play-circle"></i></button>`}
+    </td>
+  </tr>`).join('') : '<tr><td colspan="7" class="text-center text-muted py-4">No users found</td></tr>';
+}
+
+function umFilter(q){
+  const lq=q.toLowerCase();
+  umRender(_umAll.filter(u=>u.username.toLowerCase().includes(lq)||u.display_name.toLowerCase().includes(lq)));
+}
+
+function _renderDeptGrid(existingDepts=[]){
+  document.getElementById('um-dept-grid').innerHTML=DEPT_OPTIONS.map(d=>`
+    <div class="col-12 col-md-6">
+      <div class="border rounded p-2">
+        <div class="fw-semibold small mb-1">${d.label}</div>
+        <div class="d-flex gap-2 flex-wrap">
+          ${LINE_OPTIONS.map(l=>{
+            const chk=existingDepts.some(s=>s.department===d.value&&s.line_id===l)?'checked':'';
+            return `<div class="form-check form-check-inline mb-0">
+              <input class="form-check-input um-dept-check" type="checkbox" value="${d.value}|${l}" id="umd-${d.value}-${l}" ${chk}>
+              <label class="form-check-label small" for="umd-${d.value}-${l}">${l}</label>
+            </div>`;
+          }).join('')}
+          <div class="form-check form-check-inline mb-0">
+            <input class="form-check-input um-dept-check" type="checkbox" value="${d.value}|ALL" id="umd-${d.value}-ALL"
+                   ${existingDepts.some(s=>s.department===d.value&&!s.line_id)?'checked':''}>
+            <label class="form-check-label small fw-semibold" for="umd-${d.value}-ALL">All Lines</label>
+          </div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function umToggleDepts(existingDepts){
+  const role=document.getElementById('um-role').value;
+  const sec=document.getElementById('um-dept-section');
+  if(role==='DEPARTMENT_LEADER'){sec.classList.remove('d-none');_renderDeptGrid(existingDepts||[]);}
+  else sec.classList.add('d-none');
+}
+
+function umOpenNew(){
+  document.getElementById('um-modal-title').innerHTML='<i class="bi bi-person-plus me-2"></i>Add User';
+  document.getElementById('um-edit-id').value='';
+  document.getElementById('um-username').value='';
+  document.getElementById('um-username').disabled=false;
+  document.getElementById('um-display-name').value='';
+  document.getElementById('um-role').value='DEPARTMENT_LEADER';
+  document.getElementById('um-password').value='';
+  document.getElementById('um-pw-hint').textContent='(required)';
+  umToggleDepts([]);
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('umModal')).show();
+}
+
+async function umOpenEdit(uid){
+  const u=_umAll.find(x=>x.user_id===uid);
+  if(!u) return;
+  document.getElementById('um-modal-title').innerHTML='<i class="bi bi-pencil me-2"></i>Edit User';
+  document.getElementById('um-edit-id').value=uid;
+  document.getElementById('um-username').value=u.username;
+  document.getElementById('um-username').disabled=true;
+  document.getElementById('um-display-name').value=u.display_name;
+  document.getElementById('um-role').value=u.role;
+  document.getElementById('um-password').value='';
+  document.getElementById('um-pw-hint').textContent='(leave blank to keep)';
+  umToggleDepts(u._depts||[]);
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('umModal')).show();
+}
+
+async function umSave(){
+  const editId=document.getElementById('um-edit-id').value;
+  const body={
+    display_name:document.getElementById('um-display-name').value.trim(),
+    role:document.getElementById('um-role').value,
+  };
+  const pw=document.getElementById('um-password').value;
+  if(pw) body.password=pw;
+  try{
+    let uid;
+    if(editId){
+      await apiAdm(`/api/users/${editId}`,'PATCH',body);uid=editId;
+    }else{
+      const uname=document.getElementById('um-username').value.trim();
+      if(!uname){alert('Username is required');return;}
+      if(!pw){alert('Password is required for new accounts');return;}
+      const created=await apiAdm('/api/users','POST',{...body,username:uname,password:pw});
+      if(!created) return;uid=created.user_id;
+    }
+    if(body.role==='DEPARTMENT_LEADER'){
+      const checked=[...document.querySelectorAll('.um-dept-check:checked')].map(c=>{
+        const [dept,line]=c.value.split('|');
+        return {department:dept,line_id:line==='ALL'?null:line};
+      });
+      await apiAdm(`/api/users/${uid}/departments`,'POST',{departments:checked});
+    }
+    bootstrap.Modal.getInstance(document.getElementById('umModal')).hide();
+    umLoad();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function umToggleActive(uid,active){
+  try{await apiAdm(`/api/users/${uid}`,'PATCH',{active});umLoad();}
+  catch(e){alert(e.message);}
+}
+
+// ═══════════════════════════════════════════════════════
+// LOGIN AUDIT LOG
+// ═══════════════════════════════════════════════════════
+let _logAll=[];
+
+function _fmtDate(s){
+  if(!s) return '—';
+  const d=new Date(s.replace(' ','T')+'Z');
+  return d.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',
+    hour:'2-digit',minute:'2-digit',hour12:false});
+}
+function _timeAgo(s){
+  if(!s) return '';
+  const diff=(Date.now()-new Date(s.replace(' ','T')+'Z').getTime())/1000;
+  if(diff<60) return Math.round(diff)+'s ago';
+  if(diff<3600) return Math.round(diff/60)+'m ago';
+  if(diff<86400) return Math.round(diff/3600)+'h ago';
+  return Math.round(diff/86400)+'d ago';
+}
+
+async function logLoad(){
+  const logs=await apiAdm('/api/admin/login-log?limit=500').catch(()=>[]);
+  if(!logs) return;
+  _logAll=logs;
+  document.getElementById('log-count').textContent=`${logs.length} records`;
+
+  // Stats
+  const today=new Date().toISOString().slice(0,10);
+  const todayCount=logs.filter(l=>l.logged_at&&l.logged_at.startsWith(today)).length;
+  const uniqueUsers=new Set(logs.map(l=>l.username)).size;
+  const roles={};
+  logs.forEach(l=>{roles[l.role]=(roles[l.role]||0)+1;});
+  const topRole=Object.entries(roles).sort((a,b)=>b[1]-a[1])[0];
+
+  document.getElementById('log-stats').innerHTML=[
+    {val:logs.length,      lbl:'Total Logins',          ico:'bi-journal-text',   c:'success'},
+    {val:todayCount,       lbl:'Logins Today',           ico:'bi-calendar-check', c:'primary'},
+    {val:uniqueUsers,      lbl:'Unique Users',           ico:'bi-person-check',   c:'info'},
+    {val:topRole?`${ROLE_LABEL[topRole[0]]||topRole[0]} (${topRole[1]})`:0,
+                           lbl:'Most Active Role',        ico:'bi-award',          c:'warning'},
+  ].map(s=>`<div class="col-6 col-md-3"><div class="stat-card">
+    <div><div class="val text-${s.c}" style="font-size:${typeof s.val==='string'?'1rem':'1.7rem'}">${s.val}</div>
+    <div class="lbl">${s.lbl}</div></div>
+    <i class="bi ${s.ico} text-${s.c}" style="font-size:2rem;opacity:.15"></i>
+  </div></div>`).join('');
+
+  logRender(_logAll);
+}
+
+function logRender(logs){
+  document.getElementById('log-tbody').innerHTML= logs.length ? logs.map(l=>`<tr>
+    <td>
+      <div class="small fw-semibold">${_fmtDate(l.logged_at)}</div>
+      <div style="font-size:.68rem;color:#94a3b8">${_timeAgo(l.logged_at)}</div>
+    </td>
+    <td><code class="small">${l.username}</code></td>
+    <td class="small">${l.display_name||'—'}</td>
+    <td><span class="badge badge-xs role-${l.role}">${ROLE_LABEL[l.role]||l.role}</span></td>
+    <td class="small text-muted">${l.ip_address||'—'}</td>
+    <td>
+      <span class="dot ${l.active?'dot-ok':'dot-inactive'}"></span>
+      <span class="small">${l.active?'Active':'Inactive'}</span>
+    </td>
+  </tr>`).join('') : '<tr><td colspan="6" class="text-center text-muted py-4">No login records yet</td></tr>';
+}
+
+function logFilter(q){
+  const lq=q.toLowerCase();
+  logRender(_logAll.filter(l=>(l.username||'').toLowerCase().includes(lq)||(l.display_name||'').toLowerCase().includes(lq)));
+}
+</script>
+</body>
+</html>
